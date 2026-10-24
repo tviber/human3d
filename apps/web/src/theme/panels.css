@@ -86,9 +86,11 @@
  .lab-compact .timeline-meta .time-code{font-size:12px;white-space:nowrap}
  .lab-compact .timeline-meta .meta-english{display:none}
  .lab-compact .timeline-meta > span:first-child i{display:none}
- .lab-compact .phase-markers{height:30px;margin-top:8px}
- .lab-compact .phase-markers button{font-size:10px;padding:8px 6px;min-height:28px;color:var(--muted)}
- .lab-compact .phase-markers button:nth-child(even){margin-top:18px}
+ /* Two intrinsic rows reserve the full hit areas; dense phases scroll horizontally. */
+ .lab-compact .phase-markers{height:auto;margin-top:8px;display:grid;grid-template-rows:repeat(2,28px);
+   grid-auto-flow:column;grid-auto-columns:max-content;gap:4px 8px;overflow-x:auto;padding-bottom:4px}
+ .lab-compact .phase-markers button{position:static;transform:none;font-size:10px;padding:0 6px;height:28px;min-height:28px;color:var(--muted)}
+ .lab-compact .phase-markers button::before{display:none}
  .lab-compact .timeline-area input[aria-label="动作进度"]{height:26px;padding:11px 0;
    background-clip:content-box;border-radius:22px}
 }

@@ -140,11 +140,11 @@ function Timeline({doc,time,selected,retime,onSelect,onSeek,onRetime,onBeginReti
 export function WorkshopApp({info:rigInfo}:{info:RigInfo}){
  const mount=useRef<HTMLDivElement>(null),engine=useRef<WorkshopEngine|null>(null),video=useRef<HTMLVideoElement>(null),fileRef=useRef<HTMLInputElement>(null),importRef=useRef<HTMLInputElement>(null);
  const lib=useRef<MotionLibrary|null>(null);
- const syncLibrary=useRef<()=>void>(()=>{});
+ const syncLibrary=useRef<(force?:boolean)=>void>(()=>{});
  const poseLib=useRef<PoseLibrary|null>(null),poseClipboard=useRef<WorkshopDoc['keys'][number]['pose']|null>(null);
  const generationPreview=useRef<WorkshopDoc|null>(null),generationWorker=useRef<Worker|null>(null),generationLocked=useRef(false);
  if(!lib.current){
-  lib.current=new MotionLibrary(new Map(rigInfo.bones.map(b=>[b.name,new Vector3().fromArray(b.head)])),webPlatform.storage).load();
+  lib.current=new MotionLibrary(new Map(rigInfo.bones.map(b=>[b.name,new Vector3().fromArray(b.head)])),webPlatform.storage,webPlatform.storageLock).load();
   const id=new URLSearchParams(globalThis.location?.search??'').get('doc');
   if(id&&lib.current.docs.some(d=>d.id===id))lib.current.select(id);
  }
@@ -362,14 +362,14 @@ export function WorkshopApp({info:rigInfo}:{info:RigInfo}){
  const selectDoc=(id:string)=>{if(generationLocked.current)return;const doc=L.select(id);setSelected(sortedKeys(doc)[0].id);engine.current?.seek(0);engine.current?.setPlaying(false);engine.current?.markDirty();bump(v=>v+1);};
  const createDoc=()=>{if(generationLocked.current)return;const doc=L.create(newName);setNewName('');setSelected(sortedKeys(doc)[0].id);engine.current?.seek(0);engine.current?.markDirty();bump(v=>v+1);};
  const duplicateDoc=(id:string)=>{if(generationLocked.current)return;const doc=L.duplicate(id);if(doc)selectDoc(doc.id);};
- const saveToLibrary=()=>{
+ const saveToLibrary=async()=>{
   if(generationLocked.current)return;
   if(!webPlatform.storage){setError('浏览器存储不可用，动作尚未保存，请导出 JSON 备份。');return;}
-  L.save();bump(v=>v+1);
+  await L.save();bump(v=>v+1);
   if(L.lastError){setError(`保存失败：${L.lastError}。请导出 JSON 备份。`);return;}
   setError('');setHint(`已保存「${L.active().name}」，返回实验室即可在动作库中播放或删除。`);
  };
- const saveCombined=()=>{
+ const saveCombined=async()=>{
   if(generationLocked.current)return;
   const e=engine.current;if(!e?.ready){setHint('请等待模型加载完成。');return;}
   const target=combineTarget.startsWith('local:')?L.docs.find(doc=>doc.id===combineTarget.slice(6)):WORKSHOP_PRESETS.find(p=>`preset:${p.id}`===combineTarget)?.document;
@@ -379,7 +379,7 @@ export function WorkshopApp({info:rigInfo}:{info:RigInfo}){
    const source=L.active();
    const combined=combineMotions(source,target,combineKind==='append'?{kind:'append',transition:combineTransition}:{kind:'blend',weight:combineWeight/100},e.restRoot(),combineName);
    const added=L.add(combined);books.current.of(added.id).record(source);
-   gate.current.reset();wristEpoch.current++;setCombineName('');selectDoc(added.id);
+   gate.current.reset();wristEpoch.current++;setCombineName('');selectDoc(added.id);await L.saved;
    if(L.lastError){setError(`保存失败：${L.lastError}。组合结果仅存于内存，请导出 JSON 备份。`);return;}
    setError('');setHint(`已${combineKind==='append'?'拼接':'混合'}并保存「${added.name}」，可在动作库播放；两份源动作已保留。`);
   }catch(err){setHint(err instanceof Error?err.message:String(err));}
@@ -602,18 +602,12 @@ export function WorkshopApp({info:rigInfo}:{info:RigInfo}){
   generationPreview.current=null;setCandidateSession(null);setGenerationReport(null);setGenerationBusy(false);setGenerationProgress(null);setGenerationError('');
   unlockGeneration();setHint('已取消候选生成或预览；源动作仍保持原样。');
  };
- syncLibrary.current=()=>{
+ L.onSaved=merged=>{if(merged)syncLibrary.current(true);bump(v=>v+1);};
+ syncLibrary.current=(force=false)=>{
   const rest=new Map(rigInfo.bones.map(b=>[b.name,new Vector3().fromArray(b.head)]));
-  const incoming=new MotionLibrary(rest,webPlatform.storage).load({readOnly:true});
-  if(incoming.lastError||incoming.quarantine.some(q=>q.id==='library-file'))return;
-  if(JSON.stringify(L.docs)===JSON.stringify(incoming.docs)&&JSON.stringify(L.quarantine)===JSON.stringify(incoming.quarantine))return;
-  const active=L.activeId;
+  try{if(!L.sync()&&!force)return;}catch(err){setError(err instanceof Error?err.message:String(err));return;}
   if(generationLocked.current)stopGeneration();
-  for(const doc of L.docs){const next=incoming.docs.find(d=>d.id===doc.id);if(!next||serializeDoc(next)!==serializeDoc(doc))L.onRemoved?.(doc.id);}
-  L.docs=incoming.docs;L.quarantine=incoming.quarantine;
-  // Receiving a storage event must never write an older library back over its sender.
-  if(!L.docs.length)L.docs=[blankDocument(rest,'新动作',newDocId('新动作'))];
-  L.activeId=L.docs.some(doc=>doc.id===active)?active:L.docs[0].id;
+  if(!L.docs.length){L.docs=[blankDocument(rest,'新动作',newDocId('新动作'))];L.activeId=L.docs[0].id;}
   gate.current.reset();wristEpoch.current++;setSelected(sortedKeys(L.active())[0].id);
   engine.current?.setPlaying(false);engine.current?.seek(0);engine.current?.markDirty();bump(v=>v+1);
   setHint('已同步其他页面保存或删除的动作。');

@@ -62,7 +62,7 @@ export function App(){
  const allMotions=[...savedMotions,...MOTIONS,...extras],spec=allMotions.find(m=>m.id===id)??MOTIONS[0],racket=!!spec.capabilities?.prop,physics=spec.source?.kind==='dynamics';
  const refreshSaved=useCallback(()=>{
   const e=engine.current;if(!e?.ready||!e.rig)return;
-  const library=new MotionLibrary(e.rig.rest,webPlatform.storage).load({readOnly:true});if(library.lastError){setError(`读取动作库失败：${library.lastError}`);return;}const saved=library.docs.map(savedMotionSpec);
+  const library=new MotionLibrary(e.rig.rest,webPlatform.storage,webPlatform.storageLock).load({readOnly:true});if(library.lastError){setError(`读取动作库失败：${library.lastError}`);return;}const saved=library.docs.map(savedMotionSpec);
   e.setSavedMotions(saved);setSavedMotions(saved);
   const current=useLabUi.getState().id;if(current.startsWith(SAVED_MOTION_PREFIX)&&!saved.some(m=>m.id===current))setId('idle');
  },[setId,setError]);
@@ -88,12 +88,12 @@ export function App(){
   window.addEventListener('storage',storage);window.addEventListener('focus',refreshSaved);
   return()=>{window.removeEventListener('storage',storage);window.removeEventListener('focus',refreshSaved);engine.current=null;e.dispose();};
  },[refreshSaved]);
- const removeSaved=(motion:MotionSpec)=>{
+ const removeSaved=async(motion:MotionSpec)=>{
   const e=engine.current;if(!e?.rig||motion.source?.kind!=='document')return;
   if(!webPlatform.confirm(`删除已保存动作「${motion.name}」？此操作不可撤销。`))return;
-  const library=new MotionLibrary(e.rig.rest,webPlatform.storage).load({readOnly:true});
+  const library=new MotionLibrary(e.rig.rest,webPlatform.storage,webPlatform.storageLock).load({readOnly:true});
   if(library.lastError){setError(`无法删除动作：${library.lastError}`);return;}
-  library.remove(motion.source.document.id,false);
+  library.remove(motion.source.document.id,false);await library.saved;
   if(library.lastError){setError(`删除未保存：${library.lastError}`);return;}
   refreshSaved();
  };

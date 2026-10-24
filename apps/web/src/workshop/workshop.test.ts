@@ -406,6 +406,49 @@ describe('motion library',()=>{
   const l=lib(memStorage());
   expect(l.docs.length).toBe(1);expect(l.active().id).toBe('forehand-workshop');
  });
+ it('merges stale independent edits and preserves additions without resurrecting deletions',()=>{
+  const store=memStorage(),a=lib(store),second=a.create('第二段');
+  const b=lib(store),first=a.docs[0].id;
+  a.docs.find(d=>d.id===first)!.keys[0].label='A 修改';a.save();
+  b.docs.find(d=>d.id===second.id)!.keys[0].label='B 修改';b.save();
+  let restored=new MotionLibrary(rig.rest,store).load({readOnly:true});
+  expect(restored.docs.find(d=>d.id===first)!.keys[0].label).toBe('A 修改');
+  expect(restored.docs.find(d=>d.id===second.id)!.keys[0].label).toBe('B 修改');
+  a.remove(first);b.rename(second.id,'继续编辑');
+  restored=new MotionLibrary(rig.rest,store).load({readOnly:true});
+  expect(restored.docs.some(d=>d.id===first)).toBe(false);
+  expect(restored.docs.find(d=>d.id===second.id)!.name).toBe('继续编辑');
+ });
+ it('adopts remote reorder and keeps it through later unrelated saves',()=>{
+  const store=memStorage(),a=lib(store),first=a.activeId,second=a.create('第二段').id,b=lib(store);
+  a.reorder(second,first);b.sync();expect(b.docs.map(d=>d.id)).toEqual([second,first]);
+  b.rename(first,'改名');expect(new MotionLibrary(rig.rest,store).load({readOnly:true}).docs.map(d=>d.id)).toEqual([second,first]);
+  const c=lib(store),third=a.create('第三段').id;
+  c.docs.reverse();c.sync();expect(c.docs.map(d=>d.id)).toEqual([first,second,third]);
+ });
+ it('sync keeps dirty edits and exports both sides of a same-document conflict',()=>{
+  const store=memStorage(),a=lib(store),b=lib(store),id=a.activeId;
+  a.active().keys[0].label='A 修改';b.active().keys[0].label='B 修改';
+  a.save();b.sync();
+  expect(b.active().keys[0].label).toBe('B 修改');
+  expect(JSON.parse(b.quarantineText(0)).keys[0].label).toBe('A 修改');
+  b.save();const restored=new MotionLibrary(rig.rest,store).load({readOnly:true});
+  expect(restored.docs.find(d=>d.id===id)!.keys[0].label).toBe('B 修改');
+  expect(JSON.parse(restored.quarantineText(0)).keys[0].label).toBe('A 修改');
+ });
+ it('preserves an edited document in quarantine when a concurrent page deletes it',()=>{
+  const store=memStorage(),a=lib(store),b=lib(store),id=a.activeId;
+  b.active().keys[0].label='未保存的修改';a.remove(id,false);b.save();
+  const restored=new MotionLibrary(rig.rest,store).load({readOnly:true});
+  expect(restored.docs).toEqual([]);
+  expect(JSON.parse(restored.quarantineText(0)).keys[0].label).toBe('未保存的修改');
+ });
+ it('does not overwrite newly corrupted storage on save',()=>{
+  const store=memStorage(),a=lib(store);a.active().keys[0].label='仍在内存';
+  store.map.set(LIBRARY_KEY,'{broken');a.save();
+  expect(store.map.get(LIBRARY_KEY)).toBe('{broken');expect(a.lastError).toMatch(/无法读取/);
+  expect(a.active().keys[0].label).toBe('仍在内存');
+ });
  it('reads saved documents without writing, seeding or replacing quarantined data',()=>{
   const store=memStorage();
   expect(new MotionLibrary(rig.rest,store).load({readOnly:true}).docs).toEqual([]);expect(store.map.size).toBe(0);

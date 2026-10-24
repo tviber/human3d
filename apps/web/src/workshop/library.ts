@@ -1,6 +1,7 @@
 import type {MotionSpec,WorkshopDoc} from '@human3d/motion-core';
 import {blankDocument,canonicalizeHands,defaultDocument,MOTION_FILES,newDocId,normalizeDoc,parseDoc,sortedKeys} from '@human3d/motion-core';
 import type {Vector3} from 'three';
+import type {StorageLock} from '../platform/platform';
 
 /** Motion library: the workshop's persistent store. Multiple named documents
  * live under one namespaced localStorage key; the injected StorageLike keeps
@@ -44,7 +45,55 @@ export class MotionLibrary{
    * undo book here so a later doc re-using the id can't inherit (and undo
    * into) the deleted doc's snapshots. */
   onRemoved?:(id:string)=>void;
-  constructor(private rest:ReadonlyMap<string,Vector3>,private store?:StorageLike|null){}
+  private baseline=new Map<string,string>();
+  private baselineOrder:string[]=[];
+  private baselineQuarantine:QuarantineEntry[]=[];
+  private rawText:string|null=null;
+  saved:Promise<void>=Promise.resolve();
+  onSaved?:(merged:boolean)=>void;
+  constructor(private rest:ReadonlyMap<string,Vector3>,private store?:StorageLike|null,private lock?:StorageLock){}
+  private remember(){
+    this.baseline=new Map(this.docs.map(d=>[d.id,JSON.stringify(d)]));
+    this.baselineOrder=this.docs.map(d=>d.id);
+    this.baselineQuarantine=structuredClone(this.quarantine);
+  }
+  private storedDocs(){
+    try{const file=JSON.parse(this.rawText??'null') as LibraryFile|null;return new Map(file?.docs?.map(d=>[d.id,JSON.stringify(d)])??[]);}catch{return new Map<string,string>();}
+  }
+  /** Three-way merge against the last observed snapshot; conflicts stay exportable. */
+  sync(incoming=new MotionLibrary(this.rest,this.store).load({readOnly:true})){
+    if(incoming.lastError)throw new Error(incoming.lastError);
+    if(incoming.quarantine.some(q=>q.id==='library-file'))throw new Error('其他页面的动作库无法读取，未覆盖原文');
+    const before=JSON.stringify([this.docs,this.quarantine]);
+    const local=new Map(this.docs.map(d=>[d.id,d])),remote=new Map(incoming.docs.map(d=>[d.id,d]));
+    const quarantine=this.quarantine.filter(q=>!this.baselineQuarantine.some(b=>JSON.stringify(b)===JSON.stringify(q))||incoming.quarantine.some(b=>JSON.stringify(b)===JSON.stringify(q)));
+    for(const q of incoming.quarantine)if(!this.baselineQuarantine.some(b=>JSON.stringify(b)===JSON.stringify(q))&&!quarantine.some(b=>JSON.stringify(b)===JSON.stringify(q)))quarantine.push(q);
+    const stored=this.storedDocs(),received=incoming.storedDocs();
+    const common=(id:string)=>this.baseline.has(id)&&local.has(id)&&remote.has(id);
+    const reordered=JSON.stringify([...local.keys()].filter(common))!==JSON.stringify(this.baselineOrder.filter(common));
+    const order=reordered?[...local.keys(),...remote.keys()]:[...remote.keys(),...local.keys()];
+    const docs:WorkshopDoc[]=[];
+    for(const id of new Set([...order,...this.baseline.keys()])){
+      const a=local.get(id),b=remote.get(id),base=this.baseline.get(id);
+      const aText=a&&JSON.stringify(a),bText=b&&JSON.stringify(b);
+      const localChanged=aText!==base,remoteChanged=stored.get(id)!==received.get(id);
+      let next=!remoteChanged||aText===bText?a:localChanged?a:b;
+      if(localChanged&&remoteChanged&&aText!==bText){
+        const recovery=a&&b?b:a??b;
+        if(recovery)quarantine.push({id:recovery.id,name:recovery.name,reason:'跨页面保存冲突：保留的另一份修改，可导出后重新导入',raw:structuredClone(recovery)});
+        // Deletion wins over a conflicting edit, whose full document is recoverable.
+        if(!a||!b)next=undefined;
+      }
+      if(remoteChanged){if(bText)this.baseline.set(id,bText);else this.baseline.delete(id);}
+      if(next)docs.push(next);
+      if(a&&next!==a)this.onRemoved?.(id);
+    }
+    this.docs=docs;this.quarantine=quarantine;
+    if(!this.docs.some(d=>d.id===this.activeId))this.activeId=this.docs[0]?.id??'';
+    this.baselineOrder=incoming.docs.map(d=>d.id);
+    this.baselineQuarantine=structuredClone(incoming.quarantine);this.rawText=incoming.rawText;
+    return before!==JSON.stringify([this.docs,this.quarantine]);
+  }
   load({readOnly=false}:{readOnly?:boolean}={}){
     let parsed:Partial<LibraryFile>|undefined,rawText:string|null=null,corrupt=false;
     try{rawText=this.store?.getItem(LIBRARY_KEY)??null;if(rawText!=null)parsed=JSON.parse(rawText) as Partial<LibraryFile>;}catch(err){corrupt=true;if(rawText===null)this.lastError=err instanceof Error?err.message:String(err);}
@@ -72,14 +121,27 @@ export class MotionLibrary{
       // copy of the user's data. It is rewritten only by an explicit save.
       this.quarantine=[{id:'library-file',name:'动作库文件',reason:corrupt?'动作库文件 JSON 无法解析':'无法识别的动作库格式（schemaVersion 不受支持）',raw:rawText}];
     }
+    this.rawText=rawText;this.remember();
     if(!this.docs.length&&!readOnly){this.docs=[file?blankDocument(this.rest,'新动作',newDocId('新动作')):defaultDocument(this.rest)];this.activeId=this.docs[0].id;}
-    if(!readOnly&&!corrupt&&(file||rawText===null))this.save();
+    // Reading valid storage must not publish hand-frame normalization as a user edit.
+    if(!readOnly&&!corrupt&&(rawText===null||file&&(!file.docs!.length||this.docs.length!==file.docs!.length)))this.save();
     return this;
   }
   save(){
-    if(!this.store)return;
-    const file:LibraryFile={schemaVersion:2,activeId:this.activeId,docs:this.docs,quarantine:this.quarantine};
-    try{this.store.setItem(LIBRARY_KEY,JSON.stringify(file));this.lastError='';}catch(err){this.lastError=err instanceof Error?err.message:String(err);}
+    if(!this.store)return this.saved;
+    const write=()=>{
+      let merged=false;
+      try{
+        if(this.store!.getItem(LIBRARY_KEY)!==this.rawText)merged=this.sync();
+        const file:LibraryFile={schemaVersion:2,activeId:this.activeId,docs:this.docs,quarantine:this.quarantine};
+        const text=JSON.stringify(file);this.store!.setItem(LIBRARY_KEY,text);
+        this.rawText=text;this.remember();this.lastError='';
+      }catch(err){this.lastError=err instanceof Error?err.message:String(err);}
+      this.onSaved?.(merged);
+    };
+    if(this.lock)this.saved=this.lock(LIBRARY_KEY,write).catch(err=>{this.lastError=err instanceof Error?err.message:String(err);this.onSaved?.(false);});
+    else write();
+    return this.saved;
   }
   /** Export one quarantined document as JSON text, so it can be repaired by hand or re-imported. */
   quarantineText(index:number){const q=this.quarantine[index];return q?typeof q.raw==='string'?q.raw:JSON.stringify(q.raw,null,2):'';}

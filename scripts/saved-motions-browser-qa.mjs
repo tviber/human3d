@@ -27,6 +27,13 @@ try{
  const lab=await open('/');await ready(lab,'__LAB__');const select=()=>lab.getByTestId(`motion-local:${doc.id}`);
  await select().click();await lab.getByRole('button',{name:'暂停',exact:true}).click();const actual=await pose(lab,'__LAB__');
  let max=0;actual.forEach((p,i)=>p.forEach((v,j)=>{max=Math.max(max,Math.abs(v-expected[i][j]));}));assert(max<1e-6,`saved playback differs from workshop FK: ${max}`);
+ // A real orbit followed by focus must keep both camera and the compiled source.
+ const canvas=lab.locator('#lab-stage canvas'),box=await canvas.boundingBox();
+ await lab.mouse.move(box.x+box.width*.55,box.y+box.height*.5);await lab.mouse.down();await lab.mouse.move(box.x+box.width*.65,box.y+box.height*.6,{steps:12});await lab.mouse.up();await lab.waitForFunction(()=>{const e=window.__LAB__,p=[...e.camera.position.toArray(),...e.camera.quaternion.toArray()],previous=window.__qaCamera;window.__qaCamera=p;return previous&&p.every((v,i)=>Math.abs(v-previous[i])<1e-10);},null,{polling:'raf',timeout:60000});
+ const camera=()=>lab.evaluate(()=>{const e=window.__LAB__;return [e.camera.position.toArray(),e.controls.target.toArray(),e.camera.quaternion.toArray(),e.view,e.time,e.playing];});
+ const beforeFocus=await camera();await lab.evaluate(()=>{window.__qaSource=window.__LAB__.source;});
+ await workshop.bringToFront();await lab.bringToFront();await lab.waitForTimeout(200);
+ const afterFocus=await camera();for(let i=0;i<3;i++)afterFocus[i].forEach((v,j)=>assert(Math.abs(v-beforeFocus[i][j])<1e-8));assert.deepEqual(afterFocus.slice(3),beforeFocus.slice(3));assert(await lab.evaluate(()=>window.__qaSource===window.__LAB__.source),'focus recompiled an unchanged source');
  assert.equal(await lab.getByRole('button',{name:/删除已保存动作 自然站立/}).count(),0);await lab.screenshot({path:out('saved-in-lab.png')});
  // A second editor must absorb additions before a later deletion, without writing a stale library back.
  const other=await open(`/workshop.html?doc=${encodeURIComponent(doc.id)}`);await ready(other,'__WS__');
@@ -36,6 +43,7 @@ try{
  await workshop.getByRole('combobox',{name:'组合目标动作',exact:true}).selectOption('preset:basic-half-squat');
  await workshop.getByRole('spinbutton',{name:'拼接过渡时长',exact:true}).fill('0.4');await workshop.getByRole('textbox',{name:'组合动作名称',exact:true}).fill('拼接动作 · QA');
  await workshop.getByTestId('save-combined-motion').click();await workshop.getByRole('status').filter({hasText:/已拼接并保存/}).waitFor();
+ assert(await lab.evaluate(()=>window.__qaSource===window.__LAB__.source),'adding another document recompiled the active source');
  const appended=await workshop.evaluate(()=>window.__WS__.getDoc());assert(Math.abs(appended.duration-(doc.duration+.4+1.6))<1e-8);assert.notEqual(appended.id,doc.id);
  assert.deepEqual((await file(workshop)).docs.find(d=>d.id===doc.id),doc);
  await other.locator('.ws-lib-name').filter({hasText:'拼接动作 · QA'}).waitFor();
@@ -46,7 +54,7 @@ try{
  await workshop.getByRole('combobox',{name:'组合目标动作',exact:true}).selectOption(`local:${appended.id}`);
  const weight=workshop.getByTestId('combine-weight');await weight.press('Home');for(let i=0;i<25;i++)await weight.press('ArrowRight');
  await workshop.getByRole('textbox',{name:'组合动作名称',exact:true}).fill('混合动作 · QA');await workshop.getByTestId('save-combined-motion').click();
- assert.match(await workshop.locator('.ws-feedback[role=status]').innerText(),/已混合并保存/);const blended=await workshop.evaluate(()=>window.__WS__.getDoc());
+ await workshop.getByRole('status').filter({hasText:/已混合并保存/}).waitFor();const blended=await workshop.evaluate(()=>window.__WS__.getDoc());
  assert.equal(blended.duration,appended.duration);assert.notEqual(blended.id,appended.id);assert(blended.keys.length<=120);
  assert.deepEqual((await file(workshop)).docs.find(d=>d.id===doc.id),doc);assert.deepEqual((await file(workshop)).docs.find(d=>d.id===appended.id),appended);
  await workshop.getByTestId('save-combined-motion').scrollIntoViewIfNeeded();await workshop.screenshot({path:out('composition-desktop.png')});
@@ -59,13 +67,13 @@ try{
  lab.once('dialog',d=>d.dismiss());await lab.getByRole('button',{name:`删除已保存动作 ${name}`,exact:true}).click();assert.equal(await select().count(),1);
  lab.once('dialog',d=>d.accept());await lab.getByRole('button',{name:`删除已保存动作 ${name}`,exact:true}).click();await select().waitFor({state:'detached'});
  assert.equal(await lab.evaluate(()=>window.__LAB__.activeId),'idle');assert(!(await file(lab)).docs.some(d=>d.id===doc.id));
- await workshop.waitForFunction(id=>window.__WS__.getDoc().id!==id,doc.id);await other.waitForFunction(id=>window.__WS__.getDoc().id!==id,doc.id);assert((await file(other)).docs.some(d=>d.id===appended.id));assert((await file(other)).docs.some(d=>d.id===blended.id));await other.getByTestId('save-to-library').click();assert((await file(other)).docs.some(d=>d.id===appended.id),'stale editor dropped newly added motion');await other.close();await workshop.getByTestId('save-to-library').click();assert(!(await file(workshop)).docs.some(d=>d.id===doc.id),'another open workshop resurrected the deleted motion');
+ await workshop.waitForFunction(id=>window.__WS__.getDoc().id!==id,doc.id);await other.waitForFunction(id=>window.__WS__.getDoc().id!==id,doc.id);assert((await file(other)).docs.some(d=>d.id===appended.id));assert((await file(other)).docs.some(d=>d.id===blended.id));await other.getByTestId('save-to-library').click();await other.getByRole('status').filter({hasText:/已保存「/}).waitFor();assert((await file(other)).docs.some(d=>d.id===appended.id),'stale editor dropped newly added motion');await other.close();await workshop.getByTestId('save-to-library').click();await workshop.getByRole('status').filter({hasText:/已保存「/}).waitFor();assert(!(await file(workshop)).docs.some(d=>d.id===doc.id),'another open workshop resurrected the deleted motion');
  await workshop.close();
  await lab.reload();await ready(lab,'__LAB__');assert.equal(await select().count(),0);
  await lab.setViewportSize({width:390,height:844});await lab.getByTestId('sheet-library').click();
  const remaining=(await file(lab)).docs;assert(remaining.length>0);
  await lab.getByRole('button',{name:`删除已保存动作 ${remaining[0].name}`,exact:true}).scrollIntoViewIfNeeded();await lab.screenshot({path:out('mobile-delete.png')});
- for(const d of remaining){lab.once('dialog',dialog=>dialog.accept());await lab.getByRole('button',{name:`删除已保存动作 ${d.name}`,exact:true}).click();}
+ for(const d of remaining){lab.once('dialog',dialog=>dialog.accept());const remove=lab.getByRole('button',{name:`删除已保存动作 ${d.name}`,exact:true});await remove.click();await remove.waitFor({state:'detached'});}
  assert.deepEqual((await file(lab)).docs,[]);const empty=await lab.evaluate(()=>localStorage.getItem('kinesis-workshop-library'));
  await lab.reload();await ready(lab,'__LAB__');assert.equal(await lab.evaluate(()=>localStorage.getItem('kinesis-workshop-library')),empty,'read-only lab recreated a deleted motion');
  await lab.goto(new URL('/workshop.html',base).href);await ready(lab,'__WS__');assert.notEqual(await lab.evaluate(()=>window.__WS__.getDoc().id),doc.id);

@@ -16,6 +16,8 @@
 
 export interface StorageLike{getItem(k:string):string|null;setItem(k:string,v:string):void;removeItem?(k:string):void}
 
+export type StorageLock=(key:string,write:()=>void)=>Promise<void>;
+
 export interface AppPlatform{
   /** Resolve an app asset path ("/models/rig.json") to a host-fetchable URL. */
   assetUrl(path:string):string;
@@ -23,6 +25,7 @@ export interface AppPlatform{
   fetchAsset(path:string):Promise<Response>;
   /** Persistent key-value storage, or null when the host has none. */
   storage:StorageLike|null;
+  storageLock:StorageLock;
   /** Hand a produced file to the user (web: anchor download). */
   download(name:string,blob:Blob):void;
   /** Encode a canvas to a PNG blob (stills, contact sheets). */
@@ -53,6 +56,10 @@ export const webPlatform:AppPlatform={
   assetUrl:path=>path,
   fetchAsset:path=>fetch(path),
   get storage(){return safeStorage();},
+  async storageLock(key,write){
+    if(!globalThis.navigator?.locks)throw new Error('浏览器不支持安全的跨页面保存，请导出 JSON 备份');
+    await navigator.locks.request(key,write);
+  },
   download(name,blob){
     const a=document.createElement('a');
     a.href=URL.createObjectURL(blob);a.download=name;a.click();

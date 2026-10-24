@@ -129,11 +129,22 @@ export class HumanEngine{
  /** Saved motions share the workshop document playback path; compile only when selected. */
  setSavedMotions(specs:MotionSpec[]){
   const active=this.activeId,time=this.time,playing=this.playing;
-  for(const id of this.specs.keys())if(id.startsWith(SAVED_MOTION_PREFIX)){this.sources.get(id)?.dispose?.();this.sources.delete(id);this.specs.delete(id);}
-  for(const spec of specs)this.specs.set(spec.id,spec);
-  if(active.startsWith(SAVED_MOTION_PREFIX)){
+  const incoming=new Map(specs.map(spec=>[spec.id,spec]));
+  let activeChanged=false;
+  for(const [id,previous] of this.specs)if(id.startsWith(SAVED_MOTION_PREFIX)){
+   const next=incoming.get(id);
+   if(next&&JSON.stringify(previous)===JSON.stringify(next))continue;
+   this.sources.get(id)?.dispose?.();this.sources.delete(id);this.specs.delete(id);
+   if(id===active)activeChanged=true;
+  }
+  for(const spec of specs)if(!this.specs.has(spec.id))this.specs.set(spec.id,spec);
+  if(activeChanged){
+   const position=this.camera.position.clone(),target=this.controls.target.clone(),rotation=this.camera.quaternion.clone(),view=this.view;
    this.setMotion(this.specs.has(active)?active:'idle',false);
-   if(this.specs.has(active)){this.seek(time);this.setPlaying(playing);}
+   if(this.specs.has(active)){
+    this.seek(time);this.setPlaying(playing);
+    this.camera.position.copy(position);this.camera.quaternion.copy(rotation);this.controls.target.copy(target);this.view=view;this.onView?.(view);this.render();
+   }
   }
  }
  /** Mount the shared racket on the wrist the source's prop declares. The side

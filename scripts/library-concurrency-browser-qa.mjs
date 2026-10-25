@@ -67,23 +67,30 @@ try{
  for(const page of [a,b])await page.evaluate(()=>{Date.now=window.__qaDateNow;delete window.__qaDateNow;});
  const poses=await lab.evaluate(()=>JSON.parse(localStorage.getItem('kinesis-workshop-poses')));assert.equal(new Set(poses.map(p=>p.id)).size,poses.length);
  await a.reload();await a.waitForFunction(()=>window.__WS__?.ready);stored=await file(a);assert.equal(stored.docs.find(d=>d.id===first).keys[0].label,'当前播放稿更新');assert(stored.quarantine.length>0);
- // Cross-tab replace: B saves after A armed the replace. The restore point is
- // taken inside A's commit lock, so B's save is captured rather than lost, and
- // B picks up the replaced library through the normal storage sync.
+ // Cross-tab replace, with A left un-synced on purpose: B saves and A commits
+ // WITHOUT waiting to observe the save. The restore point is built inside A's
+ // commit lock from the canonical snapshot, so B's save is captured either way;
+ // the library itself must come from the file.
  await panel(a);
  const backupDownload=await Promise.all([a.waitForEvent('download'),a.getByTestId('backup-download').click()]);
  const backupText=fs.readFileSync(await backupDownload[0].path(),'utf8');
  await a.getByTestId('backup-restore').click();
  await a.locator('input[type=file][accept=".json,application/json"]').nth(1).setInputFiles({name:'backup.json',mimeType:'application/json',buffer:Buffer.from(backupText)});
  await Promise.all([a.waitForEvent('download'),a.getByTestId('backup-replace').click()]);await a.getByTestId('backup-replace-ack').check();
+ const aBefore=await a.evaluate(()=>JSON.stringify(window.__WS__.getDoc()));
  await b.getByTitle(first,{exact:true}).click();await edit(b,'B 在替换前保存');await saved(b);
- await a.waitForFunction(id=>JSON.parse(localStorage.getItem('kinesis-workshop-library')).docs.find(d=>d.id===id)?.keys.some(k=>k.label==='B 在替换前保存'),first);
- await a.waitForFunction(()=>document.querySelector('[data-testid=save-state]')?.getAttribute('data-state')==='saved');
  await a.getByTestId('backup-replace-commit').click();await a.getByTestId('backup-preview').waitFor({state:'detached'});
  assert.equal(await a.getByRole('alert').count(),0,await a.getByRole('alert').textContent().catch(()=>''));
  const point=JSON.parse(await a.evaluate(()=>import('/src/platform/platform.ts').then(({webPlatform})=>webPlatform.readStorage('kinesis-workshop-restore-point'))));
  assert(point.library.docs.find(d=>d.id===first)?.keys.some(k=>k.label==='B 在替换前保存'),'restore point lost the other tab\'s save');
+ assert(point.library.docs.some(d=>JSON.stringify(d)===aBefore),'restore point lost the state A held before the replace');
  await a.getByTestId('restore-point').waitFor();
  await b.waitForFunction(id=>!JSON.stringify(window.__WS__.getDoc()).includes('B 在替换前保存')||window.__WS__.getDoc().id!==id,first);
- assert.deepEqual(errors,[]);console.log('Concurrent UI QA passed: exclusive locks, locked multi-key reads, two independent edits, same-document recovery/export/reload, camera continuity, concurrent pose captures, cross-tab replace restore point.');
+ // Undo from A must bring back both sides: B's save and A's pre-replace state.
+ a.once('dialog',d=>d.accept());await a.getByTestId('restore-point-undo').click();
+ await a.getByTestId('restore-point').waitFor({state:'detached'});
+ const undone=JSON.parse(await a.evaluate(()=>localStorage.getItem('kinesis-workshop-library')));
+ assert(undone.docs.find(d=>d.id===first)?.keys.some(k=>k.label==='B 在替换前保存'),'undo did not restore the concurrent save');
+ assert(undone.docs.some(d=>JSON.stringify(d)===aBefore),'undo did not restore A\'s pre-replace document');
+ assert.deepEqual(errors,[]);console.log('Concurrent UI QA passed: exclusive locks, locked multi-key reads, two independent edits, same-document recovery/export/reload, camera continuity, concurrent pose captures, cross-tab replace with an unsynced save captured in the restore point and restored by undo.');
 }finally{await context.close();await browser.close();}

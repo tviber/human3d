@@ -151,23 +151,51 @@ describe('restore point commits with the replace',()=>{
   const l=new MotionLibrary(rig.rest,store,lock).load();await l.saved;
   const before=backupText(l.docs,l.quarantine,l.activeId,[]);
   const blank=lib(memStorage()).active();
-  await l.restore({schemaVersion:2,docs:[blank],quarantine:[],activeId:blank.id},{key:'kinesis-workshop-poses',text:'[]',previous:'[]'},{key:RESTORE_POINT_KEY,text:before});
+  const originalLibrary=store.map.get(LIBRARY_KEY)??null;
+  let builtFrom:unknown;
+  const result=await l.restore({schemaVersion:2,docs:[blank],quarantine:[],activeId:blank.id},{key:'kinesis-workshop-poses',text:'[]',previous:'[]'},
+   {key:RESTORE_POINT_KEY,build:latest=>{builtFrom=latest;return before;}});
   const commit=calls.at(-1)!;
   expect(commit.keys).toEqual(expect.arrayContaining([LIBRARY_KEY,'kinesis-workshop-poses',RESTORE_POINT_KEY]));
   expect(commit.snapshotOnly).toEqual([RESTORE_POINT_KEY]);
   expect(canonical.get(RESTORE_POINT_KEY)).toBe(before);
   expect(store.map.has(RESTORE_POINT_KEY)).toBe(false);
+  // The builder sees the state just before the restore, with pose writes not
+  // yet applied, so its backup describes exactly what the restore overwrote.
+  expect(builtFrom).toEqual({libraryText:originalLibrary,relatedText:null});
+  expect(result).toEqual({capturedConcurrent:false,restorePointText:before});
   const point=parseBackup(canonical.get(RESTORE_POINT_KEY)!);
   expect(point.ok&&point.docs.map(d=>d.id)).toEqual(JSON.parse(before).library.docs.map((d:WorkshopDoc)=>d.id));
  });
- it('writes neither the library nor the restore point when another page changed storage',async()=>{
+ it('aborts a merge, writing neither the library nor the restore point, when another page changed storage',async()=>{
   const store=memStorage(),canonical=new Map<string,string>(),{lock}=lockOver(store,canonical);
   const l=new MotionLibrary(rig.rest,store,lock).load();await l.saved;
   canonical.set(LIBRARY_KEY,JSON.stringify({schemaVersion:2,activeId:'',docs:[],quarantine:[]}));
   const libraryBefore=canonical.get(LIBRARY_KEY);
-  await expect(l.restore({schemaVersion:2,docs:l.docs,quarantine:[],activeId:l.activeId},{key:'kinesis-workshop-poses',text:'[]',previous:'[]'},{key:RESTORE_POINT_KEY,text:'x'})).rejects.toThrow('其他页面');
+  await expect(l.restore({schemaVersion:2,docs:l.docs,quarantine:[],activeId:l.activeId},{key:'kinesis-workshop-poses',text:'[]',previous:'[]'},{key:RESTORE_POINT_KEY,build:()=>'x'})).rejects.toThrow('其他页面');
   expect(canonical.get(LIBRARY_KEY)).toBe(libraryBefore);
   expect(canonical.has(RESTORE_POINT_KEY)).toBe(false);
+ });
+ // The review's race: B saves after A armed the replace, and A has not yet
+ // processed B's storage event when it commits.
+ it('captures an unsynced save from another page in the restore point instead of aborting the replace',async()=>{
+  const store=memStorage(),canonical=new Map<string,string>(),{lock}=lockOver(store,canonical);
+  const a=new MotionLibrary(rig.rest,store,lock).load();await a.saved;
+  const other=lib(memStorage());other.docs[0].keys[0].label='B 未同步的保存';
+  canonical.set(LIBRARY_KEY,JSON.stringify({schemaVersion:2,activeId:other.activeId,docs:other.docs,quarantine:[]}));
+  const bText=canonical.get(LIBRARY_KEY)!;
+  const blank=lib(memStorage()).active();
+  const result=await a.restore({schemaVersion:2,docs:[blank],quarantine:[],activeId:blank.id},{key:'kinesis-workshop-poses',text:'[]',previous:'[]'},
+   {key:RESTORE_POINT_KEY,build:({libraryText})=>backupText(new MotionLibrary(rig.rest).load({readOnly:true,snapshotText:libraryText}).docs,[],'',[])},{concurrent:'capture'});
+  expect(result.capturedConcurrent).toBe(true);
+  const point=parseBackup(canonical.get(RESTORE_POINT_KEY)!);
+  expect(point.ok&&point.docs[0].keys[0].label).toBe('B 未同步的保存');
+  expect(JSON.parse(canonical.get(LIBRARY_KEY)!).docs.map((d:WorkshopDoc)=>d.id)).toEqual([blank.id]);
+ });
+ it('refuses a capture replace without a restore point, so no concurrent save can be dropped',async()=>{
+  const store=memStorage(),canonical=new Map<string,string>(),{lock}=lockOver(store,canonical);
+  const l=new MotionLibrary(rig.rest,store,lock).load();await l.saved;
+  await expect(l.restore({schemaVersion:2,docs:l.docs,quarantine:[],activeId:l.activeId},{key:'kinesis-workshop-poses',text:'[]',previous:'[]'},undefined,{concurrent:'capture'})).rejects.toThrow('恢复点');
  });
 });
 

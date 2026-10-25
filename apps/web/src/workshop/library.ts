@@ -206,22 +206,42 @@ export class MotionLibrary{
   }
   /** Export one quarantined document as JSON text, so it can be repaired by hand or re-imported. */
   /** Commit a restored library, the related pose key and (optionally) a
-   * restore point of the pre-restore data in ONE locked transaction: if the
-   * restore lands, its undo snapshot landed with it. The restore point lives
-   * only in the snapshot store, so it never competes for localStorage quota. */
-  async restore(file:LibraryFile,related:{key:string;text:string;previous:string},restorePoint?:{key:string;text:string}){
+   * restore point in ONE locked transaction: if the restore lands, its undo
+   * snapshot landed with it. The restore point lives only in the snapshot
+   * store, so it never competes for localStorage quota.
+   *
+   * `restorePoint.build` runs INSIDE the lock and receives the canonical
+   * snapshot, not this page's memory: a save from another tab that this page
+   * has not synced yet still lands in the restore point.
+   *
+   * `concurrent:'abort'` (default) refuses when another page changed either
+   * store — a merge is derived from this page's data, so it must not clobber
+   * an unseen save. `concurrent:'capture'` is for a wholesale replace, whose
+   * result comes from the file alone: it proceeds and the restore point keeps
+   * the concurrent state. It requires a restore point, so nothing is dropped. */
+  async restore(file:LibraryFile,related:{key:string;text:string;previous:string},
+    restorePoint?:{key:string;build:(latest:{libraryText:string|null;relatedText:string|null})=>string},
+    {concurrent='abort'}:{concurrent?:'abort'|'capture'}={}){
     await this.saved;
     if(this.saveState!=='saved')throw new Error(this.lastError||'请等待当前动作保存后再恢复');
     if(!this.store||!this.lock)throw new Error('浏览器不支持安全恢复，请保留备份文件');
+    if(concurrent==='capture'&&!restorePoint)throw new Error('替换必须先保存恢复点，否则无法保留其他页面的修改');
     const text=JSON.stringify(file);
+    let restoredFrom='',changed=false;
     await this.lock(LIBRARY_KEY,snapshot=>{
-      if(snapshot!.getItem(LIBRARY_KEY)!==this.rawText||JSON.stringify(JSON.parse(snapshot!.getItem(related.key)??'[]'))!==related.previous)throw new Error('其他页面已更新动作或姿态，请刷新后重新恢复');
+      const latest={libraryText:snapshot!.getItem(LIBRARY_KEY),relatedText:snapshot!.getItem(related.key)};
+      let relatedChanged;
+      try{relatedChanged=JSON.stringify(JSON.parse(latest.relatedText??'[]'))!==related.previous;}
+      catch{relatedChanged=true;}
+      changed=latest.libraryText!==this.rawText||relatedChanged;
+      if(changed&&concurrent==='abort')throw new Error('其他页面已更新动作或姿态，请刷新后重新恢复');
       snapshot!.setItem(LIBRARY_KEY,text);snapshot!.setItem(related.key,related.text);
-      if(restorePoint)snapshot!.setItem(restorePoint.key,restorePoint.text);
+      if(restorePoint){restoredFrom=restorePoint.build(latest);snapshot!.setItem(restorePoint.key,restoredFrom);}
     },restorePoint?[related.key,restorePoint.key]:[related.key],restorePoint?{snapshotOnly:[restorePoint.key]}:undefined);
     for(const doc of this.docs)if(file.docs.find(d=>d.id===doc.id)!==doc)this.onRemoved?.(doc.id);
     this.docs=file.docs;this.quarantine=file.quarantine;this.activeId=file.activeId;
     this.rawText=text;this.remember();this.lastError='';this.onSaveState?.(false);
+    return {capturedConcurrent:changed,restorePointText:restorePoint?restoredFrom:undefined};
   }
   quarantineText(index:number){const q=this.quarantine[index];return q?typeof q.raw==='string'?q.raw:JSON.stringify(q.raw,null,2):'';}
   /** Remove a quarantined entry after the user has exported or repaired it. */

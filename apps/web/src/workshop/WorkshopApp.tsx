@@ -17,7 +17,7 @@ import {clearLabHandoff,handoffConsumedByCreate,handoffHasCard,resolveLabHandoff
 import type {LabHandoff} from './lab-handoff';
 import {combineMotions} from './combine-motions';
 import {basicInsertRefusal,insertBasicAction,type BasicInsertion} from './basic-actions';
-import {applyPoseAt,PoseLibrary,POSE_LIBRARY_KEY,stampPoseIntoKey,type PoseApplyReport,type PoseStampReport,type UserPosePreset} from './pose-library';
+import {applyPoseAt,isPoseShape,PoseLibrary,POSE_LIBRARY_KEY,stampPoseIntoKey,type PoseApplyReport,type PoseStampReport,type UserPosePreset} from './pose-library';
 import {MAX_BACKUP_BYTES,RESTORE_POINT_KEY,backupText,mergeBackup,parseBackup,replaceLibrary,type ParsedBackup} from './library-backup';
 import {HistoryBook,RecordGate} from './history';
 import {SemanticPanel,type SemanticHost} from './semantic-panel';
@@ -440,11 +440,31 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
   download(name,new Blob([backupText(L.docs,L.quarantine,L.activeId,poseLib.current!.presets)],{type:'application/json'}));
   setReplaceArmed(name);setReplaceAck(false);
  };
- const applyLibrary=(next:{schemaVersion:2;docs:WorkshopDoc[];quarantine:QuarantineEntry[];activeId:string},poses:UserPosePreset[],restorePointText?:string)=>
-  L.restore(next,{key:POSE_LIBRARY_KEY,text:JSON.stringify(poses),previous:JSON.stringify(poseLib.current!.presets)},restorePointText===undefined?undefined:{key:RESTORE_POINT_KEY,text:restorePointText}).then(()=>{
+ // Built INSIDE the replace's write lock from the canonical snapshot, so a save
+ // from another tab that this page has not synced yet is still captured. Both
+ // stores are re-parsed: unreadable documents, quarantine entries and a broken
+ // pose list stay recoverable instead of being dropped from the restore point.
+ const buildRestorePoint=(latest:{libraryText:string|null;relatedText:string|null})=>{
+  const snapshotLib=new MotionLibrary(new Map()).load({readOnly:true,snapshotText:latest.libraryText});
+  const quarantine=structuredClone(snapshotLib.quarantine);
+  let poses:UserPosePreset[]=[];
+  try{
+   const parsed:unknown=JSON.parse(latest.relatedText??'[]');
+   if(!Array.isArray(parsed))throw new Error('不是数组');
+   const valid=parsed.filter((p):p is UserPosePreset=>!!p&&typeof p==='object'&&typeof (p as UserPosePreset).id==='string'&&typeof (p as UserPosePreset).name==='string'&&isPoseShape((p as UserPosePreset).pose));
+   if(valid.length!==parsed.length)throw new Error(`${parsed.length-valid.length} 个条目格式不完整`);
+   poses=valid;
+  }catch(err){
+   quarantine.push({id:'poses-file',name:'自建姿态文件',reason:`替换时的自建姿态无法读取，已保留原文：${err instanceof Error?err.message:String(err)}`,raw:latest.relatedText});
+  }
+  return backupText(snapshotLib.docs,quarantine,snapshotLib.activeId,poses);
+ };
+ const applyLibrary=(next:{schemaVersion:2;docs:WorkshopDoc[];quarantine:QuarantineEntry[];activeId:string},poses:UserPosePreset[],restorePoint?:{build:(latest:{libraryText:string|null;relatedText:string|null})=>string},concurrent:'abort'|'capture'='abort')=>
+  L.restore(next,{key:POSE_LIBRARY_KEY,text:JSON.stringify(poses),previous:JSON.stringify(poseLib.current!.presets)},restorePoint?{key:RESTORE_POINT_KEY,build:restorePoint.build}:undefined,{concurrent}).then(result=>{
    poseLib.current!.load({snapshotText:JSON.stringify(poses)});
    gate.current.reset();wristEpoch.current++;
    setSelected(sortedKeys(L.active())[0].id);engine.current?.seek(0);engine.current?.markDirty();
+   return result;
   });
  const withRestoreLock=async(run:()=>Promise<void>,failure:string)=>{
   restoreBusy.current=true;setRestoring(true);engine.current?.setEditable(false);engine.current?.setPlaying(false);
@@ -462,19 +482,20 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
   await withRestoreLock(async()=>{
    const next={schemaVersion:2 as const,docs:[...L.docs],quarantine:structuredClone(L.quarantine),activeId:L.activeId};
    const poses=structuredClone(poseLib.current!.presets);
-   const before=mode==='replace'?backupText(L.docs,L.quarantine,L.activeId,poseLib.current!.presets):undefined;
    const report=mode==='merge'?mergeBackup(next,poses,preview):replaceLibrary(next,poses,preview);
    if(!next.docs.length){const doc=blankDocument(new Map(rigInfo.bones.map(b=>[b.name,new Vector3().fromArray(b.head)])),'新动作',newDocId('新动作'));next.docs=[doc];next.activeId=doc.id;}
-   await applyLibrary(next,poses,before);
-   if(before){
-    // Read the restore point back from the canonical store before offering
-    // undo: the offer is only made for data that verifiably persisted.
+   // A replace takes its content from the file alone, so an unseen save from
+   // another tab must not abort it — it is captured in the restore point
+   // instead. A merge is built from this page's data and still aborts.
+   const result=await applyLibrary(next,poses,mode==='replace'?{build:buildRestorePoint}:undefined,mode==='replace'?'capture':'abort');
+   if(mode==='replace'){
     const stored=await webPlatform.readStorage(RESTORE_POINT_KEY);
-    const point=stored&&stored===before?parseBackup(stored):null;
+    const point=stored&&stored===result.restorePointText?parseBackup(stored):null;
     setRestorePoint(point?.ok?{savedAt:point.file.exportedAt,docs:point.docs.length,poses:point.poses.length}:null);
     if(!point?.ok){setReplaceArmed(null);setReplaceAck(false);finishRestore(report,mode);setError('替换已完成，但浏览器内恢复点校验失败；请使用替换前下载的 JSON 快照恢复。');return;}
    }
    setReplaceArmed(null);setReplaceAck(false);finishRestore(report,mode);
+   if(mode==='replace'&&result.capturedConcurrent)setHint('已替换；其他页面刚保存的修改与替换前数据一并保存在恢复点，可「撤销替换」找回。');
   },'恢复未完成，原数据已保留');
  };
  const undoReplace=async()=>{
@@ -501,7 +522,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
     const copy=structuredClone(pose);let suffix=2;while(poseIds.has(copy.id))copy.id=`${pose.id}-copy-${suffix++}`;
     poseIds.add(copy.id);poses.push(copy);
    }
-   await applyLibrary(next,poses,'');
+   await applyLibrary(next,poses);
    setRestorePoint(null);bump(v=>v+1);
    if(L.lastError){setError(`撤销已在当前页面生效，但保存失败：${L.lastError}。请立即导出 JSON 备份。`);return;}
    setError('');setHint(`已撤销替换：恢复 ${next.docs.length} 个动作、${poses.length} 个自建姿态；替换后的动作已移入隔离区。`);

@@ -48,7 +48,11 @@ try{
  // bring the lab forward before rAF-driven orbit/drag assertions.
  await lab.bringToFront();
  await lab.getByTestId(`motion-local:${first}`).click();await lab.getByRole('button',{name:'暂停',exact:true}).click();
- const canvas=lab.locator('#lab-stage canvas'),box=await canvas.boundingBox();await lab.mouse.move(box.x+box.width*.5,box.y+box.height*.5);await lab.mouse.down();await lab.mouse.move(box.x+box.width*.65,box.y+box.height*.6,{steps:12});await lab.mouse.up();await lab.waitForFunction(()=>{const e=window.__LAB__,p=[...e.camera.position.toArray(),...e.camera.quaternion.toArray()],previous=window.__qaCamera;window.__qaCamera=p;return previous&&p.every((v,i)=>Math.abs(v-previous[i])<1e-10);},null,{polling:50,timeout:60000});
+ const canvas=lab.locator('#lab-stage canvas'),box=await canvas.boundingBox();await lab.mouse.move(box.x+box.width*.5,box.y+box.height*.5);await lab.mouse.down();await lab.mouse.move(box.x+box.width*.65,box.y+box.height*.6,{steps:12});await lab.mouse.up();// The view must accept the drag, then settle. Locomotion-follow moves the
+ // camera every frame, so "identical to the previous frame" never holds:
+ // wait for a change, then for two close samples (damping has converged).
+ await lab.waitForFunction(()=>{const e=window.__LAB__,p=[...e.camera.position.toArray(),...e.camera.quaternion.toArray()],previous=window.__qaCamera;window.__qaCamera=p;return previous&&p.some((v,i)=>Math.abs(v-previous[i])>1e-4);},null,{polling:50,timeout:30000});
+ await lab.waitForFunction(()=>{const e=window.__LAB__,p=[...e.camera.position.toArray(),...e.camera.quaternion.toArray()],previous=window.__qaCamera;window.__qaCamera=p;return previous&&p.every((v,i)=>Math.abs(v-previous[i])<1e-6);},null,{polling:50,timeout:30000});
  const camera=()=>lab.evaluate(()=>{const e=window.__LAB__;return [e.camera.position.toArray(),e.controls.target.toArray(),e.camera.quaternion.toArray(),e.view,e.time,e.playing];});
  await a.bringToFront();
  const before=await camera();await lab.evaluate(()=>{window.__qaSource=window.__LAB__.source;});

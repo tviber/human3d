@@ -33,8 +33,14 @@ if(process.env.QA_WEB_URL!==undefined){
 const browser=await launchQaBrowser(chromium,{...(process.env.QA_BROWSER_CHANNEL?{channel:process.env.QA_BROWSER_CHANNEL}:{})});
 let svc;
 let cleanupPromise;
+// Idempotent: the mid-run shutdown and the finally cleanup share one path.
+const closeService=async()=>{
+ if(!svc)return;
+ const server=svc;svc=undefined;
+ const closed=new Promise(resolve=>server.close(resolve));server.closeAllConnections();await closed;
+};
 const cleanup=()=>cleanupPromise??=(async()=>{
- if(svc){const server=svc;svc=undefined;const closed=new Promise(resolve=>server.close(resolve));server.closeAllConnections();await closed;}
+ await closeService();
  await browser.close();
 })();
 try {
@@ -299,7 +305,7 @@ assert.equal(roundtrip.status,'ready',`exported package failed to load in the la
 // The ad-hoc presentation channel surfaced: documentName becomes the entry name.
 assert.equal(await page.locator('.viewport-heading h2').textContent(),'QA 测试动作','parameters.documentName did not reach the lab entry');
 result.checks.workshopPackageExport=true;
-svc?.kill();svc=undefined; // every service-dependent assertion is done
+await closeService(); // every service-dependent assertion is done
 // Back to the workshop for the remaining pinned edits — the library
 // persists the QA doc's active selection across the navigation.
 await page.goto(webUrl('/workshop.html'));

@@ -14,7 +14,10 @@
  * DOM overlay, DEV window globals.
  */
 
-export interface StorageLike{getItem(k:string):string|null;setItem(k:string,v:string):void;removeItem?(k:string):void}
+export interface StorageLike{getItem(k:string):string|null;setItem(k:string,v:string):void;removeItem?(k:string):void;readonly length?:number;key?(index:number):string|null}
+
+export type StorageLock=(key:string,write:(snapshot?:StorageLike)=>void|Promise<void>)=>Promise<void>;
+export interface DraftOwner{id:string;ready:Promise<void>;active(id:string):Promise<boolean>}
 
 export interface AppPlatform{
   /** Resolve an app asset path ("/models/rig.json") to a host-fetchable URL. */
@@ -23,6 +26,9 @@ export interface AppPlatform{
   fetchAsset(path:string):Promise<Response>;
   /** Persistent key-value storage, or null when the host has none. */
   storage:StorageLike|null;
+  storageLock:StorageLock;
+  readStorage(key:string):Promise<string|null>;
+  readonly draftOwner:DraftOwner|undefined;
   /** Hand a produced file to the user (web: anchor download). */
   download(name:string,blob:Blob):void;
   /** Encode a canvas to a PNG blob (stills, contact sheets). */
@@ -48,11 +54,61 @@ export interface AppPlatform{
 function safeStorage():StorageLike|null{
   try{return globalThis.localStorage??null;}catch{return null;}
 }
+let draftOwner:DraftOwner|undefined;
+let storageDatabase:Promise<IDBDatabase>|undefined;
+
+async function storageSnapshot(key:string){
+  storageDatabase??=new Promise<IDBDatabase>((resolve,reject)=>{
+    const request=indexedDB.open('kinesis-workshop',1);
+    request.onupgradeneeded=()=>{request.result.createObjectStore('snapshots');};
+    request.onerror=()=>reject(request.error);
+    request.onsuccess=()=>{request.result.onversionchange=()=>{request.result.close();storageDatabase=undefined;};resolve(request.result);};
+  });
+  const db=await storageDatabase;
+  return new Promise<string|null|undefined>((resolve,reject)=>{
+    const transaction=db.transaction('snapshots','readonly'),request=transaction.objectStore('snapshots').get(key);
+    transaction.oncomplete=()=>{
+      const value:unknown=request.result;
+      if(value!==undefined&&value!==null&&typeof value!=='string')reject(new Error('已保存动作快照格式错误'));
+      else resolve(value);
+    };
+    transaction.onabort=()=>reject(transaction.error??new Error('读取已保存动作失败'));
+  });
+}
 
 export const webPlatform:AppPlatform={
   assetUrl:path=>path,
   fetchAsset:path=>fetch(path),
   get storage(){return safeStorage();},
+  async readStorage(key){const value=await storageSnapshot(key);return value===undefined?safeStorage()?.getItem(key)??null:value;},
+  get draftOwner(){
+    if(!globalThis.navigator?.locks)return undefined;
+    if(!draftOwner){
+      const id='kinesis-workshop-owner:'+crypto.randomUUID();
+      // The browser releases this lease even when the page closes without an unload event.
+      const ready=new Promise<void>((resolve,reject)=>{void navigator.locks.request(id,()=>{resolve();return new Promise<void>(()=>{});}).catch(reject);});
+      void ready.catch(()=>{});
+      draftOwner={id,ready,async active(owner){const state=await navigator.locks.query();return [...state.held??[],...state.pending??[]].some(lock=>lock.name===owner);}};
+    }
+    return draftOwner;
+  },
+  async storageLock(key,write){
+    if(!globalThis.navigator?.locks)throw new Error('浏览器不支持安全的跨页面保存，请导出 JSON 备份');
+    await navigator.locks.request(key,async()=>{
+      const native=safeStorage();if(!native)throw new Error('浏览器存储不可用，请导出 JSON 备份');
+      const committed=await storageSnapshot(key),db=await storageDatabase!;
+      let value=committed===undefined?native.getItem(key):committed,changed=false;
+      // localStorage caches can lag across renderers even under a Web Lock.
+      await write({getItem:k=>k===key?value:native.getItem(k),setItem:(k,text)=>{if(k!==key)throw new Error('不能写入未锁定的存储键');value=text;changed=true;}});
+      if(!changed)return;
+      await new Promise<void>((resolve,reject)=>{
+        const transaction=db.transaction('snapshots','readwrite');transaction.objectStore('snapshots').put(value,key);
+        transaction.oncomplete=()=>resolve();transaction.onabort=()=>reject(transaction.error??new Error('提交动作失败'));
+      });
+      try{if(value===null)native.removeItem?.(key);else native.setItem(key,value);}
+      catch(err){throw new Error(`动作主快照已提交，但本机 JSON 镜像更新失败；草稿仍保留：${err instanceof Error?err.message:String(err)}`);}
+    });
+  },
   download(name,blob){
     const a=document.createElement('a');
     a.href=URL.createObjectURL(blob);a.download=name;a.click();

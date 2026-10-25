@@ -1,8 +1,15 @@
 import {describe,it,expect} from 'vitest';
 import {MOTIONS} from '@human3d/motion-core';
 import {workshopEditability} from './handoff';
+import {savedMotionSpec} from '../workshop/library';
 
 describe('workshopEditability',()=>{
+ it('opens the existing saved document instead of offering a new preset copy',()=>{
+  const source=MOTIONS.find(m=>m.source?.kind==='document')!;
+  if(source.source?.kind!=='document')throw new Error('Missing real document');
+  const doc={...source.source.document,id:'我的动作 / 1'},spec=savedMotionSpec(doc);
+  expect(workshopEditability(spec)).toEqual({editable:true,url:`/workshop.html?doc=${encodeURIComponent(doc.id)}`,reason:''});
+ });
  it('offers navigation for bundled workshop-document motions, carrying the motion id',()=>{
   const forehand=MOTIONS.find(m=>m.id==='forehand')!;
   expect(forehand.source?.kind).toBe('document');

@@ -11,6 +11,9 @@ import {attachProp,mountRacket,RACKET_TIP_LOCAL} from '@human3d/motion-core';
 import {checkPosePackageShape,posePackageSpec,rigMatches} from '@human3d/motion-core';
 import {ClipSource,DocumentSource,DynamicsSource,PoseFade,PosePackageSource,createDynamicsSession,type DynamicsSession,type MotionSource} from '../playback/motion-source';
 import {bindSceneBackground} from '../theme/scene-background';
+import {applyHeroicShape} from '../theme/shape-preset';
+import {SkinSwap,type SkinId} from '../theme/skin-swap';
+import {SAVED_MOTION_PREFIX} from '../workshop/library';
 import {loadAnatomyAtlas} from '../theme/anatomy-skin';
 import {AnatomySelection} from '../theme/anatomy-selection';
 import {subtleDigest} from '@human3d/motion-core';
@@ -33,6 +36,7 @@ export class HumanEngine{
  scene=new Scene();camera=new PerspectiveCamera(35,1,.01,120);renderer:WebGLRenderer;controls:OrbitControls;
  model?:Group;rig?:HumanRig;mixer?:AnimationMixer;
  anatomy?:AnatomySelection;
+ private skinSwap?:SkinSwap;
  /** The one and only playhead, in seconds of the active source. */
  time=0;activeId:MotionId='idle';playing=true;speed=1;private _loop=true;disposed=false;ready=false;
  private sources=new Map<MotionId,MotionSource>();private specs=new Map<MotionId,MotionSpec>();
@@ -40,6 +44,7 @@ export class HumanEngine{
  private pkgSeq=0;
  private _source?:MotionSource;private fade=new PoseFade();private dynSession?:DynamicsSession;
  debug:DebugOptions={surface:true,skeleton:false,axes:false,targets:false,trail:false,muscles:false};
+ skin:SkinId='default';
  racket?:Group;private racketSide:'L'|'R'='R';
  /** Locally computed identities for the pose-package import gate: the rig
   * manifest hash (compared against a package's rig block — see rigMatches)
@@ -86,7 +91,7 @@ export class HumanEngine{
    })]);
    if(this.disposed){atlas.dispose();gltf.scene.traverse(o=>{if(o instanceof Mesh)o.geometry.dispose()});return;}
    const info=JSON.parse(rigText) as RigInfo;
-   this.model=gltf.scene;this.scene.add(this.model);this.rig=new HumanRig(this.model,info);
+   this.model=gltf.scene;this.scene.add(this.model);this.rig=new HumanRig(this.model,info);applyHeroicShape(this.model);
    // Local identities for the pose-package import gate — the same
    // canonical(rigManifestBody)/canonical(motionDefinitionPayload) sha256 the
    // service stamps into packages (rig.manifestSHA256 / action.definitionSHA256).
@@ -103,8 +108,9 @@ export class HumanEngine{
    this.model.traverse(o=>{if(o instanceof SkinnedMesh){o.castShadow=true;o.receiveShadow=true;o.frustumCulled=false;this.anatomy!.add(o);}});
    // Sclerae at the original MakeHuman eye pivots, keeping facial silhouette intact.
    for(const side of ['L','R']){
-    const eye=this.rig.bone(`eye_${side}`);const sclera=new Mesh(new SphereGeometry(.0105,20,12),new MeshStandardMaterial({color:0xbdcbd2,roughness:.5}));eye.add(sclera);
+    const eye=this.rig.bone(`eye_${side}`);const sclera=new Mesh(new SphereGeometry(.0105,20,12),new MeshStandardMaterial({color:0xbdcbd2,roughness:.5}));sclera.name='human-eye';eye.add(sclera);
    }
+   this.skinSwap=new SkinSwap(this.model,this.platform);await this.skinSwap.set(this.skin);if(this.disposed)return;
    this.racket=attachProp(this.rig,'racket');this.racket.visible=false;
    this.mixer=new AnimationMixer(this.model);
    this.dynSession=createDynamicsSession(this.rig,this.scene);
@@ -120,6 +126,27 @@ export class HumanEngine{
   }catch(err){this.onError?.(err instanceof Error?err:new Error(String(err)));}
  }
  private specOf(id:MotionId){return this.specs.get(id)??motionById(id);}
+ /** Saved motions share the workshop document playback path; compile only when selected. */
+ setSavedMotions(specs:MotionSpec[]){
+  const active=this.activeId,time=this.time,playing=this.playing;
+  const incoming=new Map(specs.map(spec=>[spec.id,spec]));
+  let activeChanged=false;
+  for(const [id,previous] of this.specs)if(id.startsWith(SAVED_MOTION_PREFIX)){
+   const next=incoming.get(id);
+   if(next&&JSON.stringify(previous)===JSON.stringify(next))continue;
+   this.sources.get(id)?.dispose?.();this.sources.delete(id);this.specs.delete(id);
+   if(id===active)activeChanged=true;
+  }
+  for(const spec of specs)if(!this.specs.has(spec.id))this.specs.set(spec.id,spec);
+  if(activeChanged){
+   const position=this.camera.position.clone(),target=this.controls.target.clone(),rotation=this.camera.quaternion.clone(),view=this.view;
+   this.setMotion(this.specs.has(active)?active:'idle',false);
+   if(this.specs.has(active)){
+    this.seek(time);this.setPlaying(playing);
+    this.camera.position.copy(position);this.camera.quaternion.copy(rotation);this.controls.target.copy(target);this.view=view;this.onView?.(view);this.render();
+   }
+  }
+ }
  /** Mount the shared racket on the wrist the source's prop declares. The side
   * is constant per source, so this fires at most once per source switch;
   * prop-less sources report 'R' and restore the canonical mount. */
@@ -181,7 +208,10 @@ export class HumanEngine{
  setPhysicsCase(profile:DynamicsCase){const s=this.dynamicsSource();if(s){this.playing=false;this.loadDynamics(s,profile);}}
  setMotion(id:MotionId,fade=true){
   if(!this.ready)return;
-  const source=this.sources.get(id);if(!source)return;
+  let source=this.sources.get(id);
+  const saved=this.specs.get(id);
+  if(!source&&saved?.source?.kind==='document'&&this.rig){source=new DocumentSource(this.rig,saved.source.document,this.racket);this.sources.set(id,source);}
+  if(!source)return;
   const previous=this._source,spec=this.specOf(id);
   const skinned=(s?:MotionSource)=>!!s&&s.kind!=='dynamics';
   this.activeId=id;this._source=source;this.time=0;
@@ -200,7 +230,7 @@ export class HumanEngine{
   source.activate?.();source.seek(this.time);
   this.model!.position.copy(source.modelOffset??ZERO);
   if(this.racket){this.syncRacketSide(source);this.racket.visible=!!spec.capabilities?.prop&&source.wantsProp();}
-  this.trailPoints=[];this.previousPosition.set(0,0,0);this.playing=true;
+  this.trailPoints=[];this.previousPosition.set(0,0,0);this.playing=true;this.skinSwap?.resetHair();
   this.controls.target.set(0,.88,0);this.setView(this.view==='hand'?'threeQuarter':this.view);
   this.setDebug(this.debug);this.notify();
  }
@@ -221,11 +251,15 @@ export class HumanEngine{
   src.seek(this.time);
   // Scrubbing resets the accumulated walk offset — same as the old walkOffset.clear on seek.
   src.modelOffset?.set(0,0,0);this.model?.position.copy(src.modelOffset??ZERO);
-  this.trailPoints=[];this.updateDebug();this.notify();
+  this.trailPoints=[];this.updateDebug();this.skinSwap?.resetHair();this.notify();
  }
  replay(){if(this.isPhysics){this.time=0;this.physics?.seek(0);this.playing=!this.physicsLoading;this.notify();return;}this.seek(0);this.playing=true;}
+ async setSkin(s:SkinId){
+  if(this.skinSwap){await this.skinSwap.set(s);this.skin=this.skinSwap.skin;}else this.skin=s;
+  if(this.ready&&this.view!=='free')this.setView(this.view);
+ }
  setDebug(patch:Partial<DebugOptions>){
-  Object.assign(this.debug,patch);
+  Object.assign(this.debug,patch);this.skinSwap?.setSurfaceVisible(this.debug.surface);
   if(this.isPhysics){this._source?.setDebug?.(this.debug);return;}
   this.model?.traverse(o=>{if(o instanceof SkinnedMesh)o.visible=this.debug.surface;});
   this.skeletonLines&&(this.skeletonLines.visible=this.debug.skeleton);this.jointGroup.visible=this.debug.skeleton;this.axesGroup.visible=this.debug.axes;this.targetGroup.visible=this.debug.targets;
@@ -234,7 +268,7 @@ export class HumanEngine{
  setView(view:ViewId){
   this.view=view;this.onView?.(view);const spec=this.specOf(this.activeId);
   const root=(this.isPhysics&&this.physics?.ready?this._source?.point('Full Body'):this._source?.rootPoint())??new Vector3(0,.94,0),target=root.clone();
-  target.y=spec.capabilities?.camera?.targetHeight??.87;
+  target.y=(spec.capabilities?.camera?.targetHeight??.87)+(this.skin==='ssj'&&!this.isPhysics?.08:0);
   if(view==='free'){const shift=target.clone().sub(this.controls.target);this.camera.position.add(shift);this.controls.target.copy(target);this.previousPosition.copy(root);this.controls.update();this.render();return;}
   if(view==='hand'&&this.rig){
    // The hand view anchors to the wrist the prop is mounted on — physics keeps
@@ -242,14 +276,14 @@ export class HumanEngine{
    const wrist=(this.isPhysics&&this.physics?.ready?this._source?.point('lunate_r'):this.rig.point(`wrist_${this._source?.propSide??'R'}`))??this.rig.point('wrist_R');
    target.copy(wrist).add(new Vector3(0,.01,.03));this.camera.position.copy(target).add(new Vector3(-.34,.18,.42));
   }else{
-   const distance=Math.max(this.isPhysics?4.15:spec.capabilities?.camera?.distance??3.65,2.0/Math.max(.4,this.camera.aspect));
+   const distance=Math.max(this.isPhysics?4.15:spec.capabilities?.camera?.distance??3.65,this.skin==='ssj'?3.8:0,2.0/Math.max(.4,this.camera.aspect));
    const angles={front:0,side:Math.PI/2,back:Math.PI,threeQuarter:-Math.PI/4,hand:0,free:0};const a=angles[view];this.camera.position.copy(target).add(new Vector3(Math.sin(a)*distance,.14,Math.cos(a)*distance));
   }
   this.controls.target.copy(target);this.camera.lookAt(target);this.controls.update();this.previousPosition.copy(root);this.render();
  }
  private animate=()=>{
   if(this.disposed)return;this.raf=requestAnimationFrame(this.animate);const dt=Math.min(this.clock.getDelta(),.1);
-  this.tick(dt);this.controls.update();this.anatomy?.update(dt);this.render();
+  this.tick(dt);if(!this.isPhysics)this.skinSwap?.update(dt);this.controls.update();this.anatomy?.update(dt);this.render();
  };
  tick(dt:number){
   const dyn=this.dynamicsSource();
@@ -335,5 +369,5 @@ export class HumanEngine{
   this.onFrame?.({time,duration:src.duration,phase,playing:this.playing,knee:d?.knee??0,elbow:d?.elbow??0,gripError:d?.gripError??0});
  }
  render(){this.renderer.render(this.scene,this.camera);}
- dispose(){this.disposed=true;this.anatomy?.dispose();this.unbindTheme?.();for(const s of this.sources.values())s.dispose?.();cancelAnimationFrame(this.raf);this.resizeObserver.disconnect();this.controls.dispose();this.mixer?.stopAllAction();this.scene.traverse(o=>{if(o instanceof Mesh||o instanceof LineSegments||o instanceof Line){o.geometry.dispose();const materials=Array.isArray(o.material)?o.material:[o.material];materials.forEach(m=>m.dispose());}});this.renderer.dispose();this.renderer.domElement.remove();}
+ dispose(){this.disposed=true;this.skinSwap?.dispose();this.anatomy?.dispose();this.unbindTheme?.();for(const s of this.sources.values())s.dispose?.();cancelAnimationFrame(this.raf);this.resizeObserver.disconnect();this.controls.dispose();this.mixer?.stopAllAction();this.scene.traverse(o=>{if(o instanceof Mesh||o instanceof LineSegments||o instanceof Line){o.geometry.dispose();const materials=Array.isArray(o.material)?o.material:[o.material];materials.forEach(m=>m.dispose());}});this.renderer.dispose();this.renderer.domElement.remove();}
 }

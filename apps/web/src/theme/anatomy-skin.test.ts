@@ -96,6 +96,6 @@ describe('source-derived UV muscle atlas on the production human',()=>{
   const geometry=mesh.geometry,skin=applyAnatomySkin(mesh,atlas);
   expect(skin.id.value).toBe(0);expect(skin.amount.value).toBe(0);expect(mesh.geometry).toBe(geometry);
   expect(Array.isArray(mesh.material)).toBe(false);if(Array.isArray(mesh.material))return;
-  expect(mesh.material).toMatchObject({vertexColors:false,roughness:.76,metalness:0});
+  expect(mesh.material).toMatchObject({vertexColors:false,roughness:.76,metalness:0,map:null});
  });
 });

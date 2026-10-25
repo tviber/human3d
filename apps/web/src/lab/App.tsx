@@ -1,15 +1,17 @@
+import {SkinSwitch} from '../theme/SkinSwitch';
 import {webPlatform} from '../platform/platform';
 import {useMediaMatches} from '../lib/use-media';
-import {useEffect,useRef,useState} from 'react';
+import {useCallback,useEffect,useRef,useState} from 'react';
 import {Group, Panel, Separator} from 'react-resizable-panels';
 import {motion, useReducedMotion} from 'motion/react';
-import {Activity,ArrowUpRight,ChevronRight,Expand,Info,Layers,Pause,Play,RotateCcw,Scan,SlidersHorizontal,X} from 'lucide-react';
+import {Activity,ArrowUpRight,ChevronRight,Expand,Info,Layers,Pause,Play,RotateCcw,Scan,SlidersHorizontal,Trash2,X} from 'lucide-react';
 import {DynamicsPanel} from './DynamicsPanel';
 import {workshopEditability} from './handoff';
 import {HumanEngine} from './engine';
 import {MOTIONS} from '@human3d/motion-core';
 import {checkPosePackageShape} from '@human3d/motion-core';
-import type {DebugOptions,MotionId,ViewId} from '@human3d/motion-core';
+import type {DebugOptions,MotionId,MotionSpec,ViewId} from '@human3d/motion-core';
+import {LIBRARY_KEY,MotionLibrary,SAVED_MOTION_PREFIX,savedMotionSpec} from '../workshop/library';
 import {Button} from '../components/ui/button';
 import {Switch} from '../components/ui/switch';
 import {useLabUi} from './store';
@@ -56,7 +58,17 @@ export function App(){
  const compact=useCompact();
  const [sheet,setSheet]=useState<'library'|'inspector'|null>(null);
  const {id,setId,info,setInfo,error,setError,view,setView,frame,setFrame,debug,patchDebug,speed,setSpeed,loop,setLoop,dialog,setDialog,extras,setExtras}=useLabUi();
- const allMotions=[...MOTIONS,...extras],spec=allMotions.find(m=>m.id===id)??MOTIONS[0],racket=!!spec.capabilities?.prop,physics=spec.source?.kind==='dynamics';
+ const [savedMotions,setSavedMotions]=useState<MotionSpec[]>([]);
+ const allMotions=[...savedMotions,...MOTIONS,...extras],spec=allMotions.find(m=>m.id===id)??MOTIONS[0],racket=!!spec.capabilities?.prop,physics=spec.source?.kind==='dynamics';
+ const refreshSaved=useCallback(async()=>{
+  const e=engine.current;if(!e?.ready||!e.rig)return;
+  try{
+  const snapshotText=await webPlatform.readStorage(LIBRARY_KEY);if(engine.current!==e)return;
+  const library=new MotionLibrary(e.rig.rest,webPlatform.storage,webPlatform.storageLock).load({readOnly:true,snapshotText});if(library.lastError){setError(`读取动作库失败：${library.lastError}`);return;}const saved=library.docs.map(savedMotionSpec);
+  e.setSavedMotions(saved);setSavedMotions(saved);
+  const current=useLabUi.getState().id;if(current.startsWith(SAVED_MOTION_PREFIX)&&!saved.some(m=>m.id===current))setId('idle');
+  }catch(err){setError(`读取动作库失败：${err instanceof Error?err.message:String(err)}`);}
+ },[setId,setError]);
  const editability=workshopEditability(spec);
  const openPackage=async(file:File)=>{
   try{
@@ -72,11 +84,25 @@ export function App(){
  };
  useEffect(()=>{
   if(!mount.current)return;let e:HumanEngine;
-  try{e=new HumanEngine(mount.current);engine.current=e;e.onFrame=setFrame;e.onView=setView;e.onReady=setInfo;e.onError=err=>setError(err.message);void e.load();}
+  try{e=new HumanEngine(mount.current);engine.current=e;e.onFrame=setFrame;e.onView=setView;e.onReady=info=>{setInfo(info);refreshSaved();};e.onError=err=>setError(err.message);void e.load();}
   catch(err){setError(err instanceof Error?err.message:String(err));return;}
   if(import.meta.env.DEV)(window as unknown as {__LAB__:HumanEngine}).__LAB__=e;
-  return()=>{engine.current=null;e.dispose();};
- },[]);
+  const storage=(event:StorageEvent)=>{if(event.key===LIBRARY_KEY||event.key===null)refreshSaved();};
+  window.addEventListener('storage',storage);window.addEventListener('focus',refreshSaved);
+  return()=>{window.removeEventListener('storage',storage);window.removeEventListener('focus',refreshSaved);engine.current=null;e.dispose();};
+ },[refreshSaved]);
+ const removeSaved=async(motion:MotionSpec)=>{
+  const e=engine.current;if(!e?.rig||motion.source?.kind!=='document')return;
+  if(!webPlatform.confirm(`删除已保存动作「${motion.name}」？此操作不可撤销。`))return;
+  try{
+  const snapshotText=await webPlatform.readStorage(LIBRARY_KEY);if(engine.current!==e)return;
+  const library=new MotionLibrary(e.rig.rest,webPlatform.storage,webPlatform.storageLock).load({readOnly:true,snapshotText});
+  if(library.lastError){setError(`无法删除动作：${library.lastError}`);return;}
+  library.remove(motion.source.document.id,false);await library.saved;
+  if(library.lastError){setError(`删除未保存：${library.lastError}`);return;}
+  refreshSaved();
+  }catch(err){setError(`无法删除动作：${err instanceof Error?err.message:String(err)}`);}
+ };
  const choose=(next:MotionId)=>{setId(next);setSheet(null);const nextSpec=allMotions.find(m=>m.id===next)??MOTIONS[0];if(nextSpec.oneShot){setLoop(false);if(engine.current)engine.current.loop=false;}engine.current?.setMotion(next);if(view==='hand'){setView('threeQuarter');engine.current?.setView('threeQuarter');}};
  const toggle=(key:keyof DebugOptions,value:boolean)=>{const patch={[key]:value} satisfies Partial<DebugOptions>;patchDebug(patch);engine.current?.setDebug(patch);};
  const camera=(v:ViewId)=>{setView(v);engine.current?.setView(v);};
@@ -90,7 +116,7 @@ export function App(){
    <Panel id="lab-library" className="motion-panel" aria-label="动作库" defaultSize={252} minSize={200} maxSize={420}><div className="panel-heading"><h2>动作库</h2><button className="pkg-import" onClick={()=>fileRef.current?.click()}>导入姿态包</button><span>{String(allMotions.length).padStart(2,'0')}</span><button className="sheet-close" aria-label="收起动作库" onClick={()=>setSheet(null)}><X size={18}/></button></div>{sheet==='library'&&error?<p className="pkg-error" role="alert">{error}</p>:null}<p className="panel-intro">探索人体，理解运动。</p>
     {editability.editable?<div className="motion-edit"><button className="motion-edit-btn" data-testid="motion-edit" onClick={()=>webPlatform.navigate(editability.url)}><SlidersHorizontal size={14}/>在动作工作台编辑</button></div>
      :<p className="motion-edit-why" data-testid="motion-edit-why">{editability.reason}</p>}
-    <div className="motion-list">{allMotions.map((m,i)=><button key={m.id} className={`motion-row ${id===m.id?'selected':''}`} aria-pressed={id===m.id} onClick={()=>choose(m.id)} disabled={!info}><span className="motion-number">{String(i+1).padStart(2,'0')}</span><span className="motion-label">{m.name}<small>{m.english}</small></span>{id===m.id?<ChevronRight size={16}/>:null}</button>)}</div>
+    <div className="motion-list">{allMotions.map((m,i)=><div key={m.id} className="motion-item"><button className={`motion-row ${id===m.id?'selected':''}`} data-testid={`motion-${m.id}`} aria-pressed={id===m.id} onClick={()=>choose(m.id)} disabled={!info}><span className="motion-number">{m.id.startsWith(SAVED_MOTION_PREFIX)?'自建':String(i-savedMotions.length+1).padStart(2,'0')}</span><span className="motion-label">{m.name}<small>{m.english}</small></span>{id===m.id?<ChevronRight size={16}/>:null}</button>{m.id.startsWith(SAVED_MOTION_PREFIX)?<button className="motion-remove" aria-label={`删除已保存动作 ${m.name}`} title="删除已保存动作" onClick={()=>removeSaved(m)} disabled={!info}><Trash2 size={14}/></button>:null}</div>)}</div>
     <div className="motion-notes"><div className="mini-heading">观察重点</div><p>{spec.description}</p><div className="focus-list">{spec.focus.map(f=><span key={f}>{f}</span>)}</div></div>
     <div className="asset-note"><Layers size={17}/><div>{physics?'肌骨正向仿真 · 连续蒙皮表面':'连续蒙皮人体'}<small>{physics?'44 个关节自由度 + 6 个根速度自由度 · 416 肌肉执行器':info?`${info.bones.length} 根骨骼 · ${Math.round(info.vertices/1000*10)/10}k 顶点`:'正在读取模型…'}</small></div></div>
    </Panel>
@@ -109,6 +135,7 @@ export function App(){
    <Separator className="pane-resize"/>
    <Panel id="lab-inspector" className="inspector" aria-label="观察设置" defaultSize={258} minSize={220} maxSize={460}><section><div className="panel-heading"><h2>观察</h2><span className="spacer"/><SlidersHorizontal size={17}/><button className="sheet-close" aria-label="收起观察" onClick={()=>setSheet(null)}><X size={18}/></button></div><div className="toggle-list">
     <Toggle label="人体表面" checked={debug.surface} onChange={v=>toggle('surface',v)}/><Toggle label={physics?"解剖骨骼与关节":"骨骼与关节"} checked={debug.skeleton} onChange={v=>toggle('skeleton',v)}/><Toggle label="关节坐标轴" checked={debug.axes} onChange={v=>toggle('axes',v)}/><Toggle label={physics?"固定支撑反力":"IK 端点"} checked={debug.targets} onChange={v=>toggle('targets',v)}/>
+    <SkinSwitch disabled={!info||physics} change={s=>engine.current!.setSkin(s)}/>
     {physics?<Toggle label="肌腱作用路径" checked={debug.muscles} onChange={v=>toggle('muscles',v)}/>:null}
     {spec.capabilities?.prop?.trail?<Toggle label="球拍运动轨迹" checked={debug.trail} onChange={v=>toggle('trail',v)}/>:null}
    </div></section>

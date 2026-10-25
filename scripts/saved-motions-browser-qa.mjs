@@ -1,0 +1,94 @@
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import {chromium} from 'playwright';
+import {resolveOutputDir,ensureOutputDir,assertTrackedWriteAllowed} from './lib/qa-output.mjs';
+import {verifyWebIdentity} from './lib/worktree-check.mjs';
+
+// Browser plugin not available: exercise real controls in installed Playwright/Chrome.
+const root=process.cwd(),output=resolveOutputDir('saved-motions',process.argv.slice(2),root,process.env);
+assert.equal(output.args.length,0);ensureOutputDir(output.dir,{root,updateEvidence:output.updateEvidence});
+const out=name=>assertTrackedWriteAllowed(path.join(output.dir,name),{root,updateEvidence:output.updateEvidence});
+const base=new URL(process.env.QA_WEB_URL??`http://127.0.0.1:${process.env.HUMAN3D_WEB_PORT??5173}/`);
+const identity=await verifyWebIdentity(root,base);assert(identity.ok,identity.detail);
+const browser=await chromium.launch({headless:true,...(process.env.QA_BROWSER_CHANNEL?{channel:process.env.QA_BROWSER_CHANNEL}:{})});
+const errors=[],context=await browser.newContext({viewport:{width:1440,height:1000}});
+const open=async(route)=>{const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});await page.goto(new URL(route,base).href);return page;};
+const ready=async(page,key)=>{await page.waitForFunction(key=>window[key]?.ready,key,{timeout:60000});assert.match(await page.title(),/KINESIS/);assert.equal(await page.locator('vite-error-overlay').count(),0);};
+const file=page=>page.evaluate(()=>JSON.parse(localStorage.getItem('kinesis-workshop-library')));
+const pose=(page,key)=>page.evaluate(key=>{const e=window[key];e.setPlaying(false);e.seek(0);return [...e.rig.bones.keys()].map(n=>e.rig.point(n).toArray());},key);
+try{
+ const workshop=await open('/workshop.html?from=squat');await ready(workshop,'__WS__');
+ const name='自建下蹲 · QA';await workshop.getByRole('textbox',{name:'新动作名称',exact:true}).fill(name);await workshop.getByTestId('lab-handoff-create').click();
+ await workshop.locator('.ws-keyframe-select').first().click();await workshop.getByRole('textbox',{name:'关键帧名称',exact:true}).fill('手工编辑起点');
+ const lean=workshop.locator('.ws-slider').filter({hasText:/^前倾/}).getByRole('slider');const previous=Number(await lean.inputValue());await lean.press('ArrowRight');
+ await workshop.getByTestId('save-to-library').click();await workshop.getByRole('status').filter({hasText:`已保存「${name}」`}).waitFor();
+ const doc=await workshop.evaluate(()=>window.__WS__.getDoc());assert.equal(doc.name,name);assert.equal(doc.keys[0].label,'手工编辑起点');assert.equal(doc.keys[0].pose.lean,previous+.5);
+ const expected=await pose(workshop,'__WS__'),stored=await file(workshop);assert(stored.docs.some(d=>d.id===doc.id));
+ const lab=await open('/');await ready(lab,'__LAB__');const select=()=>lab.getByTestId(`motion-local:${doc.id}`);
+ await select().click();await lab.getByRole('button',{name:'暂停',exact:true}).click();const actual=await pose(lab,'__LAB__');
+ let max=0;actual.forEach((p,i)=>p.forEach((v,j)=>{max=Math.max(max,Math.abs(v-expected[i][j]));}));assert(max<1e-6,`saved playback differs from workshop FK: ${max}`);
+ // A real orbit followed by focus must keep both camera and the compiled source.
+ const canvas=lab.locator('#lab-stage canvas'),box=await canvas.boundingBox();
+ await lab.mouse.move(box.x+box.width*.55,box.y+box.height*.5);await lab.mouse.down();await lab.mouse.move(box.x+box.width*.65,box.y+box.height*.6,{steps:12});await lab.mouse.up();await lab.waitForFunction(()=>{const e=window.__LAB__,p=[...e.camera.position.toArray(),...e.camera.quaternion.toArray()],previous=window.__qaCamera;window.__qaCamera=p;return previous&&p.every((v,i)=>Math.abs(v-previous[i])<1e-10);},null,{polling:'raf',timeout:60000});
+ const camera=()=>lab.evaluate(()=>{const e=window.__LAB__;return [e.camera.position.toArray(),e.controls.target.toArray(),e.camera.quaternion.toArray(),e.view,e.time,e.playing];});
+ const beforeFocus=await camera();await lab.evaluate(()=>{window.__qaSource=window.__LAB__.source;});
+ await workshop.bringToFront();await lab.bringToFront();await lab.waitForTimeout(200);
+ const afterFocus=await camera();for(let i=0;i<3;i++)afterFocus[i].forEach((v,j)=>assert(Math.abs(v-beforeFocus[i][j])<1e-8));assert.deepEqual(afterFocus.slice(3),beforeFocus.slice(3));assert(await lab.evaluate(()=>window.__qaSource===window.__LAB__.source),'focus recompiled an unchanged source');
+ assert.equal(await lab.getByRole('button',{name:/删除已保存动作 自然站立/}).count(),0);await lab.screenshot({path:out('saved-in-lab.png')});
+ // A second editor must absorb additions before a later deletion, without writing a stale library back.
+ const other=await open(`/workshop.html?doc=${encodeURIComponent(doc.id)}`);await ready(other,'__WS__');
+ await workshop.getByRole('combobox',{name:'组合目标动作',exact:true}).selectOption('preset:idle');
+ const beforeRejected=await file(workshop);await workshop.getByTestId('save-combined-motion').click();
+ await workshop.getByRole('status').filter({hasText:/超过 10 秒上限/}).waitFor();assert.deepEqual(await file(workshop),beforeRejected);
+ await workshop.getByRole('combobox',{name:'组合目标动作',exact:true}).selectOption('preset:basic-half-squat');
+ await workshop.getByRole('spinbutton',{name:'拼接过渡时长',exact:true}).fill('0.4');await workshop.getByRole('textbox',{name:'组合动作名称',exact:true}).fill('拼接动作 · QA');
+ await workshop.getByTestId('save-combined-motion').click();await workshop.getByRole('status').filter({hasText:/已拼接并保存/}).waitFor();
+ assert(await lab.evaluate(()=>window.__qaSource===window.__LAB__.source),'adding another document recompiled the active source');
+ const appended=await workshop.evaluate(()=>window.__WS__.getDoc());assert(Math.abs(appended.duration-(doc.duration+.4+1.6))<1e-8);assert.notEqual(appended.id,doc.id);
+ assert.deepEqual((await file(workshop)).docs.find(d=>d.id===doc.id),doc);
+ await other.locator('.ws-lib-name').filter({hasText:'拼接动作 · QA'}).waitFor();
+ await workshop.getByRole('button',{name:'撤销',exact:true}).click();assert.equal(await workshop.evaluate(()=>window.__WS__.getDoc().id),doc.id);
+ await workshop.getByRole('button',{name:'重做',exact:true}).click();assert.equal(await workshop.evaluate(()=>window.__WS__.getDoc().id),appended.id);
+ await workshop.locator('.ws-lib-name').filter({hasText:name}).click();
+ await workshop.getByRole('combobox',{name:'组合方式',exact:true}).selectOption('blend');
+ await workshop.getByRole('combobox',{name:'组合目标动作',exact:true}).selectOption(`local:${appended.id}`);
+ const weight=workshop.getByTestId('combine-weight');await weight.press('Home');for(let i=0;i<25;i++)await weight.press('ArrowRight');
+ await workshop.getByRole('textbox',{name:'组合动作名称',exact:true}).fill('混合动作 · QA');await workshop.getByTestId('save-combined-motion').click();
+ await workshop.getByRole('status').filter({hasText:/已混合并保存/}).waitFor();const blended=await workshop.evaluate(()=>window.__WS__.getDoc());
+ assert.equal(blended.duration,appended.duration);assert.notEqual(blended.id,appended.id);assert(blended.keys.length<=120);
+ assert.deepEqual((await file(workshop)).docs.find(d=>d.id===doc.id),doc);assert.deepEqual((await file(workshop)).docs.find(d=>d.id===appended.id),appended);
+ await workshop.getByTestId('save-combined-motion').scrollIntoViewIfNeeded();await workshop.screenshot({path:out('composition-desktop.png')});
+ await lab.getByTestId(`motion-local:${blended.id}`).click();const blendExpected=await pose(workshop,'__WS__'),blendActual=await pose(lab,'__LAB__');
+ blendActual.forEach((p,i)=>p.forEach((v,j)=>assert(Math.abs(v-blendExpected[i][j])<1e-6)));
+ await lab.reload();await ready(lab,'__LAB__');assert(await lab.getByTestId(`motion-local:${appended.id}`).isVisible());assert(await lab.getByTestId(`motion-local:${blended.id}`).isVisible());
+ await lab.reload();await ready(lab,'__LAB__');assert(await select().isVisible());await select().click();await lab.getByTestId('motion-edit').click();await ready(lab,'__WS__');
+ assert.equal(new URL(lab.url()).searchParams.get('doc'),doc.id);assert.equal(await lab.evaluate(()=>window.__WS__.getDoc().id),doc.id);assert.equal((await file(lab)).docs.length,stored.docs.length+2);
+ await lab.goto(new URL('/',base).href);await ready(lab,'__LAB__');await select().click();
+ lab.once('dialog',d=>d.dismiss());await lab.getByRole('button',{name:`删除已保存动作 ${name}`,exact:true}).click();assert.equal(await select().count(),1);
+ lab.once('dialog',d=>d.accept());await lab.getByRole('button',{name:`删除已保存动作 ${name}`,exact:true}).click();await select().waitFor({state:'detached'});
+ assert.equal(await lab.evaluate(()=>window.__LAB__.activeId),'idle');assert(!(await file(lab)).docs.some(d=>d.id===doc.id));
+ await workshop.waitForFunction(id=>window.__WS__.getDoc().id!==id,doc.id);await other.waitForFunction(id=>window.__WS__.getDoc().id!==id,doc.id);assert((await file(other)).docs.some(d=>d.id===appended.id));assert((await file(other)).docs.some(d=>d.id===blended.id));await other.getByTestId('save-to-library').click();await other.getByRole('status').filter({hasText:/已保存「/}).waitFor();assert((await file(other)).docs.some(d=>d.id===appended.id),'stale editor dropped newly added motion');await other.close();await workshop.getByTestId('save-to-library').click();await workshop.getByRole('status').filter({hasText:/已保存「/}).waitFor();assert(!(await file(workshop)).docs.some(d=>d.id===doc.id),'another open workshop resurrected the deleted motion');
+ await workshop.close();
+ await lab.reload();await ready(lab,'__LAB__');assert.equal(await select().count(),0);
+ await lab.setViewportSize({width:390,height:844});await lab.getByTestId('sheet-library').click();
+ const remaining=(await file(lab)).docs;assert(remaining.length>0);
+ await lab.getByRole('button',{name:`删除已保存动作 ${remaining[0].name}`,exact:true}).scrollIntoViewIfNeeded();await lab.screenshot({path:out('mobile-delete.png')});
+ for(const d of remaining){lab.once('dialog',dialog=>dialog.accept());const remove=lab.getByRole('button',{name:`删除已保存动作 ${d.name}`,exact:true});await remove.click();await remove.waitFor({state:'detached'});}
+ assert.deepEqual((await file(lab)).docs,[]);const empty=await lab.evaluate(()=>localStorage.getItem('kinesis-workshop-library'));
+ await lab.reload();await ready(lab,'__LAB__');assert.equal(await lab.evaluate(()=>localStorage.getItem('kinesis-workshop-library')),empty,'read-only lab recreated a deleted motion');
+ await lab.goto(new URL('/workshop.html',base).href);await ready(lab,'__WS__');assert.notEqual(await lab.evaluate(()=>window.__WS__.getDoc().id),doc.id);
+ await lab.getByTestId('sheet-left').click();
+ await lab.getByRole('combobox',{name:'组合目标动作',exact:true}).selectOption('preset:basic-half-squat');
+ await lab.getByRole('textbox',{name:'组合动作名称',exact:true}).fill('手机拼接 · QA');await lab.getByTestId('save-combined-motion').click();
+ await lab.getByRole('status').filter({hasText:/已拼接并保存/}).waitFor();assert.equal(await lab.evaluate(()=>window.__WS__.getDoc().name),'手机拼接 · QA');
+ await lab.getByTestId('save-combined-motion').scrollIntoViewIfNeeded();await lab.screenshot({path:out('composition-mobile.png')});
+ await lab.setViewportSize({width:1440,height:1000});
+ await lab.getByTestId('mode-edit').click();
+ // Fill the real browser storage to quota; no Storage mocks or injected save implementation.
+ await lab.evaluate(()=>{for(const size of [65536,4096,256,16,1])for(let i=0;i<512;i++){try{localStorage.setItem(`qa-quota-${size}-${i}`,'x'.repeat(size));}catch{break;}}});
+ const beforeFailure=await lab.evaluate(()=>localStorage.getItem('kinesis-workshop-library'));
+ await lab.getByRole('textbox',{name:'关键帧名称',exact:true}).fill('存储已满时新增的手工编辑名称，必须明确报告保存失败而不覆盖已保存动作');
+ await lab.getByTestId('save-to-library').click();await lab.getByTestId('save-state').filter({hasText:'保存失败：'}).waitFor();
+ assert.equal(await lab.evaluate(()=>localStorage.getItem('kinesis-workshop-library')),beforeFailure);await lab.screenshot({path:out('quota-failure.png')});
+ assert.deepEqual(errors,[]);console.log('Saved-motion QA passed: manual edit → save → append/blend/limits/undo/source preservation → lab playback/FK parity → reload → edit original → cancel/delete → multi-editor add/delete sync → last-item deletion → mobile → real quota failure.');console.log(`Screenshots: ${output.dir}`);
+}catch(err){for(const [i,p]of context.pages().entries()){await p.screenshot({path:out(`failure-${i}.png`)}).catch(()=>{});console.error(`Page ${i}: ${p.url()} | status: ${await p.getByRole('status').allTextContents()} | alerts: ${await p.getByRole('alert').allTextContents()}`);}throw err;}finally{await context.close();await browser.close();}

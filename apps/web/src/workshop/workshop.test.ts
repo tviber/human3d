@@ -6,7 +6,7 @@ import {HumanRig} from '@human3d/motion-core';
 import {attachRacket,gripFrame,RACKET_HANDLE} from '@human3d/motion-core';
 import {angleAt,DEG} from '@human3d/motion-core';
 import {blankDocument,defaultDocument,ensureKey,flattenPose,frameAt,parseDoc,retimeKeys,samplePose,serializeDoc,setKeyTime,sortedKeys,TANGENT_SECANT_CAP,toV,unflattenPose,validateDocShape,type PoseParams,type WorkshopDoc,type WorkshopKey} from '@human3d/motion-core';
-import {LIBRARY_KEY,MotionLibrary,WORKSHOP_PRESETS,type StorageLike} from './library';
+import {DRAFT_PREFIX,LIBRARY_KEY,MotionLibrary,SAVED_MOTION_PREFIX,savedMotionSpec,WORKSHOP_PRESETS,type StorageLike} from './library';
 import {DocHistory,HistoryBook,RecordGate} from './history';
 import {WORKSHOP_LIMITS} from '@human3d/motion-core';
 import {MOTION_FILES} from '@human3d/motion-core';
@@ -400,11 +400,192 @@ describe('undo and redo',()=>{
  });
 });
 describe('motion library',()=>{
- const memStorage=():StorageLike&{map:Map<string,string>}=>{const map=new Map<string,string>();return {map,getItem:k=>map.get(k)??null,setItem:(k,v)=>{map.set(k,v);}}};
+ const memStorage=():StorageLike&{map:Map<string,string>}=>{const map=new Map<string,string>();return {map,get length(){return map.size;},key:i=>[...map.keys()][i]??null,removeItem:k=>{map.delete(k);},getItem:k=>map.get(k)??null,setItem:(k,v)=>{map.set(k,v);}}};
  const lib=(s?:StorageLike)=>new MotionLibrary(rig.rest,s).load();
  it('seeds with the example forehand on first run',()=>{
   const l=lib(memStorage());
   expect(l.docs.length).toBe(1);expect(l.active().id).toBe('forehand-workshop');
+ });
+ it('checkpoints before waiting for the lock, recovers a closed page into quarantine, and cleans only committed drafts',async()=>{
+  const store=memStorage();lib(store);
+  const writes:(()=>void)[]=[],lock=(_key:string,write:()=>void)=>new Promise<void>(resolve=>writes.push(()=>{write();resolve();}));
+  const a=new MotionLibrary(rig.rest,store,lock).load();
+  a.active().keys[0].label='等待锁期间的修改';const pending=a.save();
+  expect(a.saveState).toBe('saving');expect(writes).toHaveLength(1);
+  const draft=[...store.map.keys()].find(k=>k.startsWith(DRAFT_PREFIX))!;
+  expect(JSON.parse(store.map.get(draft)!).docs[0].keys[0].label).toBe('等待锁期间的修改');
+  expect(new MotionLibrary(rig.rest,store).load({readOnly:true}).quarantine).toEqual([]);
+  const recovered=new MotionLibrary(rig.rest,store,lock).load();
+  expect(recovered.quarantine).toEqual([]);expect(store.map.has(draft)).toBe(true);
+  // Commit the recovering page; the original page is treated as terminated.
+  writes[1]();await recovered.saved;
+  const index=recovered.quarantine.findIndex(q=>q.reason.includes('草稿'));
+  expect(JSON.parse(recovered.quarantineText(index)).keys[0].label).toBe('等待锁期间的修改');
+  expect(store.map.has(draft)).toBe(false);
+  const restored=lib(store);expect(restored.quarantine.some(q=>q.reason.includes('草稿'))).toBe(true);
+  const copy=parseDoc(restored.quarantineText(0));restored.add(copy);
+  expect(lib(store).active().keys[0].label).toBe('等待锁期间的修改');
+  // A still-live original page may complete later without erasing recovery.
+  writes[0]();await pending;expect(a.saveState).toBe('saved');
+  expect(lib(store).quarantine.length).toBeGreaterThan(0);
+  expect([...store.map.keys()].filter(k=>k.startsWith(DRAFT_PREFIX))).toEqual([]);
+ });
+ it('rechecks recovery under the lock after the active editor has saved',async()=>{
+  const store=memStorage();lib(store);
+  const writes:(()=>void)[]=[],lock=(_key:string,write:()=>void)=>new Promise<void>(resolve=>writes.push(()=>{write();resolve();}));
+  const a=new MotionLibrary(rig.rest,store,lock).load();a.rename(a.activeId,'尚在编辑');
+  const b=new MotionLibrary(rig.rest,store,lock).load();expect(b.quarantine).toEqual([]);
+  a.rename(a.activeId,'继续编辑后的最终版本');
+  writes[0]();writes[1]();writes[2]();await Promise.all([a.saved,b.saved]);
+  expect(b.quarantine).toEqual([]);const restored=lib(store);expect(restored.active().name).toBe('继续编辑后的最终版本');expect(restored.quarantine).toEqual([]);
+  expect([...store.map.keys()].filter(k=>k.startsWith(DRAFT_PREFIX))).toEqual([]);
+ });
+ it('skips an active owner even when its checkpoint has no queued save, then recovers after closure',async()=>{
+  const store=memStorage();lib(store);let active=true;
+  const writer={id:'writer',ready:Promise.resolve(),active:async(id:string)=>id==='writer'&&active};
+  const a=new MotionLibrary(rig.rest,store,async(_key,write)=>{await write();},writer).load();
+  a.active().name='仅有同步草稿';a.checkpoint();const key=[...store.map.keys()].find(k=>k.startsWith(DRAFT_PREFIX))!;
+  const reader={...writer,id:'reader'};
+  const b=new MotionLibrary(rig.rest,store,async(_key,write)=>{await write();},reader).load();await b.saved;
+  expect(b.quarantine).toEqual([]);expect(store.map.has(key)).toBe(true);
+  active=false;const recovered=new MotionLibrary(rig.rest,store,async(_key,write)=>{await write();},reader).load();await recovered.saved;
+  expect(recovered.quarantine[0].name).toBe('仅有同步草稿');expect(store.map.has(key)).toBe(false);
+ });
+ it('cleans an orphan snapshot already committed to the main library without duplicating it',()=>{
+  const store=memStorage();lib(store);const file=JSON.parse(store.map.get(LIBRARY_KEY)!);
+  store.map.set(DRAFT_PREFIX+'committed',JSON.stringify(file));
+  expect(lib(store).quarantine).toEqual([]);expect(store.map.has(DRAFT_PREFIX+'committed')).toBe(false);
+ });
+ it('retains the recovery source if the locked main-library write fails',()=>{
+  const store=memStorage();lib(store);const file=JSON.parse(store.map.get(LIBRARY_KEY)!);file.docs[0].name='尚未提交的恢复稿';
+  const key=DRAFT_PREFIX+'failed';store.map.set(key,JSON.stringify(file));const original=store.setItem;
+  store.setItem=(key,text)=>{if(key===LIBRARY_KEY)throw new Error('quota');original(key,text);};
+  const recovered=lib(store);expect(recovered.lastError).toBe('quota');expect(recovered.quarantine[0].name).toBe('尚未提交的恢复稿');expect(store.map.has(key)).toBe(true);
+  store.setItem=original;const restored=lib(store);expect(restored.quarantine[0].name).toBe('尚未提交的恢复稿');expect(store.map.has(key)).toBe(false);
+ });
+ it('keeps the committed baseline and cleans only the captured draft when editing continues during commit',async()=>{
+  const store=memStorage();lib(store);const commits:(()=>void)[]=[];
+  const lock=async(key:string,write:(snapshot?:StorageLike)=>void|Promise<void>)=>{
+   let value=store.getItem(key);await write({getItem:()=>value,setItem:(_key,text)=>{value=text;}});
+   await new Promise<void>(resolve=>commits.push(()=>{store.setItem(key,value!);resolve();}));
+  };
+  const a=new MotionLibrary(rig.rest,store,lock).load();a.active().name='提交中 A1';const first=a.save();await Promise.resolve();
+  a.active().name='继续编辑 A2';a.checkpoint();const newer=[...store.map.keys()].find(k=>k.startsWith(DRAFT_PREFIX))!;
+  expect(a.saveState).toBe('saving');commits[0]();await first;
+  expect(store.map.has(newer)).toBe(true);expect(a.saveState).toBe('saving');
+  const b=new MotionLibrary(rig.rest,store).load({readOnly:true});b.rename(b.activeId,'远端 B');a.sync();
+  expect(a.active().name).toBe('继续编辑 A2');expect(a.quarantine.some(q=>q.name==='远端 B')).toBe(true);
+  const second=a.save();await Promise.resolve();commits[1]();await second;
+  expect(a.saveState).toBe('saved');expect(new MotionLibrary(rig.rest,store).load({readOnly:true}).active().name).toBe('继续编辑 A2');
+  expect([...store.map.keys()].filter(k=>k.startsWith(DRAFT_PREFIX))).toEqual([]);
+ });
+ it('does not publish a new baseline or remove its draft when the storage transaction rejects',async()=>{
+  const store=memStorage();lib(store);const before=store.map.get(LIBRARY_KEY);
+  const a=new MotionLibrary(rig.rest,store,async(_key,write)=>{let value:string|null=null;await write({getItem:key=>store.getItem(key),setItem:(_key,text)=>{value=text;}});expect(value).toContain('事务失败的修改');throw new Error('transaction aborted');}).load();
+  a.active().name='事务失败的修改';await a.save();expect(a.saveState).toBe('error');expect(store.map.get(LIBRARY_KEY)).toBe(before);
+  a.sync();expect(a.active().name).toBe('事务失败的修改');expect([...store.map.keys()].some(k=>k.startsWith(DRAFT_PREFIX))).toBe(true);
+ });
+ it('hydrates an authoritative snapshot without reading a stale mirror, preserving generated quarantine on sync',()=>{
+  const store=memStorage(),a=lib(store),snapshot=store.map.get(LIBRARY_KEY)!;
+  store.map.set(LIBRARY_KEY,'{broken mirror');const damaged=lib(store);damaged.sync(new MotionLibrary(rig.rest,store).load({readOnly:true,snapshotText:snapshot}));
+  expect(damaged.quarantine.some(q=>q.raw==='{broken mirror')).toBe(true);
+  store.getItem=()=>{throw new Error('unavailable mirror');};
+  expect(new MotionLibrary(rig.rest,store).load({readOnly:true,snapshotText:snapshot}).active().id).toBe(a.activeId);
+  expect(new MotionLibrary(rig.rest,store).load({readOnly:true,snapshotText:null}).docs).toEqual([]);
+ });
+ it('replaces a draft only after the next immutable checkpoint is durable',()=>{
+  const store=memStorage();lib(store);
+  const a=new MotionLibrary(rig.rest,store,()=>new Promise<void>(()=>{})).load();
+  a.active().name='第一份草稿';a.save();const first=[...store.map.keys()].find(k=>k.startsWith(DRAFT_PREFIX))!,text=store.map.get(first);
+  a.active().name='第二份草稿';a.checkpoint();const second=[...store.map.keys()].find(k=>k.startsWith(DRAFT_PREFIX))!;
+  expect(second).not.toBe(first);expect(store.map.has(first)).toBe(false);
+  expect(JSON.parse(store.map.get(second)!).docs[0].name).toBe('第二份草稿');
+  store.setItem=()=>{throw new Error('quota');};a.active().name='未写入的第三份';a.checkpoint();
+  expect(a.saveState).toBe('error');expect(a.lastError).toBe('quota');expect(store.map.has(second)).toBe(true);expect(text).toContain('第一份草稿');
+ });
+ it('does not recover an older edit after it was reverted before the lock was granted',()=>{
+  const store=memStorage();lib(store);const a=new MotionLibrary(rig.rest,store,()=>new Promise<void>(()=>{})).load(),before=a.active().name;
+  a.rename(a.activeId,'撤销前');expect([...store.map.keys()].some(k=>k.startsWith(DRAFT_PREFIX))).toBe(true);
+  a.rename(a.activeId,before);expect([...store.map.keys()].filter(k=>k.startsWith(DRAFT_PREFIX))).toEqual([]);
+  expect(lib(store).quarantine).toEqual([]);
+ });
+ it('retains drafts on lock failure and reports all queued saves until completion',async()=>{
+  const store=memStorage();lib(store);
+  const a=new MotionLibrary(rig.rest,store,async()=>{throw new Error('no Web Locks');}).load();
+  a.active().name='不支持锁仍可恢复';await a.save();expect(a.saveState).toBe('error');
+  expect(lib(store).quarantine.some(q=>q.name==='不支持锁仍可恢复')).toBe(true);
+  const writes:(()=>void)[]=[],b=new MotionLibrary(rig.rest,store,(_key,write)=>new Promise<void>(resolve=>writes.push(()=>{write();resolve();}))).load();
+  b.rename(b.activeId,'连续编辑1');b.rename(b.activeId,'连续编辑2');
+  writes[0]();expect(b.saveState).toBe('saving');writes[1]();await b.saved;expect(b.saveState).toBe('saved');
+  expect(lib(store).active().name).toBe('连续编辑2');
+ });
+ it('preserves an unreadable draft verbatim and never claims unavailable storage was saved',()=>{
+  const store=memStorage();lib(store);store.map.set(DRAFT_PREFIX+'broken','{broken');
+  const restored=lib(store);expect(restored.quarantineText(0)).toBe('{broken');expect(store.map.has(DRAFT_PREFIX+'broken')).toBe(false);
+  expect(lib(store).quarantineText(0)).toBe('{broken');
+  const unavailable=new MotionLibrary(rig.rest,null).load();expect(unavailable.saveState).toBe('error');expect(unavailable.lastError).toContain('存储不可用');
+ });
+ it('merges stale independent edits and preserves additions without resurrecting deletions',()=>{
+  const store=memStorage(),a=lib(store),second=a.create('第二段');
+  const b=lib(store),first=a.docs[0].id;
+  a.docs.find(d=>d.id===first)!.keys[0].label='A 修改';a.save();
+  b.docs.find(d=>d.id===second.id)!.keys[0].label='B 修改';b.save();
+  let restored=new MotionLibrary(rig.rest,store).load({readOnly:true});
+  expect(restored.docs.find(d=>d.id===first)!.keys[0].label).toBe('A 修改');
+  expect(restored.docs.find(d=>d.id===second.id)!.keys[0].label).toBe('B 修改');
+  a.remove(first);b.rename(second.id,'继续编辑');
+  restored=new MotionLibrary(rig.rest,store).load({readOnly:true});
+  expect(restored.docs.some(d=>d.id===first)).toBe(false);
+  expect(restored.docs.find(d=>d.id===second.id)!.name).toBe('继续编辑');
+ });
+ it('adopts remote reorder and keeps it through later unrelated saves',()=>{
+  const store=memStorage(),a=lib(store),first=a.activeId,second=a.create('第二段').id,b=lib(store);
+  a.reorder(second,first);b.sync();expect(b.docs.map(d=>d.id)).toEqual([second,first]);
+  b.rename(first,'改名');expect(new MotionLibrary(rig.rest,store).load({readOnly:true}).docs.map(d=>d.id)).toEqual([second,first]);
+  const c=lib(store),third=a.create('第三段').id;
+  c.docs.reverse();c.sync();expect(c.docs.map(d=>d.id)).toEqual([first,second,third]);
+ });
+ it('sync keeps dirty edits and exports both sides of a same-document conflict',()=>{
+  const store=memStorage(),a=lib(store),b=lib(store),id=a.activeId;
+  a.active().keys[0].label='A 修改';b.active().keys[0].label='B 修改';
+  a.save();b.sync();
+  expect(b.active().keys[0].label).toBe('B 修改');
+  expect(JSON.parse(b.quarantineText(0)).keys[0].label).toBe('A 修改');
+  b.save();const restored=new MotionLibrary(rig.rest,store).load({readOnly:true});
+  expect(restored.docs.find(d=>d.id===id)!.keys[0].label).toBe('B 修改');
+  expect(JSON.parse(restored.quarantineText(0)).keys[0].label).toBe('A 修改');
+ });
+ it('preserves an edited document in quarantine when a concurrent page deletes it',()=>{
+  const store=memStorage(),a=lib(store),b=lib(store),id=a.activeId;
+  b.active().keys[0].label='未保存的修改';a.remove(id,false);b.save();
+  const restored=new MotionLibrary(rig.rest,store).load({readOnly:true});
+  expect(restored.docs).toEqual([]);
+  expect(JSON.parse(restored.quarantineText(0)).keys[0].label).toBe('未保存的修改');
+ });
+ it('does not overwrite newly corrupted storage on save',()=>{
+  const store=memStorage(),a=lib(store);a.active().keys[0].label='仍在内存';
+  store.map.set(LIBRARY_KEY,'{broken');a.save();
+  expect(store.map.get(LIBRARY_KEY)).toBe('{broken');expect(a.lastError).toMatch(/无法读取/);
+  expect(a.active().keys[0].label).toBe('仍在内存');
+ });
+ it('reads saved documents without writing, seeding or replacing quarantined data',()=>{
+  const store=memStorage();
+  expect(new MotionLibrary(rig.rest,store).load({readOnly:true}).docs).toEqual([]);expect(store.map.size).toBe(0);
+  const l=lib(store),doc=l.create('我的动作');doc.keys[0].pose.lean=13;l.save();const raw=store.map.get(LIBRARY_KEY);
+  const read=new MotionLibrary(rig.rest,store).load({readOnly:true});expect(read.docs.find(d=>d.id===doc.id)?.keys[0].pose.lean).toBe(13);expect(store.map.get(LIBRARY_KEY)).toBe(raw);
+  store.map.set(LIBRARY_KEY,'{broken');const quarantined=new MotionLibrary(rig.rest,store).load({readOnly:true});expect(quarantined.docs).toEqual([]);expect(quarantined.quarantine[0].raw).toBe('{broken');expect(store.map.get(LIBRARY_KEY)).toBe('{broken');
+ });
+ it('can delete the last saved motion without adding a replacement to the lab library',()=>{
+  const store=memStorage(),l=lib(store),old=l.active().id;l.remove(old,false);
+  expect(new MotionLibrary(rig.rest,store).load({readOnly:true}).docs).toEqual([]);
+  const workshop=new MotionLibrary(rig.rest,store).load();expect(workshop.docs).toHaveLength(1);expect(workshop.active().id).not.toBe(old);expect(workshop.active().keys).toHaveLength(2);
+ });
+ it('derives playback metadata and identity from the saved document without changing its keys',()=>{
+  const l=lib(memStorage()),doc=l.create('左手动作');doc.id='forehand';doc.gripSide='L';doc.keys[0].constraints.grip=true;
+  const before=serializeDoc(doc),spec=savedMotionSpec(doc);
+  expect(spec.id).toBe(SAVED_MOTION_PREFIX+'forehand');expect(spec.id).not.toBe('forehand');expect(spec.name).toBe(doc.name);expect(spec.oneShot).toBe(!doc.loop);
+  expect(spec.source).toEqual({kind:'document',document:doc});expect(spec.capabilities?.prop?.side).toBe('L');expect(spec.phases).toEqual(sortedKeys(doc).map(k=>({time:k.time,label:k.label||'关键帧'})));
+  expect(serializeDoc(doc)).toBe(before);
  });
  it('reorders documents and persists the new order',()=>{
   const store=memStorage(), l=lib(store);

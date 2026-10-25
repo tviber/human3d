@@ -12,6 +12,8 @@ import {analyzePose,solveEffectiveFrame,type Analysis} from '@human3d/motion-cor
 import type {PelvisSchedule} from '@human3d/motion-core';
 import {ankleYForLift,footGeometry,type FootGeometry,type Side} from '@human3d/motion-core';
 import {bindSceneBackground} from '../theme/scene-background';
+import {applyHeroicShape} from '../theme/shape-preset';
+import {SkinSwap,type SkinId} from '../theme/skin-swap';
 import {loadAnatomyAtlas} from '../theme/anatomy-skin';
 import {AnatomySelection} from '../theme/anatomy-selection';
 
@@ -111,6 +113,7 @@ export class WorkshopEngine{
   scene=new Scene();camera=new PerspectiveCamera(35,1,.01,120);renderer:WebGLRenderer;controls:OrbitControls;
   model?:Group;rig?:HumanRig;racket?:Group;ready=false;disposed=false;
   anatomy?:AnatomySelection;
+  private skinSwap?:SkinSwap;
   playing=true;speed=1;time=0;view:ViewId='threeQuarter';
   /** Review mode (false) hides handles and refuses every pointer pick, so a
    * camera gesture can never write the document (issue #23 PR-A). */
@@ -198,9 +201,10 @@ export class WorkshopEngine{
     try{
       const [gltf,info,atlas]=await Promise.all([new GLTFLoader().loadAsync(this.platform.assetUrl('/models/human.glb')),this.platform.fetchAsset('/models/rig.json').then(r=>{if(!r.ok)throw new Error('人体骨架加载失败');return r.json() as Promise<RigInfo>}),loadAnatomyAtlas(this.platform)]);
       if(this.disposed){atlas.dispose();gltf.scene.traverse(o=>{if(o instanceof Mesh)o.geometry.dispose()});return;}
-      this.model=gltf.scene;this.scene.add(this.model);this.rig=new HumanRig(this.model,info);
+      this.model=gltf.scene;this.scene.add(this.model);this.rig=new HumanRig(this.model,info);applyHeroicShape(this.model);
       this.anatomy=new AnatomySelection(this.host,this.renderer.domElement,this.camera,atlas,event=>this.capturing||!this.ready||!!this.drag||!!this.pick(event));
       this.model.traverse(o=>{if(o instanceof SkinnedMesh){o.castShadow=true;o.receiveShadow=true;o.frustumCulled=false;this.anatomy!.add(o);}});
+      this.skinSwap=new SkinSwap(this.model,this.platform);await this.skinSwap.set(this.skin);if(this.disposed)return;
       this.racket=attachProp(this.rig,'racket',this.getDoc().gripSide==='L'?'L':'R');this.racketSide=this.getDoc().gripSide==='L'?'L':'R';this.racket.visible=false;
       this.footGeo={L:footGeometry(this.rig.rest,'L'),R:footGeometry(this.rig.rest,'R')};
       this.makeHandles();this.makeMarkers();this.makeOnion();
@@ -514,13 +518,18 @@ export class WorkshopEngine{
     if(a.support.length>=3){this.supportLoop.geometry.dispose();this.supportLoop.geometry=new BufferGeometry().setFromPoints(a.support.map(p=>new Vector3(p.x,.002,p.z)));}
   }
   /* ---------- transport / camera ---------- */
-  seek(t:number){const d=this.getDoc().duration;this.time=Math.max(0,Math.min(d,t));this.solveCurrent();this.notify(true);}
+  seek(t:number){const d=this.getDoc().duration;this.time=Math.max(0,Math.min(d,t));this.solveCurrent();this.skinSwap?.resetHair();this.notify(true);}
   beginInteractiveEdit(){this.deferPelvisSchedule=true;}
   endInteractiveEdit(){if(!this.deferPelvisSchedule)return;this.deferPelvisSchedule=false;this.solveCurrent();}
   setPlaying(v:boolean){this.playing=v;this.notify(true);}
   setSpeed(v:number){this.speed=v;}
   /* Display flags only — NOT doc content, so deliberately no docVer bump:
    * the compiled snapshot stays valid (aux overlays rebuild on docDirty). */
+  skin:SkinId='default';
+  async setSkin(s:SkinId){
+    if(this.skinSwap){await this.skinSwap.set(s);this.skin=this.skinSwap.skin;}else this.skin=s;
+    if(this.ready&&this.view!=='free')this.setView(this.view);
+  }
   setOptions(patch:Partial<WorkshopOptions>){Object.assign(this.options,patch);this.docDirty=true;}
   /** The single funnel every doc-mutating app path already calls
    * (edit/applyDoc/selectDoc/createDoc/removeDoc/mirror/importDoc/
@@ -528,9 +537,9 @@ export class WorkshopEngine{
    * docVer for the compiled snapshot. */
   markDirty(){this.docDirty=true;this.docVer++;}
   setView(view:ViewId){
-    this.view=view;const root=this.rig?.point('root')??new Vector3(0,.94,0),target=root.clone();target.y*=.92;
+    this.view=view;const root=this.rig?.point('root')??new Vector3(0,.94,0),target=root.clone();target.y=target.y*.92+(this.skin==='ssj'?.08:0);
     if(view==='free'){const shift=target.clone().sub(this.controls.target);this.camera.position.add(shift);this.controls.target.copy(target);this.controls.update();return;}
-    const distance=Math.max(3.4,2.0/Math.max(.4,this.camera.aspect));
+    const distance=Math.max(this.skin==='ssj'?3.8:3.4,2.0/Math.max(.4,this.camera.aspect));
     const a={front:0,side:Math.PI/2,back:Math.PI,threeQuarter:-Math.PI/4,hand:0,free:0}[view];
     this.camera.position.copy(target).add(new Vector3(Math.sin(a)*distance,.18,Math.cos(a)*distance));
     this.controls.target.copy(target);this.camera.lookAt(target);this.controls.update();
@@ -539,7 +548,7 @@ export class WorkshopEngine{
   /* ---------- fixed-camera render export ---------- */
   /** Render the pose at `t` to a fixed-size PNG (STILL_WIDTH×STILL_HEIGHT)
    * through a fixed camera preset — deterministic output parameters: the
-   * same document + time + view always produce the same image, independent
+   * same document + time + view + skin always produce the same image, independent
    * of the live viewport and the user's orbit.
    *
    * Flow: pause → snapshot transport/camera/overlay visibility → seek(t) +
@@ -566,7 +575,7 @@ export class WorkshopEngine{
   private async renderStill(t:number,opts:CaptureOptions):Promise<Blob>{
     const saved=this.beginCapture(opts);
     try{
-      this.seek(t);this.solveCurrent();
+      this.seek(t);this.solveCurrent();this.skinSwap?.settleHair();
       this.setView(opts.view??CAPTURE_VIEW);
       this.renderer.render(this.scene,this.camera);
       const blob=await new Promise<Blob|null>(res=>this.renderer.domElement.toBlob(res,'image/png'));
@@ -676,7 +685,7 @@ export class WorkshopEngine{
     this.camera.position.copy(saved.cam);this.controls.target.copy(saved.target);this.controls.update();
     this.time=Math.max(0,Math.min(this.getDoc().duration,saved.time));
     this.playing=saved.playing;
-    this.solveCurrent();this.notify(true);
+    this.solveCurrent();this.skinSwap?.resetHair();this.notify(true);
   }
   private animate=()=>{
     if(this.disposed)return;this.raf=requestAnimationFrame(this.animate);
@@ -698,6 +707,7 @@ export class WorkshopEngine{
       if(a)this.updateBalance(a);
       this.lastNotify+=dt;if(this.lastNotify>.07){this.lastNotify=0;this.notify(false,a);}
     }
+    if(!this.capturing)this.skinSwap?.update(dt);
     this.controls.update();this.anatomy?.update(dt);this.renderer.render(this.scene,this.camera);
   };
   private notify(force:boolean,a?:Analysis){
@@ -706,7 +716,7 @@ export class WorkshopEngine{
     if(force||a)this.onFrame?.({time:this.time,duration:doc.duration,playing:this.playing,label,analysis:a});
   }
   dispose(){
-    this.disposed=true;this.anatomy?.dispose();this.unbindTheme?.();cancelAnimationFrame(this.raf);this.resizeObserver.disconnect();
+    this.disposed=true;this.skinSwap?.dispose();this.anatomy?.dispose();this.unbindTheme?.();cancelAnimationFrame(this.raf);this.resizeObserver.disconnect();
     const dom=this.renderer.domElement;
     dom.removeEventListener('pointerdown',this.onPointerDown);dom.removeEventListener('pointermove',this.onPointerMove);dom.removeEventListener('pointerup',this.onPointerUp);dom.removeEventListener('pointercancel',this.onPointerUp);
     // Everything in this scene was created by the workshop (handles, markers,

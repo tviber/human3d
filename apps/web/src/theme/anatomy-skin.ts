@@ -50,18 +50,20 @@ export interface AnatomySkin{mesh:SkinnedMesh;id:{value:number};amount:{value:nu
 export function applyAnatomySkin(mesh:SkinnedMesh,atlas:AnatomyAtlas):AnatomySkin{
  if(!mesh.geometry.getAttribute('uv'))throw new Error('人体模型缺少 UV 坐标');
  const skin:AnatomySkin={mesh,id:{value:0},amount:{value:0}};
- const material=new MeshStandardMaterial({color:0xd8d1c7,roughness:.76,metalness:0,map:atlas.texture});
+ const material=new MeshStandardMaterial({color:0xd8d1c7,roughness:.76,metalness:0});
  const tint=new Color(0xe99580);
  material.onBeforeCompile=shader=>{
-  shader.uniforms.anatomyId=skin.id;shader.uniforms.anatomyAmount=skin.amount;shader.uniforms.anatomyTint={value:tint};
+  shader.uniforms.anatomyMap={value:atlas.texture};shader.uniforms.anatomyId=skin.id;shader.uniforms.anatomyAmount=skin.amount;shader.uniforms.anatomyTint={value:tint};
+  shader.vertexShader=shader.vertexShader.replace('#include <common>','#include <common>\nvarying vec2 anatomyUv;').replace('#include <uv_vertex>','#include <uv_vertex>\nanatomyUv = uv;');
   shader.fragmentShader=shader.fragmentShader
-   .replace('#include <common>','#include <common>\nuniform float anatomyId;\nuniform float anatomyAmount;\nuniform vec3 anatomyTint;')
-   .replace('#include <map_fragment>',`vec4 muscle = texture2D(map, vMapUv);
+   .replace('#include <common>','#include <common>\nuniform sampler2D anatomyMap; varying vec2 anatomyUv; uniform float anatomyId;\nuniform float anatomyAmount;\nuniform vec3 anatomyTint;')
+   .replace('#include <map_fragment>',`#include <map_fragment>
+    vec4 muscle = texture2D(anatomyMap, anatomyUv);
     float regionId = floor(muscle.r * 255.0 + 0.5) + floor(muscle.g * 255.0 + 0.5) * 256.0;
     float selected = (1.0 - step(0.5, abs(regionId - anatomyId))) * step(0.5, anatomyId);
     diffuseColor.rgb = mix(diffuseColor.rgb, anatomyTint, selected * anatomyAmount * muscle.b);`);
  };
- material.customProgramCacheKey=()=>'h3d-anatomy-highlight-v2';
+ material.customProgramCacheKey=()=>'h3d-anatomy-highlight-v3';
  const old=Array.isArray(mesh.material)?mesh.material:[mesh.material];old.forEach(m=>m.dispose());mesh.material=material;
  return skin;
 }

@@ -1,4 +1,5 @@
 import type {MotionSpec} from '@human3d/motion-core';
+import {SAVED_MOTION_PREFIX} from '../workshop/library';
 
 /** Lab → workshop handoff resolution for the CURRENT motion.
  *
@@ -22,7 +23,9 @@ const WHY:Partial<Record<NonNullable<MotionSpec['source']>['kind'],string>>={
 };
 
 export const workshopEditability=(spec:MotionSpec):WorkshopEditability=>{
- const kind=spec.source?.kind;
+ const source=spec.source,kind=source?.kind;
+ if(source?.kind==='document'&&spec.id.startsWith(SAVED_MOTION_PREFIX))
+  return {editable:true,url:`/workshop.html?doc=${encodeURIComponent(source.document.id)}`,reason:''};
  if(kind==='document')
   return {editable:true,url:`/workshop.html?from=${encodeURIComponent(spec.id)}`,reason:''};
  const reason=(kind&&WHY[kind])||'此动作暂不支持在动作工作台编辑。';

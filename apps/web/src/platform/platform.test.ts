@@ -29,3 +29,18 @@ describe('webPlatform.clipboardWrite',()=>{
     await expect(webPlatform.clipboardWrite('x')).resolves.toBe(false);
   });
 });
+
+describe('webPlatform.storageLock',()=>{
+  it('refuses an unsafe write when the host has no Web Locks',async()=>{
+    let wrote=false;
+    const navigatorDescriptor=Object.getOwnPropertyDescriptor(globalThis,'navigator');
+    try{
+      Object.defineProperty(globalThis,'navigator',{configurable:true,value:{}});
+      await expect(webPlatform.storageLock('library',()=>{wrote=true;})).rejects.toThrow('不支持安全的跨页面保存');
+      expect(wrote).toBe(false);
+    }finally{
+      if(navigatorDescriptor)Object.defineProperty(globalThis,'navigator',navigatorDescriptor);
+      else delete (globalThis as {navigator?:unknown}).navigator;
+    }
+  });
+});

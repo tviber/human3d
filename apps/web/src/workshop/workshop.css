@@ -1,6 +1,10 @@
 /* Motion Workshop layout — same design language as the lab viewer. */
-.ws-shell{height:100dvh;min-height:640px;display:grid;grid-template-rows:64px minmax(0,1fr) 132px;overflow:hidden}
-.ws-header{background:var(--card);display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid var(--line);z-index:2}
+.ws-shell{height:100dvh;min-height:640px;display:grid;grid-template-rows:auto minmax(0,1fr) 132px;overflow:hidden}
+.ws-header{background:var(--card);display:flex;flex-wrap:wrap;gap:4px 10px;min-height:64px;align-items:center;justify-content:space-between;padding:6px 28px;border-bottom:1px solid var(--line);z-index:2}
+.ws-save-state{flex:0 0 100%;display:flex;align-items:center;gap:8px;min-width:0;font-size:11px;color:var(--muted)}
+.ws-save-state span{overflow-wrap:anywhere}
+.ws-save-state[data-state=error]{color:var(--red)}
+.ws-save-state button{display:inline-flex;align-items:center;gap:4px;flex-shrink:0;min-height:28px;padding:2px 6px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg-2)}
 .ws-header .brand{display:flex;align-items:center;gap:11px}
 .ws-header .brand>svg{color:var(--blue)}
 .ws-header .brand>span{font-size:23px;font-weight:700;letter-spacing:-.7px}
@@ -295,3 +299,9 @@
 .ws-handoff{background:var(--accent-soft);border-color:color-mix(in srgb,var(--blue) 32%,var(--line))}
 .ws-handoff .ws-handoff-name{font-size:13px;font-weight:600;margin-top:2px}
 .ws-handoff .ws-row{margin-top:10px}
+
+.ws-feedback{position:fixed;top:76px;left:50%;transform:translateX(-50%);z-index:60;display:flex;align-items:center;gap:12px;width:max-content;max-width:min(560px,calc(100vw - 24px));padding:8px 10px 8px 16px;border:1px solid var(--line);border-radius:12px;background:var(--card);box-shadow:var(--shadow);color:var(--fg-2);font-size:12px;line-height:1.6}
+.ws-feedback span{min-width:0;overflow-wrap:anywhere}
+.ws-feedback button{flex:0 0 36px;min-height:36px;display:grid;place-items:center;border-radius:8px;background:var(--pill)}
+.ws-feedback-error{color:var(--red);border-color:var(--red)}
+.ws-compact .ws-feedback{top:54px}

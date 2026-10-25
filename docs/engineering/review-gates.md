@@ -44,7 +44,7 @@ REWORK 后只复审 blocker 修复及受影响调用链，未变区域不重复�
 | Level 2 | 共享类型、状态流、数据格式、模块间契约 | 所有受影响模块测试 + `tsc -b`；涉及构建配置跑 `npm run build` |
 | Level 3 | 协议、骨骼运动语义、IK、动力学、持久化、关键交互路径 | **必须**验证受影响的真实实现路径（不得以 mock 代替）；补集成/E2E；资源不足可移交 CI/其他机器但必须记录未完成项 |
 
-执行细节：优先 `npm test -- <test-file>`；根与 workspace 的 npm 验证入口在目标命令启动前按一个额外 Node / ffmpeg 进程预留检查；直接运行 `node` 前执行 `sh scripts/check-process-limit.sh`，直接运行 `npx` 前执行 `sh scripts/check-process-limit.sh --npx`；Vitest 默认单线程 worker 且不并行测试文件，内部再复核进程上限；浏览器 QA 共享串行锁且 Chromium renderer 限 1；`npm run qa` 默认跳过 WebGL 录屏和两轮动作优化，`HUMAN3D_QA_HEAVY=1` 才启用；`npm run build` 已含 `tsc -b`；失败先查根因再决定重试，不无限重试，也不重复跑未受影响的全量集合。
+执行细节：优先 `npm test -- <test-file>`；根与 workspace 的 npm 验证入口在目标命令启动前按一个额外 Node / ffmpeg 进程预留检查（只计本仓库及其 worktree 运行的进程）；直接运行 `node` 前执行 `sh scripts/check-process-limit.sh`，直接运行 `npx` 前执行 `sh scripts/check-process-limit.sh --npx`；Vitest 默认单线程 worker 且不并行测试文件，内部再复核进程上限；浏览器 QA 共享串行锁且 Chromium renderer 限 1；`npm run qa` 默认跳过 WebGL 录屏和两轮动作优化，`HUMAN3D_QA_HEAVY=1` 才启用；`npm run build` 已含 `tsc -b`；失败先查根因再决定重试，不无限重试，也不重复跑未受影响的全量集合。
 
 ## 合并门禁现状与规划
 

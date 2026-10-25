@@ -76,7 +76,7 @@ HUMAN3D_WEB_PORT=5174 npm run qa:pose-validity
 
 ## 浏览器检查
 
-`scripts/browser-qa.mjs` 检查并保存 evidence/browser-results.json。默认跳过高 CPU 的 WebGL 录屏和两轮动作优化，并在结果的 `skipped` 字段记录；设置 `HUMAN3D_QA_HEAVY=1` 后运行完整重型验收。验证启动前会检查整机 Node / ffmpeg 进程数，超过 4 个即拒绝。
+`scripts/browser-qa.mjs` 检查并保存 evidence/browser-results.json。默认跳过高 CPU 的 WebGL 录屏和两轮动作优化，并在结果的 `skipped` 字段记录；设置 `HUMAN3D_QA_HEAVY=1` 后运行完整重型验收。验证启动前会检查本仓库运行的 Node / ffmpeg 进程数（不含编辑器和其他项目的进程），超过 4 个即拒绝。
 
 | 检查 | 结果 |
 |---|---|

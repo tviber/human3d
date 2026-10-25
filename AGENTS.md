@@ -5,7 +5,7 @@
 - **包边界单向**：`apps/web`、`apps/server` → `packages/motion-core`；core 是纯域（无 DOM/node，three 只作数学库）；跨包一律包名导入，不写深路径。由 `tests/architecture.test.ts` 自动强制，随 `npm test` 与 CI 运行。
 - **求解运动语义变化必须 bump `SERVICE_VERSION`**（`packages/motion-core/src/protocol.ts`；裁决见 `docs/decisions/` ADR-0002）。
 - 测试走**真实实现路径**，不用 mock/旁路替身验证协议或交互（learning [4][10]）。
-- **进程上限**：Node 与 ffmpeg 合计最多 4 个进程；npm 命令的 `pre*` 检查在启动目标命令前统计整机进程，Vitest / 浏览器 QA 还会在内部复核，超限即拒绝；直接运行 `node` 前执行 `sh scripts/check-process-limit.sh`，直接运行 `npx` 前执行 `sh scripts/check-process-limit.sh --npx`（为 npx 与其 Node 子进程预留两个名额）；浏览器 QA 必须串行、Chromium renderer 限 1，Vitest 默认单线程 worker，不得并行启动重型验证。
+- **进程上限**：本仓库（含其 git worktree）运行的 Node 与 ffmpeg 合计最多 4 个进程；只统计命令行指向 checkout 路径、或工作目录在 checkout 内的仓库命令，编辑器 TS server、其他项目与 agent 的 Node 进程不计（`sh scripts/check-process-limit.sh --list` 列出被计入的进程）；npm 命令的 `pre*` 检查在启动目标命令前统计，Vitest / 浏览器 QA 还会在内部复核，超限即拒绝；直接运行 `node` 前执行 `sh scripts/check-process-limit.sh`，直接运行 `npx` 前执行 `sh scripts/check-process-limit.sh --npx`（为 npx 与其 Node 子进程预留两个名额）；浏览器 QA 必须串行、Chromium renderer 限 1，Vitest 默认单线程 worker，不得并行启动重型验证。
 - 声明的契约必须兑现：README/OpenAPI/文档里每条行为声明都要能找到实现与测试；资源上限同时切断内存与 CPU 路径（learning [9]）。
 - 未执行的验证不得写为「通过」；交付报告必须列出已执行/未执行/移交项（见下「验证策略」）。
 - 领域关键不变量——接触区间与摆动中点、`timestamps.at(-1) === duration`、`gripSide`/`mirrorDoc` 左右镜像、artifact id 内容哈希、Web/Server 字节对等、真实 UI 写路径——在 [`docs/domain/`](docs/domain/) 快速定位；改对应代码前必查，本文件只留指针。

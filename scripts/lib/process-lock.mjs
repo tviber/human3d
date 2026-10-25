@@ -3,22 +3,25 @@ import os from 'node:os';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
+import {fileURLToPath} from 'node:url';
 
 const bootTime=Math.round(Date.now()/1000-os.uptime());
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const releaseLock=lockDir=>fs.rmSync(lockDir,{recursive:true,force:true});
+const limitScript=fileURLToPath(new URL('../check-process-limit.sh',import.meta.url));
+export const PROCESS_LIMIT=4;
 
-export function countNodeAndFfmpegProcesses(processList){
- const runtime=/^(?:node_repl|zcode-node-repl-mcp|node(?:js)?|npm|npx|pnpm|yarn|bun|tsx|vite|vitest|tsserver|ffmpeg)(?=$|[\s._-])/;
- return processList.split(/\r?\n/).filter(line=>runtime.test(line.trim().toLowerCase().replace(/^.*[\\/]/,''))).length;
+/** Node/ffmpeg processes this repository runs (all worktrees), as "pid args"
+ * lines. Ownership rules live in scripts/check-process-limit.sh only. */
+export function ownedProcesses(){
+ return execFileSync('sh',[limitScript,'--list'],{encoding:'utf8'}).split('\n').filter(Boolean);
 }
 
 function assertResourceProcessLimit(){
- let processList;
- try{processList=execFileSync('ps',['-A','-o','comm='],{encoding:'utf8'});}
- catch(error){throw new Error(`could not check the Node/ffmpeg process limit; refusing validation: ${error instanceof Error?error.message:String(error)}`);}
- const count=countNodeAndFfmpegProcesses(processList);
- if(count>4)throw new Error(`refusing validation: found ${count} Node/ffmpeg processes; the machine limit is 4. Wait for existing jobs to finish before retrying.`);
+ let owned;
+ try{owned=ownedProcesses();}
+ catch(error){throw new Error(`could not check the H3D process limit; refusing validation: ${error instanceof Error?error.message:String(error)}`);}
+ if(owned.length>PROCESS_LIMIT)throw new Error(`refusing validation: found ${owned.length} H3D Node/ffmpeg processes; the limit is ${PROCESS_LIMIT}. Wait for existing jobs to finish before retrying.\n${owned.join('\n')}`);
 }
 
 function live(pid){

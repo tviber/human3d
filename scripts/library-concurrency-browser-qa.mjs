@@ -51,7 +51,11 @@ try{
  // Pause through the same API the UI calls: a locomotion-follow camera keeps
  // translating while time advances, so playback must really be stopped before
  // the drag can converge.
- await lab.evaluate(()=>window.__LAB__.setPlaying(false));
+ await lab.evaluate(()=>{window.__LAB__.setPlaying(false);
+  // Damping inertia keeps the camera drifting for many frames; under software
+  // WebGL that outlasts any sane wait. The assertions below are about the
+  // camera not being reset, so turn inertia off for this step.
+  window.__LAB__.controls.enableDamping=false;});
  // Diagnostic: a convergence timeout must say what kept moving.
  const settle=async(wait,label)=>{try{await wait();}catch(err){const state=await lab.evaluate(()=>{const e=window.__LAB__;return {playing:e.playing,time:e.time,view:e.view,kind:e.source?.kind,previousPosition:window.__qaCamera};});throw new Error(`${label}: ${err instanceof Error?err.message:String(err)}; last sample ${JSON.stringify(state)}`);}};
  const canvas=lab.locator('#lab-stage canvas'),box=await canvas.boundingBox();await lab.mouse.move(box.x+box.width*.5,box.y+box.height*.5);await lab.mouse.down();await lab.mouse.move(box.x+box.width*.65,box.y+box.height*.6,{steps:12});await lab.mouse.up();// The view must accept the drag, then settle. Locomotion-follow moves the

@@ -48,20 +48,18 @@ try{
  // bring the lab forward before rAF-driven orbit/drag assertions.
  await lab.bringToFront();
  await lab.getByTestId(`motion-local:${first}`).click();await lab.getByRole('button',{name:'暂停',exact:true}).click();
- // Pause through the same API the UI calls: a locomotion-follow camera keeps
- // translating while time advances, so playback must really be stopped before
- // the drag can converge.
- await lab.evaluate(()=>{window.__LAB__.setPlaying(false);
-  // Damping inertia keeps the camera drifting for many frames; under software
-  // WebGL that outlasts any sane wait. The assertions below are about the
-  // camera not being reset, so turn inertia off for this step.
-  window.__LAB__.controls.enableDamping=false;});
- // Diagnostic: a convergence timeout must say what kept moving.
- const settle=async(wait,label)=>{try{await wait();}catch(err){const state=await lab.evaluate(()=>{const e=window.__LAB__;return {playing:e.playing,time:e.time,view:e.view,kind:e.source?.kind,previousPosition:window.__qaCamera};});throw new Error(`${label}: ${err instanceof Error?err.message:String(err)}; last sample ${JSON.stringify(state)}`);}};
- const canvas=lab.locator('#lab-stage canvas'),box=await canvas.boundingBox();await lab.mouse.move(box.x+box.width*.5,box.y+box.height*.5);await lab.mouse.down();await lab.mouse.move(box.x+box.width*.65,box.y+box.height*.6,{steps:12});await lab.mouse.up();// The view must accept the drag, then settle. Locomotion-follow moves the
- // camera every frame, so "identical to the previous frame" never holds:
- // wait for a change, then for two close samples (damping has converged).
- await settle(()=>lab.waitForFunction(()=>{const e=window.__LAB__,p=[...e.camera.position.toArray(),...e.camera.quaternion.toArray()],previous=window.__qaCamera;window.__qaCamera=p;return previous&&p.some((v,i)=>Math.abs(v-previous[i])>1e-4);},null,{polling:50,timeout:30000}),'camera did not respond to the drag');
+ // The assertions here are "the drag is accepted" and "the camera is not reset
+ // by later actions". Pause playback and drop orbit inertia so both are
+ // observable in one or two frames: with damping, a software-rendered CI frame
+ // decays too slowly to look settled, and a locomotion-follow camera keeps
+ // translating while time runs.
+ const sampleCamera=()=>lab.evaluate(()=>{const e=window.__LAB__;return [...e.camera.position.toArray(),...e.camera.quaternion.toArray()];});
+ const settle=async(wait,label)=>{try{await wait();}catch(err){const state=await lab.evaluate(()=>{const e=window.__LAB__;return {playing:e.playing,time:e.time,view:e.view,kind:e.source?.kind,camera:[...e.camera.position.toArray(),...e.camera.quaternion.toArray()]};});throw new Error(`${label}: ${err instanceof Error?err.message:String(err)}; state ${JSON.stringify(state)}`);}};
+ await lab.evaluate(()=>{window.__LAB__.setPlaying(false);window.__LAB__.controls.enableDamping=false;});
+ const dragBaseline=await sampleCamera();
+ const canvas=lab.locator('#lab-stage canvas'),box=await canvas.boundingBox();await lab.mouse.move(box.x+box.width*.5,box.y+box.height*.5);await lab.mouse.down();await lab.mouse.move(box.x+box.width*.65,box.y+box.height*.6,{steps:12});await lab.mouse.up();
+ await settle(()=>lab.waitForFunction(baseline=>{const e=window.__LAB__,p=[...e.camera.position.toArray(),...e.camera.quaternion.toArray()];return p.some((v,i)=>Math.abs(v-baseline[i])>1e-4);},dragBaseline,{polling:50,timeout:30000}),'camera did not respond to the drag');
+ await lab.evaluate(()=>{window.__qaCamera=[...window.__LAB__.camera.position.toArray(),...window.__LAB__.camera.quaternion.toArray()];});
  await settle(()=>lab.waitForFunction(()=>{const e=window.__LAB__,p=[...e.camera.position.toArray(),...e.camera.quaternion.toArray()],previous=window.__qaCamera;window.__qaCamera=p;return previous&&p.every((v,i)=>Math.abs(v-previous[i])<1e-6);},null,{polling:50,timeout:30000}),'camera did not settle after the drag');
  const camera=()=>lab.evaluate(()=>{const e=window.__LAB__;return [e.camera.position.toArray(),e.controls.target.toArray(),e.camera.quaternion.toArray(),e.view,e.time,e.playing];});
  await a.bringToFront();

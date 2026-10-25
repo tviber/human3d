@@ -522,7 +522,10 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
     const copy=structuredClone(pose);let suffix=2;while(poseIds.has(copy.id))copy.id=`${pose.id}-copy-${suffix++}`;
     poseIds.add(copy.id);poses.push(copy);
    }
-   await applyLibrary(next,poses);
+   // Clearing the point is part of the same commit: an undone restore must not
+   // leave an undo offer behind. An empty restore point already means "none"
+   // for every reader, so this writes ''. 
+   await applyLibrary(next,poses,{build:()=>''});
    setRestorePoint(null);bump(v=>v+1);
    if(L.lastError){setError(`撤销已在当前页面生效，但保存失败：${L.lastError}。请立即导出 JSON 备份。`);return;}
    setError('');setHint(`已撤销替换：恢复 ${next.docs.length} 个动作、${poses.length} 个自建姿态；替换后的动作已移入隔离区。`);

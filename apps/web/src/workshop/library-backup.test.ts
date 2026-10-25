@@ -197,6 +197,19 @@ describe('restore point commits with the replace',()=>{
   const l=new MotionLibrary(rig.rest,store,lock).load();await l.saved;
   await expect(l.restore({schemaVersion:2,docs:l.docs,quarantine:[],activeId:l.activeId},{key:'kinesis-workshop-poses',text:'[]',previous:'[]'},undefined,{concurrent:'capture'})).rejects.toThrow('恢复点');
  });
+ // Undo clears the point inside its own commit; an empty point must read as
+ // "no undo offer", never as a corrupt one.
+ it('clears the restore point in the same commit as the undo',async()=>{
+  const store=memStorage(),canonical=new Map<string,string>(),{lock}=lockOver(store,canonical);
+  const l=new MotionLibrary(rig.rest,store,lock).load();await l.saved;
+  const blank=lib(memStorage()).active();
+  await l.restore({schemaVersion:2,docs:[blank],quarantine:[],activeId:blank.id},{key:'kinesis-workshop-poses',text:'[]',previous:'[]'},{key:RESTORE_POINT_KEY,build:()=>'point'},{concurrent:'capture'});
+  expect(canonical.get(RESTORE_POINT_KEY)).toBe('point');
+  const result=await l.restore({schemaVersion:2,docs:l.docs,quarantine:[],activeId:l.activeId},{key:'kinesis-workshop-poses',text:'[]',previous:'[]'},{key:RESTORE_POINT_KEY,build:()=>''});
+  expect(canonical.get(RESTORE_POINT_KEY)).toBe('');
+  expect(result.restorePointText).toBe('');
+  expect(parseBackup('').ok).toBe(false);
+ });
 });
 
 describe('restore preserves recovery material and identities',()=>{

@@ -1,4 +1,5 @@
 import {chromium} from 'playwright';
+import {launchQaBrowser} from './lib/qa-browser.mjs';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {resolveOutputDir,assertTrackedWriteAllowed,atomicWriteFile,ensureOutputDir} from './lib/qa-output.mjs';
@@ -46,7 +47,7 @@ const outputFile=name=>assertTrackedWriteAllowed(path.join(output.dir,name),{roo
 const webBase=new URL(process.env.QA_WEB_URL??`http://127.0.0.1:${process.env.HUMAN3D_WEB_PORT??5173}/`);
 const identity=await verifyWebIdentity(repoRoot,webBase);
 assert(identity.ok,`dev server does not serve this checkout: ${identity.detail}`);
-const browser=await chromium.launch({headless:true,...(process.env.QA_BROWSER_CHANNEL?{channel:process.env.QA_BROWSER_CHANNEL}:{})});
+const browser=await launchQaBrowser(chromium,{...(process.env.QA_BROWSER_CHANNEL?{channel:process.env.QA_BROWSER_CHANNEL}:{})});
 try{
  const page=await browser.newPage({viewport:{width:1536,height:1024},deviceScaleFactor:1});
  const errors=[],warnings=[];

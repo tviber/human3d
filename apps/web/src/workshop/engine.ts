@@ -118,7 +118,7 @@ export class WorkshopEngine{
   /** Review mode (false) hides handles and refuses every pointer pick, so a
    * camera gesture can never write the document (issue #23 PR-A). */
   editable=true;
-  options:WorkshopOptions={handles:true,trajectories:true,balance:true,onion:false,onionCount:2,onionMode:'keys',onionStep:.1};
+  options:WorkshopOptions={handles:true,trajectories:false,balance:false,onion:false,onionCount:2,onionMode:'keys',onionStep:.1};
   private clock=new Clock();private raf=0;private lastNotify=0;private resizeObserver:ResizeObserver;private unbindTheme?:()=>void;
   private keyLight?:DirectionalLight;
   private handleGroup=new Group();private handles:Handle[]=[];private contactMarkers:Mesh[]=[];

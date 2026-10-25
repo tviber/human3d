@@ -5,7 +5,7 @@ import {HumanRig,normalizeDoc} from '@human3d/motion-core';
 import type {WorkshopDoc} from '@human3d/motion-core';
 import {LIBRARY_KEY,MotionLibrary,type StorageLike} from './library';
 import {PoseLibrary} from './pose-library';
-import {BACKUP_KIND,backupText,mergeBackup,parseBackup,replaceLibrary} from './library-backup';
+import {BACKUP_KIND,MAX_BACKUP_BYTES,backupText,mergeBackup,parseBackup,replaceLibrary} from './library-backup';
 
 let rig:HumanRig;
 beforeAll(async()=>{
@@ -24,7 +24,9 @@ describe('backup file',()=>{
   l.create('第一个');l.duplicate(l.activeId);
   l.quarantine.push({id:'q1',name:'坏档',reason:'测试隔离',raw:{name:'坏档'}});
   const poseLib=new PoseLibrary(memStorage()).load();poseLib.add('压膝',l.active().keys[0].pose);
+  const before=JSON.stringify([l.docs,l.quarantine,poseLib.presets]);
   const text=backupText(l.docs,l.quarantine,l.activeId,poseLib.presets);
+  expect(JSON.stringify([l.docs,l.quarantine,poseLib.presets])).toBe(before);
   const parsed=parseBackup(text);
   expect(parsed.ok).toBe(true);
   if(!parsed.ok)return;
@@ -41,18 +43,20 @@ describe('backup file',()=>{
  });
  it('rejects non-JSON, wrong kind, future versions and a corrupt library section with readable errors',()=>{
   expect(parseBackup('not json{').ok).toBe(false);
+  const oversized=parseBackup('not json',MAX_BACKUP_BYTES+1);
+  expect(oversized.ok).toBe(false);if(oversized.ok)return;expect(oversized.error).toContain('64 MB');
   const wrong=parseBackup(JSON.stringify({kind:'something-else',schemaVersion:1}));
   expect(wrong.ok).toBe(false);if(wrong.ok)return;expect(wrong.error).toContain('不是 H3D 动作备份');
   const future=parseBackup(JSON.stringify({kind:BACKUP_KIND,schemaVersion:99}));
   expect(future.ok).toBe(false);if(future.ok)return;expect(future.error).toContain('更新版本');
-  const corrupt=parseBackup(JSON.stringify({kind:BACKUP_KIND,schemaVersion:1,exportedAt:'x',library:{schemaVersion:2,activeId:'',docs:'nope',quarantine:[]},poses:[]}));
+  const corrupt=parseBackup(JSON.stringify({kind:BACKUP_KIND,schemaVersion:1,exportedAt:'2026-10-25T00:00:00Z',library:{schemaVersion:2,activeId:'',docs:'nope',quarantine:[]},poses:[]}));
   expect(corrupt.ok).toBe(false);if(corrupt.ok)return;expect(corrupt.error).toContain('docs');
  });
  it('isolates unreadable docs as quarantine entries instead of dropping or half-importing',()=>{
   const store=memStorage(),l=lib(store);
   const good=parseBackup(backupText([l.active()],[],l.activeId,[]));
   expect(good.ok).toBe(true);if(!good.ok)return;
-  const mixed=parseBackup(JSON.stringify({kind:BACKUP_KIND,schemaVersion:1,exportedAt:'x',
+  const mixed=parseBackup(JSON.stringify({kind:BACKUP_KIND,schemaVersion:1,exportedAt:'2026-10-25T00:00:00Z',
    library:{schemaVersion:2,activeId:'',docs:[good.docs[0],{id:'bad',name:'坏档',keys:'garbage'}],quarantine:[]},poses:[]}));
   expect(mixed.ok).toBe(true);if(!mixed.ok)return;
   expect(mixed.docs).toHaveLength(1);
@@ -126,5 +130,39 @@ describe('MotionLibrary.add on import clash',()=>{
   expect(reloaded.docs.map(d=>d.id)).toContain(added.id);
   expect(reloaded.docs.find(d=>d.id===added.id)!.keys.map(k=>k.id)).toEqual(added.keys.map(k=>k.id));
   expect(store.getItem(LIBRARY_KEY)).toContain(added.id);
+ });
+});
+
+
+describe('restore preserves recovery material and identities',()=>{
+ it('merge keeps both quarantine and invalid documents without changing the parsed preview',()=>{
+  const l=lib(memStorage()),file=JSON.parse(backupText([l.active()],[{id:'q',name:'raw',reason:'r',raw:'{broken'}],l.activeId,[]));
+  file.library.docs.push({id:'bad',name:'坏动作'});
+  const parsed=parseBackup(JSON.stringify(file));expect(parsed.ok).toBe(true);if(!parsed.ok)return;
+  const before=JSON.stringify(parsed);
+  mergeBackup(l,[],parsed);
+  expect(l.quarantine).toHaveLength(2);
+  expect(l.quarantine.find(q=>q.id==='q')?.raw).toBe('{broken');
+  expect(l.quarantine.find(q=>q.id==='bad')?.raw).toEqual({id:'bad',name:'坏动作'});
+  expect(JSON.stringify(parsed)).toBe(before);
+ });
+ it('rejects corrupt poses or quarantine instead of dropping entries during replace',()=>{
+  const l=lib(memStorage());
+  for(const patch of [{poses:[{id:'p',name:'bad',pose:{}}]},{quarantine:null},{quarantine:[{id:'bad'}]}]){
+   const file=JSON.parse(backupText(l.docs,[],l.activeId,[]));
+   if('poses' in patch)file.poses=patch.poses;else file.library.quarantine=patch.quarantine;
+   expect(parseBackup(JSON.stringify(file)).ok).toBe(false);
+  }
+ });
+ it('replace rekeys duplicate ids inside the backup and leaves the preview reusable',()=>{
+  const l=lib(memStorage()),doc=l.active();
+  const parsed=parseBackup(backupText([doc,doc],[],doc.id,[poseOf('姿态'),poseOf('姿态')]));
+  expect(parsed.ok).toBe(true);if(!parsed.ok)return;
+  const before=JSON.stringify(parsed),poses:typeof parsed.poses=[];
+  replaceLibrary(l,poses,parsed);
+  expect(new Set(l.docs.map(d=>d.id)).size).toBe(2);
+  expect(new Set(poses.map(p=>p.id)).size).toBe(2);
+  expect(JSON.stringify(parsed)).toBe(before);
+  const store=memStorage(),copy=lib(store);copy.docs=l.docs;copy.save();expect(lib(store).quarantine).toHaveLength(0);
  });
 });

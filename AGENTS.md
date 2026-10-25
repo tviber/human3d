@@ -5,6 +5,7 @@
 - **包边界单向**：`apps/web`、`apps/server` → `packages/motion-core`；core 是纯域（无 DOM/node，three 只作数学库）；跨包一律包名导入，不写深路径。由 `tests/architecture.test.ts` 自动强制，随 `npm test` 与 CI 运行。
 - **求解运动语义变化必须 bump `SERVICE_VERSION`**（`packages/motion-core/src/protocol.ts`；裁决见 `docs/decisions/` ADR-0002）。
 - 测试走**真实实现路径**，不用 mock/旁路替身验证协议或交互（learning [4][10]）。
+- **进程上限**：Node 与 ffmpeg 合计最多 4 个进程；npm 命令的 `pre*` 检查在启动目标命令前统计整机进程，Vitest / 浏览器 QA 还会在内部复核，超限即拒绝；直接运行 `node` 前执行 `sh scripts/check-process-limit.sh`，直接运行 `npx` 前执行 `sh scripts/check-process-limit.sh --npx`（为 npx 与其 Node 子进程预留两个名额）；浏览器 QA 必须串行、Chromium renderer 限 1，Vitest 默认单线程 worker，不得并行启动重型验证。
 - 声明的契约必须兑现：README/OpenAPI/文档里每条行为声明都要能找到实现与测试；资源上限同时切断内存与 CPU 路径（learning [9]）。
 - 未执行的验证不得写为「通过」；交付报告必须列出已执行/未执行/移交项（见下「验证策略」）。
 - 领域关键不变量——接触区间与摆动中点、`timestamps.at(-1) === duration`、`gripSide`/`mirrorDoc` 左右镜像、artifact id 内容哈希、Web/Server 字节对等、真实 UI 写路径——在 [`docs/domain/`](docs/domain/) 快速定位；改对应代码前必查，本文件只留指针。
@@ -19,7 +20,7 @@
 | `spec/` | 发布契约：JSON Schema、OpenAPI、golden 样例 | 改动 = 协议变更；golden 保持明文 | [AGENTS.md](spec/AGENTS.md) |
 
 - 路径不变：`assets/motions/*.json` 仍是工具链与文档共用的信封注册表（motion-core 相对路径静态导入）；`public/`、`dist/` 在仓库根。
-- 命令入口：`npm run dev|build|preview|test|spec:check|docs:check|service|qa` 都在仓库根执行（`docs:check` 为本切片新增的文档链接检查），`dev` 委派给 `@human3d/web`。
+- 命令入口：`npm run dev|build|preview|test|spec:check|docs:check|service|qa` 都在仓库根执行（`docs:check` 为本切片新增的文档链接检查）；`dev`/`preview` 直接使用 `apps/web/vite.config.ts`，避免嵌套 npm。
 - 完整设计记录（迁移裁决、被否备选、维护规则）：[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 
 ## 任务与审查入口
@@ -34,21 +35,21 @@
 
 ## 项目验证命令
 
-- `npx tsc -b` — 类型检查（CI 门禁）
+- `sh scripts/check-process-limit.sh --npx && npx tsc -b` — 类型检查（CI 门禁）
 - `npm test` — vitest 全量（CI 门禁；含 `tests/architecture.test.ts` 包边界检查）；定向：`npm test -- <test-file>`
 - `npm run spec:check` — 契约测试：Ajv 严格编译、OpenAPI 与服务一致、golden 样例（CI 门禁）
 - `npm run docs:check` — Markdown 相对链接存在性检查（CI 门禁）
 - `npm run build` — 生产构建（CI 门禁，已含 `tsc -b`）
-- `npm run qa` / `npm run qa:dynamics` — 浏览器 E2E（需 dev server；`QA_BROWSER_CHANNEL=chrome` 走系统 Chrome；**未进 CI**，状态单独记录）
+- `npm run qa` / `npm run qa:dynamics` — 浏览器 E2E（需 dev server；`QA_BROWSER_CHANNEL=chrome` 走系统 Chrome；**未进 CI**，状态单独记录）；`npm run qa` 默认跳过 WebGL 录屏和两轮动作优化，需 `HUMAN3D_QA_HEAVY=1` 显式启用
 - `npm run protocol:example` — 重生成 `spec/examples/idle.pose.json`
 - `npm run package-to-glb -- <in.pose.json> [out.glb]` — 姿态包转 GLB（与浏览器「导出 GLB」共用 `glb-export.ts`）
 - `npm run service` — 本地 Motion Protocol v1 服务（127.0.0.1:8788）
 - `npm run dynamics:validate` / `dynamics:test` — 动力学资产与记录校验（需 Python 3.13 + `scripts/requirements-dynamics.txt`；CI 门禁）
-- `npx tsx scripts/measure-motions.mts` — 内置动作语义峰值测量，阈值校准用（见 `docs/validation.md`）
-- `npx tsx scripts/measure-quality-probe.mts [fps=240] [motion|all]` — 高帧率质量探针；度量共享 `quality-probe.ts`，基线在 `evidence/quality-probe-*.json`
-- `npx tsx scripts/generate-motion.mts [forehand|squat|forehand-detuned|squat-detuned|all]` — 确定性约束轨迹优化器；实现在 `generate.ts`，输出 `evidence/generate-*.json`
-- `node scripts/workshop-capture.mjs <doc.json> [--times …] [--views front,side,back,threeQuarter]` — 经工作台真实 UI 导入 + `captureStill` 固定相机路径把任意动作文档渲染成 PNG，并逐帧记录求解后的肘角、大臂仰角/方位角、腕目标残差与拍头位置，供视觉判定（`scripts/workshop-capture.mjs`）
-- `npm run qa:pose-validity` / `node scripts/pose-visual-qa.mjs [动作名…]` — 姿态有效性浏览器验收 / 多方位纯渲染截图（需 dev server；未进 CI）
+- `sh scripts/check-process-limit.sh --npx && npx tsx scripts/measure-motions.mts` — 内置动作语义峰值测量，阈值校准用（见 `docs/validation.md`）
+- `sh scripts/check-process-limit.sh --npx && npx tsx scripts/measure-quality-probe.mts [fps=240] [motion|all]` — 高帧率质量探针；度量共享 `quality-probe.ts`，基线在 `evidence/quality-probe-*.json`
+- `sh scripts/check-process-limit.sh --npx && npx tsx scripts/generate-motion.mts [forehand|squat|forehand-detuned|squat-detuned|all]` — 确定性约束轨迹优化器；实现在 `generate.ts`，输出 `evidence/generate-*.json`
+- `sh scripts/check-process-limit.sh && node scripts/workshop-capture.mjs <doc.json> [--times …] [--views front,side,back,threeQuarter]` — 经工作台真实 UI 导入 + `captureStill` 固定相机路径把任意动作文档渲染成 PNG，并逐帧记录求解后的肘角、大臂仰角/方位角、腕目标残差与拍头位置，供视觉判定（`scripts/workshop-capture.mjs`）
+- `npm run qa:pose-validity` / `sh scripts/check-process-limit.sh && node scripts/pose-visual-qa.mjs [动作名…]` — 姿态有效性浏览器验收 / 多方位纯渲染截图（需 dev server；未进 CI）
 - `npm run bench` — workshop 管线性能基线（`--quick` 冒烟 / `--compare` 对比；基线 `evidence/bench-workshop.json`，仅同机可比，GC 趋势需 `NODE_OPTIONS=--expose-gc`）
 - `npm run worktree:check -- --source-root <源 checkout> [--worktree-root <worktree>]` — worktree 隔离检查：workspace link 解析、端口冲突、路径边界（不进 CI，任务并行前自跑）
 - `npm run check:affected -- --base <sha> [--head <sha>] [--run]` — affected-check 选择器（PR-11B）：plan-only 出选择回执（轻量快照，`single-collected-boundary-git-visible`），`--run` 顺序执行选中检查并出完整一致性回执；类别映射以 `docs/engineering/test-matrix.md` 为唯一权威（与 `CATEGORY_CHECKS` 有测试钉死）

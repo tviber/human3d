@@ -11,7 +11,8 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "serve": "tsx src/serve.ts"
+    "preserve": "sh ../../scripts/check-process-limit.sh",
+    "serve": "node --import tsx src/serve.ts"
   },
   "dependencies": {
     "@human3d/motion-core": "*",

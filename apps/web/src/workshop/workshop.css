@@ -326,3 +326,15 @@
 .ws-popscrim{position:fixed;inset:0;z-index:21;background:transparent;border:0}
 .ws-context-actions{flex-wrap:wrap;gap:6px;margin-top:8px}
 .ws-restore h4{margin:0 0 4px;font-size:12px}
+
+/* Panels are requested from the stage; keep their triggers available on desktop. */
+.ws-quickbar [data-testid^=sheet-]{display:inline-flex}
+.ws-mode-review .ws-actions{display:none}
+.ws-card h2{font-size:15px}
+.ws-field,.ws-check,.ws-note,.ws-save-state{font-size:13px}
+.ws-field input,.ws-field select,.ws-newname{font-size:14px;min-height:36px}
+.ws-row button,.ws-mini,.ws-adjustment-tabs button,.ws-cameras button{font-size:13px;min-height:36px}
+.ws-lib-name>span{font-size:14px}
+.ws-lib-name small,.ws-card h2 small,.ws-check small{font-size:12px}
+.ws-lib-row>button:last-child,.ws-lib-row>button:nth-last-child(2){width:36px;height:36px}
+.ws-compact .ws-hint{display:none}

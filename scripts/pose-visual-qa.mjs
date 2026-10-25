@@ -1,4 +1,5 @@
 import {chromium} from 'playwright';
+import {launchQaBrowser} from './lib/qa-browser.mjs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import {resolveOutputDir,assertTrackedWriteAllowed,atomicWriteFile,ensureOutputDir} from './lib/qa-output.mjs';
@@ -30,7 +31,7 @@ if(process.env.QA_WEB_URL===undefined&&!webIdentity.ok)
 const AZIMUTHS=quick?[0,90,180,270]:[0,30,60,90,120,150,180,210,240,270,300,330];
 const ELEVATIONS=quick?[12]:[12,50];
 
-const browser=await chromium.launch({headless:true,...(process.env.QA_BROWSER_CHANNEL?{channel:process.env.QA_BROWSER_CHANNEL}:{})});
+const browser=await launchQaBrowser(chromium,{...(process.env.QA_BROWSER_CHANNEL?{channel:process.env.QA_BROWSER_CHANNEL}:{})});
 try{
  const page=await browser.newPage({viewport:{width:1600,height:1200},deviceScaleFactor:1});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));page.on('console',message=>{if(message.type()==='error')errors.push(message.text());});

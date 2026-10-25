@@ -1,4 +1,5 @@
 import {chromium} from 'playwright';
+import {launchQaBrowser} from './lib/qa-browser.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
@@ -32,7 +33,7 @@ for(const env of [throwEnv,punchEnv])
    assert.ok(fs.existsSync(`public${url}`),`${env.id}: dynamics.records.${profile} target missing: ${url}`);
 const throwTime=(phase)=>throwSpec.simulation.leadSeconds+throwSpec.reference.keyframes.find(frame=>frame.phase===phase).timeSeconds/throwSpec.simulation.referenceSpeedScale;
 
-const browser=await chromium.launch({headless:true,...(process.env.QA_BROWSER_CHANNEL?{channel:process.env.QA_BROWSER_CHANNEL}:{})});
+const browser=await launchQaBrowser(chromium,{...(process.env.QA_BROWSER_CHANNEL?{channel:process.env.QA_BROWSER_CHANNEL}:{})});
 try{
  const context=await browser.newContext({viewport:{width:1536,height:1024},deviceScaleFactor:1,acceptDownloads:true});
  const page=await context.newPage();

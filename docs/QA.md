@@ -30,7 +30,7 @@
 npm test -- apps/web/src/lab/pose-validity.test.ts
 npm run dev
 npm run qa:pose-validity
-node scripts/pose-visual-qa.mjs --quick 正手挥拍 "Novak Djokovic"   # 按信封阶段标记做多方位纯渲染截图
+sh scripts/check-process-limit.sh && node scripts/pose-visual-qa.mjs --quick 正手挥拍 "Novak Djokovic"   # 按信封阶段标记做多方位纯渲染截图
 ```
 
 浏览器验收驱动真实 Lab 页面，生成三个夹具各自的 front/side/back WebGL 截图以及 `report.json`。若需要独立端口：
@@ -76,7 +76,7 @@ HUMAN3D_WEB_PORT=5174 npm run qa:pose-validity
 
 ## 浏览器检查
 
-`scripts/browser-qa.mjs` 检查并保存 evidence/browser-results.json。
+`scripts/browser-qa.mjs` 检查并保存 evidence/browser-results.json。默认跳过高 CPU 的 WebGL 录屏和两轮动作优化，并在结果的 `skipped` 字段记录；设置 `HUMAN3D_QA_HEAVY=1` 后运行完整重型验收。验证启动前会检查整机 Node / ffmpeg 进程数，超过 4 个即拒绝。
 
 | 检查 | 结果 |
 |---|---|
@@ -117,7 +117,7 @@ HUMAN3D_WEB_PORT=5174 npm run qa:pose-validity
 
 ### WP-C 追加的检查与证据（求解语义变更：切线限界 + 手部 SO(3) 三次）
 
-- **质量探针**：`packages/motion-core/src/quality-probe.ts` 是共享度量实现（vitest 与 CLI 同源），`npx tsx scripts/measure-quality-probe.mts [fps=240] [motion|all]` 走真实 `frameAt → solveEffectiveFrame → analyzePose` 路径以 240fps 采样；`evidence/quality-probe-*.json` 是 WP-C 后求解器的提交基线。`quality.test.ts` 既有结构断言也有硬质量门（kick 削减、atKey 步长、accelTop 等，实测值写进注释）。
+- **质量探针**：`packages/motion-core/src/quality-probe.ts` 是共享度量实现（vitest 与 CLI 同源），`sh scripts/check-process-limit.sh --npx && npx tsx scripts/measure-quality-probe.mts [fps=240] [motion|all]` 走真实 `frameAt → solveEffectiveFrame → analyzePose` 路径以 240fps 采样；`evidence/quality-probe-*.json` 是 WP-C 后求解器的提交基线。`quality.test.ts` 既有结构断言也有硬质量门（kick 削减、atKey 步长、accelTop 等，实测值写进注释）。
 - **forehand-study 验收夹具**：`spec/examples/forehand-study.request.json` 是 2.0 s、5 键的正手文档，**全部由工作台真实 UI 写路径制作**（制作链 `drive.mjs`/`ops.json` 与逐轮快照已随 #21/#30 消融移出仓库，归档于 tag `archive/forehand-17` 对应的仓外备份）；账本在 `spec/examples/forehand-study.md`。`contract.test.ts` 钉结构与 200 契约，`quality.test.ts` 对其实测值加 ×1.25 上限 / ÷1.25 下限硬门（腕弯曲 0 截幅、IK 残差 ~0、触球键拍头速度 >3 m/s、tip kicks ≤170 回归门等）。
 - 求解语义变更后全量浏览器复验：本记录对应一次 `QA_BROWSER_CHANNEL=chrome npm run qa` 全绿（errors/warnings 为空）与 `node scripts/dynamics-browser-qa.mjs` 29 项全过；`evidence/browser-results.json`、`dynamics-results.json` 与相关截图/录屏随运行刷新。
 
@@ -180,7 +180,7 @@ HUMAN3D_WEB_PORT=5174 npm run qa:pose-validity
 - debug.png / skeleton.png：人体表面叠加或关闭时的绑定骨架 / 关节 / 坐标轴 / IK 端点。
 - laptop.png / mobile.png / mobile-settings.png：不同视口。
 - production.png / production-results.json：生产静态构建与外部资源阻断检查。
-- forehand.webm / forehand.mp4：30 fps 实时挥拍录屏，H.264 转码已完整解码验证。
+- forehand.webm / forehand.mp4：重型验收（`HUMAN3D_QA_HEAVY=1`）生成的 30 fps 实时挥拍录屏，H.264 转码已完整解码验证。
 - video-1.3.png / video-2.55.png / video-3.35.png / video-4.6.png：录屏关键帧复查。
 - browser-results.json：浏览器检查与 480 个基础动作采样的结构化原始结果。
 - quality-probe-{idle,reach,squat,ready,forehand,default,summary}.json：240fps 质量探针基线（WP-C 后求解器）。

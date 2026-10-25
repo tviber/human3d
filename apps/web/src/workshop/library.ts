@@ -205,6 +205,19 @@ export class MotionLibrary{
     return this.saved;
   }
   /** Export one quarantined document as JSON text, so it can be repaired by hand or re-imported. */
+  async restore(file:LibraryFile,related:{key:string;text:string;previous:string}){
+    await this.saved;
+    if(this.saveState!=='saved')throw new Error(this.lastError||'请等待当前动作保存后再恢复');
+    if(!this.store||!this.lock)throw new Error('浏览器不支持安全恢复，请保留备份文件');
+    const text=JSON.stringify(file);
+    await this.lock(LIBRARY_KEY,snapshot=>{
+      if(snapshot!.getItem(LIBRARY_KEY)!==this.rawText||JSON.stringify(JSON.parse(snapshot!.getItem(related.key)??'[]'))!==related.previous)throw new Error('其他页面已更新动作或姿态，请刷新后重新恢复');
+      snapshot!.setItem(LIBRARY_KEY,text);snapshot!.setItem(related.key,related.text);
+    },[related.key]);
+    for(const doc of this.docs)if(file.docs.find(d=>d.id===doc.id)!==doc)this.onRemoved?.(doc.id);
+    this.docs=file.docs;this.quarantine=file.quarantine;this.activeId=file.activeId;
+    this.rawText=text;this.remember();this.lastError='';this.onSaveState?.(false);
+  }
   quarantineText(index:number){const q=this.quarantine[index];return q?typeof q.raw==='string'?q.raw:JSON.stringify(q.raw,null,2):'';}
   /** Remove a quarantined entry after the user has exported or repaired it. */
   discardQuarantine(index:number){if(index>=0&&index<this.quarantine.length){this.quarantine.splice(index,1);this.save();}}

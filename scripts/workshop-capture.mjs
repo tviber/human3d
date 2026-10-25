@@ -1,4 +1,5 @@
 import {chromium} from 'playwright';
+import {launchQaBrowser} from './lib/qa-browser.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import {resolveOutputDir,ensureOutputDir,assertTrackedWriteAllowed,atomicWriteFile} from './lib/qa-output.mjs';
@@ -53,7 +54,7 @@ const webBase=new URL(process.env.QA_WEB_URL??`http://127.0.0.1:${process.env.HU
 const identity=await verifyWebIdentity(repoRoot,webBase);
 if(!identity.ok)throw new Error(`dev server at ${webBase.origin} does not serve this checkout (${identity.detail})`);
 
-const browser=await chromium.launch({headless:true,...(process.env.QA_BROWSER_CHANNEL?{channel:process.env.QA_BROWSER_CHANNEL}:{})});
+const browser=await launchQaBrowser(chromium,{...(process.env.QA_BROWSER_CHANNEL?{channel:process.env.QA_BROWSER_CHANNEL}:{})});
 try{
  const page=await browser.newPage({viewport:{width:1536,height:1024},deviceScaleFactor:1});
  const errors=[];

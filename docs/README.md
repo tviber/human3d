@@ -36,9 +36,11 @@
 | [RESEARCH.md](RESEARCH.md) / [LICENSES.md](LICENSES.md) | 技术选择依据、资产许可 | 改资产/引用外部资料 |
 | [templates/](templates/) | `muscle-action.template.json`（`scripts/new-muscle-action.py` 读） | 新增肌肉动作 |
 
+17 球员研究链的仓外备份、checksum 与恢复说明：[归档记录](archives/forehand-17.md)。
+
 ## 常用命令速查
 
-- 门禁：`npx tsc -b`、`npm test`、`npm run spec:check`、`npm run build`、`npm run docs:check`（CI 的 `full` job 全部执行；Draft PR 只跑 `fast` bounded 检查，矩阵见 [engineering/ci-lifecycle.md](engineering/ci-lifecycle.md)；浏览器 `npm run qa`/`qa:dynamics` 未进 CI）
+- 门禁：`sh scripts/check-process-limit.sh --npx && npx tsc -b`、`npm test`、`npm run spec:check`、`npm run build`、`npm run docs:check`（CI 的 `full` job 全部执行；Draft PR 只跑 `fast` bounded 检查，矩阵见 [engineering/ci-lifecycle.md](engineering/ci-lifecycle.md)；浏览器 `npm run qa`/`qa:dynamics` 未进 CI）
 - 定向：`npm test -- <test-file>`（低资源 `--maxWorkers=1 --no-file-parallelism`）
 - 测量/工具：`scripts/measure-motions.mts`、`measure-quality-probe.mts`、`generate-motion.mts`、`bench-workshop.mts`、`package-to-glb.mts`——用途见根 `AGENTS.md`「项目验证命令」与 [engineering/test-matrix.md](engineering/test-matrix.md)
 - 动力学：`npm run dynamics:validate` / `dynamics:test` / `dynamics:new` / `dynamics:build`（需 `.venv-dynamics`，CI 门禁）

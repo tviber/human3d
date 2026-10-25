@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import fs from 'node:fs';
 import {chromium} from 'playwright';
+import {launchQaBrowser} from './lib/qa-browser.mjs';
 import {resolveOutputDir,ensureOutputDir,assertTrackedWriteAllowed} from './lib/qa-output.mjs';
 import {verifyWebIdentity} from './lib/worktree-check.mjs';
 
@@ -11,7 +12,7 @@ assert.equal(output.args.length,0);ensureOutputDir(output.dir,{root,updateEviden
 const out=name=>assertTrackedWriteAllowed(path.join(output.dir,name),{root,updateEvidence:output.updateEvidence});
 const base=new URL(process.env.QA_WEB_URL??`http://127.0.0.1:${process.env.HUMAN3D_WEB_PORT??5173}/`);
 const identity=await verifyWebIdentity(root,base);assert(identity.ok,identity.detail);
-const browser=await chromium.launch({headless:true,...(process.env.QA_BROWSER_CHANNEL?{channel:process.env.QA_BROWSER_CHANNEL}:{})});
+const browser=await launchQaBrowser(chromium,{...(process.env.QA_BROWSER_CHANNEL?{channel:process.env.QA_BROWSER_CHANNEL}:{})});
 const errors=[];let fault=false;
 const skinSwitch=page=>page.getByRole('switch',{name:'超赛皮肤',exact:true});
 const check=async(page,key,ssj)=>{

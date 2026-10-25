@@ -4,7 +4,7 @@ import {useMediaMatches} from '../lib/use-media';
 import {useEffect,useRef,useState} from 'react';
 import {Vector3} from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
-import {Group,Panel,Separator} from 'react-resizable-panels';
+import {Group,Panel,Separator,type PanelImperativeHandle,type GroupImperativeHandle} from 'react-resizable-panels';
 import {Activity,ArrowDown,ArrowLeft,ArrowUp,Camera,Check,ChevronLeft,ChevronRight,ClipboardCopy,Copy,Download,Eye,FileBox,Film,FlipHorizontal2,Hand,LayoutGrid,ListVideo,MessageSquareWarning,Package,Pause,Play,Plus,Redo2,RotateCcw,Save,SlidersHorizontal,Sparkles,Trash2,Undo2,Upload,Video,X} from 'lucide-react';
 import {LibraryList} from './chrome';
 import {useWorkshopUi} from './ui-store';
@@ -17,8 +17,8 @@ import {clearLabHandoff,handoffConsumedByCreate,handoffHasCard,resolveLabHandoff
 import type {LabHandoff} from './lab-handoff';
 import {combineMotions} from './combine-motions';
 import {basicInsertRefusal,insertBasicAction,type BasicInsertion} from './basic-actions';
-import {applyPoseAt,PoseLibrary,stampPoseIntoKey,type PoseApplyReport,type PoseStampReport,type UserPosePreset} from './pose-library';
-import {backupText,mergeBackup,parseBackup,replaceLibrary,type ParsedBackup} from './library-backup';
+import {applyPoseAt,PoseLibrary,POSE_LIBRARY_KEY,stampPoseIntoKey,type PoseApplyReport,type PoseStampReport,type UserPosePreset} from './pose-library';
+import {MAX_BACKUP_BYTES,backupText,mergeBackup,parseBackup,replaceLibrary,type ParsedBackup} from './library-backup';
 import {HistoryBook,RecordGate} from './history';
 import {SemanticPanel,type SemanticHost} from './semantic-panel';
 import {copyKeyframe,keyframeInsertSlot,keyframeTimeProblem,moveKeyframe,removeKeyframe} from './keyframes';
@@ -138,7 +138,7 @@ function Timeline({doc,time,selected,retime,onSelect,onSeek,onRetime,onBeginReti
   <div className="ws-track-labels">{sortedKeys(doc).map(k=><button key={k.id} className={k.id===selected?'sel':''} title={`${k.label||'关键帧'} · ${k.time.toFixed(3)}s`} style={{left:`${k.time/doc.duration*100}%`}} onClick={()=>{onSelect(k.id);onSeek(k.time);}}>{k.label||fmt(k.time)}</button>)}</div>
  </div>;
 }
-export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:RigInfo;initialLibrary?:string|null;storageError?:string}){
+export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,storageError}:{info:RigInfo;initialLibrary?:string|null;initialPoses?:string|null;storageError?:string}){
  const mount=useRef<HTMLDivElement>(null),engine=useRef<WorkshopEngine|null>(null),video=useRef<HTMLVideoElement>(null),fileRef=useRef<HTMLInputElement>(null),importRef=useRef<HTMLInputElement>(null);
  const lib=useRef<MotionLibrary|null>(null);
  const syncLibrary=useRef<(force?:boolean)=>void>(()=>{});
@@ -150,7 +150,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   const id=new URLSearchParams(globalThis.location?.search??'').get('doc');
   if(id&&lib.current.docs.some(d=>d.id===id))lib.current.select(id);
  }
- if(!poseLib.current)poseLib.current=new PoseLibrary(webPlatform.storage).load();
+ if(!poseLib.current)poseLib.current=new PoseLibrary(webPlatform.storage,webPlatform.storageLock).load({snapshotText:initialPoses});
  const [,bump]=useState(0);
  const [leaving,setLeaving]=useState(false);
  const selected=useWorkshopUi(s=>s.selected),setSelected=useWorkshopUi(s=>s.setSelected);
@@ -165,7 +165,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
  const [combineKind,setCombineKind]=useState<'append'|'blend'>('append');
  const [combineTransition,setCombineTransition]=useState(.3),[combineWeight,setCombineWeight]=useState(50),[combineName,setCombineName]=useState('');
  const [basicId,setBasicId]=useState(()=>BASIC_PRESETS[0]?.id??'');
- const [adjustmentTab,setAdjustmentTab]=useState<'left'|'right'|'common'|'semantic'>(()=>globalThis.matchMedia?.(COMPACT_QUERY).matches?'semantic':'common');
+ const [adjustmentTab,setAdjustmentTab]=useState<'left'|'right'|'common'|'semantic'>('semantic');
  const [info,setInfo]=useState<RigInfo|null>(null),[error,setError]=useState('');
  const [frame,setFrame]=useState<WorkshopFrame>({time:0,duration:.8,playing:true,label:''});
  const [view,setView]=useState<ViewId>('threeQuarter');
@@ -182,6 +182,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
  // fully validated backup until the user picks merge or replace.
  const [restorePreview,setRestorePreview]=useState<Extract<ParsedBackup,{ok:true}>|null>(null);
  const backupRef=useRef<HTMLInputElement>(null);
+ const [restoring,setRestoring]=useState(false);const restoreBusy=useRef(false);
  const [generationBusy,setGenerationBusy]=useState(false),[generationProgress,setGenerationProgress]=useState<GenerationProgress|null>(null);
  const [generationError,setGenerationError]=useState('');
  const [candidateSession,setCandidateSession]=useState<CandidateSession|null>(null);
@@ -194,12 +195,15 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
  const subtleOk=typeof globalThis.crypto?.subtle?.digest==='function';
  // Session-only display toggles (never persisted) — same convention as the
  // engine's WorkshopOptions defaults.
- const [opts,setOpts]=useState({handles:true,trajectories:true,balance:true,onion:false,onionCount:2,onionMode:'keys' as 'keys'|'step',onionStep:.1});
+ const [opts,setOpts]=useState({handles:true,trajectories:false,balance:false,onion:false,onionCount:2,onionMode:'keys' as 'keys'|'step',onionStep:.1});
  const [optsOpen,setOptsOpen]=useState(false);
  // Issue #23: phone layout = viewport + bottom sheets; Review mode blocks every
  // viewport write. Same query as the CSS breakpoint in workshop.css.
  const compact=useMedia(COMPACT_QUERY);
- const [mode,setMode]=useState<'review'|'edit'>(()=>globalThis.matchMedia?.(COMPACT_QUERY).matches?'review':'edit');
+ const [mode,setMode]=useState<'review'|'edit'>('review');
+ const panelGroup=useRef<GroupImperativeHandle|null>(null);
+ const libraryPanel=useRef<PanelImperativeHandle|null>(null),inspectorPanel=useRef<PanelImperativeHandle|null>(null);
+ const [libraryOpen,setLibraryOpen]=useState(false),[inspectorOpen,setInspectorOpen]=useState(false);
  const [sheet,setSheet]=useState<'left'|'right'|null>(null);
  const [refLarge,setRefLarge]=useState(false);
  const [notes,setNotes]=useState<ReviewNote[]>([]);
@@ -210,7 +214,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   try{
    e=new WorkshopEngine(mount.current,()=>generationPreview.current??lib.current!.active());engine.current=e;
    e.onReady=setInfo;
-   e.setEditable(!globalThis.matchMedia?.(COMPACT_QUERY).matches);
+   e.setEditable(false);e.setOptions({trajectories:false,balance:false});
    e.onError=err=>setError(err.message);
    e.onFrame=setFrame;
    e.onSelectKey=setSelected;
@@ -218,10 +222,10 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
    // Persist drags throttled while moving and unconditionally at drag end;
    // before this, a pose edit could be lost if the page closed before the
    // next explicit save.
-   e.onDocChanged=()=>{lib.current!.checkpoint();const now=performance.now();if(now-lastDragSave>500){lastDragSave=now;lib.current!.save();}bump(v=>v+1);};
-   e.onEditEnd=()=>{lib.current!.save();bump(v=>v+1);};
+   e.onDocChanged=()=>{if(restoreBusy.current)return;lib.current!.checkpoint();const now=performance.now();if(now-lastDragSave>500){lastDragSave=now;lib.current!.save();}bump(v=>v+1);};
+   e.onEditEnd=()=>{if(!restoreBusy.current){lib.current!.save();bump(v=>v+1);}};
    e.onBeginEdit=(time,prefer)=>{
-    if(generationLocked.current)return null;
+    if(generationLocked.current||restoreBusy.current)return null;
     const d=lib.current!.active();
     // Snapshot before any key is inserted, so one drag is one undo step.
     books.current.of(d.id).record(d);gate.current.touch(d.id,performance.now());
@@ -265,7 +269,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
  /** Snapshot before an edit. Edits within 600 ms on the SAME document (a slider
   * drag) share one undo step; another document or a gap always starts a new one. */
  const recordBefore=(doc:WorkshopDoc)=>{if(gate.current.should(doc.id,performance.now()))books.current.of(doc.id).record(doc);};
- const edit=(fn:(d:WorkshopDoc)=>void)=>{if(generationLocked.current)return;recordBefore(L.active());fn(L.active());L.save();engine.current?.setPlaying(false);engine.current?.markDirty();bump(v=>v+1);};
+ const edit=(fn:(d:WorkshopDoc)=>void)=>{if(generationLocked.current||restoreBusy.current||review)return;recordBefore(L.active());fn(L.active());L.save();engine.current?.setPlaying(false);engine.current?.markDirty();bump(v=>v+1);};
  /** Write a history-restored document back under its own id. Returns false
   * when that id no longer exists in the library (deleted meanwhile). */
  const applyDoc=(next:WorkshopDoc)=>{const i=L.docs.findIndex(x=>x.id===next.id);if(i<0)return false;L.docs[i]=next;L.save();gate.current.reset();wristEpoch.current++;const e=engine.current;e?.setPlaying(false);e?.markDirty();e?.seek(Math.min(frame.time,next.duration));if(!keyAt(next,selected))setSelected(sortedKeys(next)[0]?.id??'');bump(v=>v+1);return true;};
@@ -284,7 +288,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   * that no longer names a library document is skipped WITH a hint —
   * silently consuming it would look like undo doing nothing. */
  const undo=()=>{
-  if(generationLocked.current)return;
+  if(generationLocked.current||restoreBusy.current||review)return;
   const cur=L.active(),prev=books.current.of(cur.id).undo(cur);
   if(!prev)return;
   if(prev.id!==cur.id){
@@ -294,7 +298,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   applyDoc(prev);
  };
  const redo=()=>{
-  if(generationLocked.current)return;
+  if(generationLocked.current||restoreBusy.current||review)return;
   const cur=L.active(),next=books.current.of(cur.id).redo(cur);
   if(!next)return;
   if(next.id!==cur.id){
@@ -367,18 +371,18 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   generationPreview.current=side==='candidate'?candidateSession.candidate.doc:candidateSession.source;
   setPreviewSide(side);engine.current?.setPlaying(false);engine.current?.markDirty();
  };
- const selectDoc=(id:string)=>{if(generationLocked.current)return;const doc=L.select(id);setSelected(sortedKeys(doc)[0].id);engine.current?.seek(0);engine.current?.setPlaying(false);engine.current?.markDirty();bump(v=>v+1);};
- const createDoc=()=>{if(generationLocked.current)return;const doc=L.create(newName);setNewName('');setSelected(sortedKeys(doc)[0].id);engine.current?.seek(0);engine.current?.markDirty();bump(v=>v+1);};
- const duplicateDoc=(id:string)=>{if(generationLocked.current)return;const doc=L.duplicate(id);if(doc)selectDoc(doc.id);};
+ const selectDoc=(id:string)=>{if(generationLocked.current||restoreBusy.current)return;const doc=L.select(id);setSelected(sortedKeys(doc)[0].id);engine.current?.seek(0);engine.current?.setPlaying(false);engine.current?.markDirty();bump(v=>v+1);};
+ const createDoc=()=>{if(generationLocked.current||restoreBusy.current)return;switchMode('edit');const doc=L.create(newName);setNewName('');setSelected(sortedKeys(doc)[0].id);engine.current?.seek(0);engine.current?.markDirty();bump(v=>v+1);};
+ const duplicateDoc=(id:string)=>{if(generationLocked.current||restoreBusy.current)return;switchMode('edit');const doc=L.duplicate(id);if(doc)selectDoc(doc.id);};
  const saveToLibrary=async()=>{
-  if(generationLocked.current)return;
+  if(generationLocked.current||restoreBusy.current)return;
   if(!webPlatform.storage){setError('浏览器存储不可用，动作尚未保存，请导出 JSON 备份。');return;}
   await L.save();bump(v=>v+1);
   if(L.lastError){setError(`保存失败：${L.lastError}。请导出 JSON 备份。`);return;}
   setError('');setHint(`已保存「${L.active().name}」，返回实验室即可在动作库中播放或删除。`);
  };
  const saveCombined=async()=>{
-  if(generationLocked.current)return;
+  if(generationLocked.current||restoreBusy.current)return;
   const e=engine.current;if(!e?.ready){setHint('请等待模型加载完成。');return;}
   const target=combineTarget.startsWith('local:')?L.docs.find(doc=>doc.id===combineTarget.slice(6)):WORKSHOP_PRESETS.find(p=>`preset:${p.id}`===combineTarget)?.document;
   if(!target){setHint('请选择要组合的动作。');return;}
@@ -400,11 +404,12 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   setHint(`已导出整库备份（${L.docs.length} 个动作 · ${poseLib.current!.presets.length} 个姿态 · ${L.quarantine.length} 条可恢复数据）。`);
  };
  const chooseRestore=async(f:File)=>{
+  setRestorePreview(null);
   try{
-   if(f.size>64*1024*1024){setError('备份文件过大（上限 64 MB），请确认选择了正确的备份。');return;}
-   const parsed=parseBackup(await f.text());
+   if(f.size>MAX_BACKUP_BYTES){setError('备份文件过大（上限 64 MB），请确认选择了正确的备份。');return;}
+   const parsed=parseBackup(await f.text(),f.size);
    if(!parsed.ok){setError(`无法恢复备份：${parsed.error}`);return;}
-   if(!parsed.docs.length&&!parsed.poses.length&&!parsed.file.library.quarantine.length){setError('这份备份里没有可恢复的内容。');return;}
+   if(!parsed.docs.length&&!parsed.poses.length&&!parsed.file.library.quarantine.length&&!parsed.invalidDocs.length){setError('这份备份里没有可恢复的内容。');return;}
    setError('');setRestorePreview(parsed);
   }catch(err){setError(`无法读取备份：${err instanceof Error?err.message:String(err)}`);}
  };
@@ -417,29 +422,38 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   if(poseLib.current!.lastError){setError(`动作已恢复，但姿态保存失败：${poseLib.current!.lastError}。`);return;}
   setError('');setHint(`${parts.join('；')}。`);
  };
- const restoreMerge=()=>{
-  if(!restorePreview||generationLocked.current)return;
-  const report=mergeBackup(L,poseLib.current!.presets,restorePreview);
-  L.save();poseLib.current!.save();finishRestore(report,'merge');
+ const restoreBackup=async(mode:'merge'|'replace')=>{
+  if(!restorePreview||generationLocked.current||restoreBusy.current||leaving)return;
+  if(mode==='replace'){
+   download('h3d-library-before-replace.json',new Blob([backupText(L.docs,L.quarantine,L.activeId,poseLib.current!.presets)],{type:'application/json'}));
+   if(!webPlatform.confirm('替换将把动作库与自建姿态整体换成备份内容；当前数据刚已下载为快照，隔离数据始终保留。确定替换？'))return;
+  }
+  restoreBusy.current=true;setRestoring(true);engine.current?.setEditable(false);engine.current?.setPlaying(false);
+  try{
+   await L.saved;await poseLib.current!.saved;
+   if(poseLib.current!.lastError)throw new Error(`当前姿态尚未保存：${poseLib.current!.lastError}`);
+   const next={schemaVersion:2 as const,docs:[...L.docs],quarantine:structuredClone(L.quarantine),activeId:L.activeId};
+   const poses=structuredClone(poseLib.current!.presets);
+   const report=mode==='merge'?mergeBackup(next,poses,restorePreview):replaceLibrary(next,poses,restorePreview);
+   if(!next.docs.length){const doc=blankDocument(new Map(rigInfo.bones.map(b=>[b.name,new Vector3().fromArray(b.head)])),'新动作',newDocId('新动作'));next.docs=[doc];next.activeId=doc.id;}
+   await L.restore(next,{key:POSE_LIBRARY_KEY,text:JSON.stringify(poses),previous:JSON.stringify(poseLib.current!.presets)});
+   poseLib.current!.load({snapshotText:JSON.stringify(poses)});
+   gate.current.reset();wristEpoch.current++;
+   setSelected(sortedKeys(L.active())[0].id);engine.current?.seek(0);engine.current?.markDirty();
+   finishRestore(report,mode);
+  }catch(err){setError(`恢复未完成，原数据已保留：${err instanceof Error?err.message:String(err)}`);}
+  finally{restoreBusy.current=false;setRestoring(false);engine.current?.setEditable(!review);}
  };
- const restoreReplace=()=>{
-  if(!restorePreview||generationLocked.current)return;
-  // Snapshot BEFORE the destructive confirm: the pre-replace library is
-  // downloadable no matter how the user answers.
-  download('h3d-library-before-replace.json',new Blob([backupText(L.docs,L.quarantine,L.activeId,poseLib.current!.presets)],{type:'application/json'}));
-  if(!webPlatform.confirm('替换将把动作库与自建姿态整体换成备份内容；当前数据刚已下载为快照，隔离数据始终保留。确定替换？'))return;
-  const report=replaceLibrary(L,poseLib.current!.presets,restorePreview);
-  L.save();poseLib.current!.save();gate.current.reset();wristEpoch.current++;
-  setSelected(sortedKeys(L.active())[0].id);engine.current?.seek(0);engine.current?.markDirty();
-  finishRestore(report,'replace');
- };
+ const restoreMerge=()=>void restoreBackup('merge');
+ const restoreReplace=()=>void restoreBackup('replace');
  // Handoff actions: dismissing only clears the offer and the URL parameter.
  // Creation — from the card button OR the regular 从预设开始 — goes through
  // the flow below, which reconciles the offer when it creates the offered
  // preset, so the two entry points can never leave a stale card behind.
  const dismissHandoff=()=>{setHandoff(null);clearLabHandoff();};
  const createFromPreset=(id=presetId)=>{
-  if(generationLocked.current)return undefined;
+  if(generationLocked.current||restoreBusy.current)return undefined;
+  switchMode('edit');
   const source=L.active();
   const doc=L.createFromPreset(id,newName);
   books.current.of(doc.id).record(source);
@@ -456,7 +470,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   return doc;
  };
  const acceptHandoff=()=>{
-  if(!handoff||handoff.kind!=='preset'||generationLocked.current)return;
+  if(!handoff||handoff.kind!=='preset'||generationLocked.current||restoreBusy.current)return;
   const doc=createFromPreset(handoff.file.id);
   if(doc)setPresetId(handoff.file.id);
  };
@@ -471,7 +485,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
  // step is seeded on the new document's book — its first "previous state" is
  // the source it was mirrored from, so 撤销 lands back on the source.
  const mirrorActiveDoc=()=>{
-  if(generationLocked.current)return;
+  if(generationLocked.current||restoreBusy.current)return;
   const src=L.active(),m=mirrorDoc(src);
   while(L.docs.some(x=>x.id===m.id))m.id=newDocId(m.name); // a second mirror of the same source regenerates
   const added=L.add(m);
@@ -480,7 +494,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   engine.current?.setPlaying(false);engine.current?.seek(0);engine.current?.markDirty();
   bump(v=>v+1);setHint(`已生成镜像动作「${added.name}」——左右互换，原文档保留在动作库中。`);
  };
- const removeDoc=(id:string)=>{if(generationLocked.current)return;const victim=L.docs.find(x=>x.id===id);if(victim&&!webPlatform.confirm(`删除动作「${victim.name}」？此操作不可撤销。`))return;L.remove(id);setSelected(sortedKeys(L.active())[0].id);engine.current?.seek(0);engine.current?.markDirty();bump(v=>v+1);};
+ const removeDoc=(id:string)=>{if(generationLocked.current||restoreBusy.current)return;const victim=L.docs.find(x=>x.id===id);if(victim&&!webPlatform.confirm(`删除动作「${victim.name}」？此操作不可撤销。`))return;L.remove(id);setSelected(sortedKeys(L.active())[0].id);engine.current?.seek(0);engine.current?.markDirty();bump(v=>v+1);};
  const selectKey=(id:string)=>{
   if(generationLocked.current)return;
   const key=keyAt(L.active(),id);if(!key)return;
@@ -534,14 +548,14 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
  };
  /** 我的姿态：capture the selected key's full pose (arms included) as a
   * reusable one-click preset, Blender/Houdini pose-library style. */
- const capturePose=()=>{
-  const k=sel;if(!k)return;
+ const capturePose=async()=>{
+  const k=sel;if(!k||restoreBusy.current)return;
   const name=webPlatform.prompt('给这个姿态起个名字：');
   if(name===null)return;
   const preset=poseLib.current!.add(name,k.pose);
-  bump(v=>v+1);
+  await poseLib.current!.saved;bump(v=>v+1);
   setHint(poseLib.current!.lastError
-   ?`姿态「${preset.name}」已保存（仅存于本页内存）：${poseLib.current!.lastError}`
+   ?`姿态「${preset.name}」未保存（仅存于本页内存）：${poseLib.current!.lastError}`
    :`已保存姿态「${preset.name}」，之后在任何动作里一键应用。`);
  };
  /** Apply a captured pose at the playhead: an existing key there is
@@ -550,7 +564,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   * never consumes an undo step. */
  const applyUserPose=(p:UserPosePreset)=>{
   const e=engine.current;
-  if(generationLocked.current||!e)return;
+  if(generationLocked.current||restoreBusy.current||!e)return;
   const time=e.time;
   if(!nearestKey(d,time,.02)&&d.keys.length>=WORKSHOP_LIMITS.maxKeys){
    setHint(`已达 ${WORKSHOP_LIMITS.maxKeys} 个关键帧上限，且播放头处没有可覆盖的关键帧；请先删除不需要的帧。`);return;
@@ -563,10 +577,11 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   if(report.liftoffFoot.length)notes.push(`${report.liftoffFoot.map(s=>s==='L'?'左':'右').join('、')}脚是离地边界：离地瞬间仍从原接触点起步，新目标塑造离地后的摆动路径，脚尖朝向仍跟随支撑接触`);
   setHint(`${report.result==='replaced'?`已把当前帧姿态替换为「${p.name}」（约束不变）`:`已在播放头插入「${p.name}」姿态帧`}，可撤销${notes.length?`；${notes.join('；')}`:''}。`);
  };
- const removeUserPose=(id:string)=>{
+ const removeUserPose=async(id:string)=>{
+  if(restoreBusy.current)return;
   const p=poseLib.current!.presets.find(x=>x.id===id);if(!p)return;
   if(!webPlatform.confirm(`删除姿态「${p.name}」？此操作不可撤销。`))return;
-  poseLib.current!.remove(id);bump(v=>v+1);
+  poseLib.current!.remove(id);await poseLib.current!.saved;bump(v=>v+1);if(poseLib.current!.lastError)setError(`姿态删除未保存：${poseLib.current!.lastError}`);
  };
  /** Session pose clipboard: copy one key's full pose, paste onto another. */
  const copyPose=()=>{
@@ -653,8 +668,10 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
  };
  L.onSaveState=merged=>{if(merged)syncLibrary.current(true);bump(v=>v+1);};
  syncLibrary.current=async(force=false)=>{
+  if(restoreBusy.current)return;
   const rest=new Map(rigInfo.bones.map(b=>[b.name,new Vector3().fromArray(b.head)]));
-  try{if(!force){const snapshotText=await webPlatform.readStorage(LIBRARY_KEY);if(!L.sync(new MotionLibrary(rest,webPlatform.storage).load({readOnly:true,snapshotText})))return;}}catch(err){setError(err instanceof Error?err.message:String(err));return;}
+  try{if(!force){const snapshotText=await webPlatform.readStorage(LIBRARY_KEY);if(restoreBusy.current)return;if(!L.sync(new MotionLibrary(rest,webPlatform.storage).load({readOnly:true,snapshotText})))return;}}catch(err){setError(err instanceof Error?err.message:String(err));return;}
+  if(restoreBusy.current)return;
   if(generationLocked.current)stopGeneration();
   if(!L.docs.length){L.docs=[blankDocument(rest,'新动作',newDocId('新动作'))];L.activeId=L.docs[0].id;}
   gate.current.reset();wristEpoch.current++;setSelected(sortedKeys(L.active())[0].id);
@@ -662,22 +679,24 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   setHint('已同步其他页面保存或删除的动作。');
  };
  useEffect(()=>{
-  const sync=(event:StorageEvent)=>{if(event.key===LIBRARY_KEY||event.key===null)syncLibrary.current();};
-  const checkpoint=()=>{L.checkpoint();};
-  const unload=(event:BeforeUnloadEvent)=>{L.checkpoint();if(L.saveState!=='saved'){event.preventDefault();event.returnValue='';}};
+  const sync=async(event:StorageEvent)=>{if(restoreBusy.current)return;if(event.key===POSE_LIBRARY_KEY||event.key===null){await poseLib.current!.saved;if(restoreBusy.current)return;const snapshotText=await webPlatform.readStorage(POSE_LIBRARY_KEY);if(restoreBusy.current)return;poseLib.current!.load({snapshotText});bump(v=>v+1);}if(event.key===LIBRARY_KEY||event.key===null)syncLibrary.current();};
+  const checkpoint=()=>{if(!restoreBusy.current)L.checkpoint();};
+  const unload=(event:BeforeUnloadEvent)=>{if(restoreBusy.current){event.preventDefault();event.returnValue='';return;}L.checkpoint();if(L.saveState!=='saved'||poseLib.current!.saveState!=='saved'){event.preventDefault();event.returnValue='';}};
   const hidden=()=>{if(document.visibilityState==='hidden')checkpoint();};
   window.addEventListener('storage',sync);window.addEventListener('beforeunload',unload);window.addEventListener('pagehide',checkpoint);document.addEventListener('visibilitychange',hidden);
   return()=>{window.removeEventListener('storage',sync);window.removeEventListener('beforeunload',unload);window.removeEventListener('pagehide',checkpoint);document.removeEventListener('visibilitychange',hidden);L.onSaveState=undefined;};
  },[]);
  const returnToLab=async()=>{
-  if(leaving)return;L.checkpoint();
-  const state=L.saveState;if(state==='saved'){webPlatform.navigate('/');return;}
+  if(leaving||restoreBusy.current)return;L.checkpoint();
+  const state=L.saveState;if(state==='saved'&&poseLib.current!.saveState==='saved'){webPlatform.navigate('/');return;}
   setLeaving(true);await L.save();
   let pending:Promise<void>;do{pending=L.saved;await pending;}while(pending!==L.saved);
-  if(L.saveState!=='saved'){setLeaving(false);return;}
+  do{pending=poseLib.current!.saved;await pending;}while(pending!==poseLib.current!.saved);
+  if(L.saveState!=='saved'||poseLib.current!.saveState!=='saved'){setLeaving(false);if(poseLib.current!.lastError)setError(`姿态尚未保存：${poseLib.current!.lastError}，请先备份。`);return;}
   webPlatform.navigate('/');
  };
  const recoverQuarantine=(index:number)=>{
+  if(restoreBusy.current)return;
   try{
    const copy=parseDoc(L.quarantineText(index));copy.id=newDocId(copy.name);copy.name+=' 恢复副本';
    copy.keys.forEach((k,i)=>{k.id=`${copy.id}-k${i}`;});
@@ -690,7 +709,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   generationPreview.current=null;setCandidateSession(null);setGenerationBusy(false);setGenerationProgress(null);setGenerationError(message);unlockGeneration();
  };
  const startGeneration=()=>{
-  if(generationLocked.current)return;
+  if(generationLocked.current||restoreBusy.current)return;
   const source=JSON.parse(JSON.stringify(d)) as WorkshopDoc;
   generationLocked.current=true;generationPreview.current=null;setGenerationError('');setGenerationReport(null);setCandidateSession(null);setGenerationBusy(true);
   setGenerationProgress({evals:0,maxEvals:120,phase:'loading'});
@@ -721,7 +740,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   catch(error){failGeneration(error instanceof Error?error.message:String(error));}
  };
  const keepCandidate=(downloadJson=false)=>{
-  if(!candidateSession||generationBusy)return;
+  if(!candidateSession||generationBusy||restoreBusy.current)return;
   const {source,candidate}=candidateSession;
   const kept=JSON.parse(JSON.stringify(candidate.doc)) as WorkshopDoc;
   kept.name=`${source.name} · 候选`;
@@ -820,11 +839,11 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
  // Motion-file envelopes unwrap to their embedded WorkshopDoc first — a bare
  // envelope's schemaVersion:1 is the ENVELOPE revision, not a document one;
  // clip-motion envelopes carry no document and unwrap throws a readable error.
- const importDoc=async(f:File)=>{try{const next=normalizeDoc(unwrapMotionFile(JSON.parse(await f.text())));const added=L.add(next);selectDoc(added.id);}catch(e){setError(e instanceof Error?e.message:String(e));}};
+ const importDoc=async(f:File)=>{try{if(f.size>MAX_BACKUP_BYTES)throw new Error('动作文件过大（上限 64 MB）。');const text=await f.text();if(restoreBusy.current)return;const next=normalizeDoc(unwrapMotionFile(JSON.parse(text)));const added=L.add(next);selectDoc(added.id);}catch(e){setError(e instanceof Error?e.message:String(e));}};
  const loadVideo=(f:File)=>{if(videoUrl)URL.revokeObjectURL(videoUrl);setVideoUrl(URL.createObjectURL(f));};
  const alignVideo=()=>{if(video.current)syncOffset.current=video.current.currentTime-frame.time;};
  const stampVideo=()=>{if(video.current)editSelected(k=>{k.videoTime=video.current!.currentTime;});};
- const switchMode=(next:'review'|'edit')=>{setMode(next);engine.current?.setEditable(next==='edit');};
+ const switchMode=(next:'review'|'edit')=>{if(restoreBusy.current)return;setMode(next);engine.current?.setEditable(next==='edit');if(next==='edit'){if(compact)setSheet('right');else inspectorPanel.current?.resize('340px');}};
  const stepKey=(dir:-1|1)=>{
   const ks=sortedKeys(d),t=frame.time;
   const k=dir>0?ks.find(x=>x.time>t+1e-6)??ks[0]:[...ks].reverse().find(x=>x.time<t-1e-6)??ks.at(-1);
@@ -837,18 +856,18 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
  const semanticHost:SemanticHost={
   context:()=>{
    const e=engine.current,k=sel;
-   if(!e?.rig||!k||generationLocked.current)return null;
+   if(!e?.rig||!k||generationLocked.current||restoreBusy.current)return null;
    return {rig:e.rig,doc:L.active(),keyId:k.id,origin:e.restRoot(),pelvisShift:()=>e.pelvisShiftAt(k.time)};
   },
   begin:base=>{semanticRecorded.current=books.current.of(base.id).record(base);gate.current.reset();engine.current?.setPlaying(false);},
   write:next=>{
-   const i=L.docs.findIndex(x=>x.id===next.id);if(i<0||generationLocked.current)return;
+   const i=L.docs.findIndex(x=>x.id===next.id);if(i<0||generationLocked.current||restoreBusy.current)return;
    L.docs[i]=JSON.parse(JSON.stringify(next)) as WorkshopDoc;L.save();
    const e=engine.current,k=keyAt(L.docs[i],selected);
    e?.setPlaying(false);e?.markDirty();if(k)e?.seek(k.time);bump(v=>v+1);
   },
-  cancel:base=>{semanticHost.write(base);if(semanticRecorded.current)books.current.of(base.id).dropLast();semanticRecorded.current=false;bump(v=>v+1);},
-  commit:()=>{semanticRecorded.current=false;gate.current.reset();L.save();bump(v=>v+1);},
+  cancel:base=>{if(restoreBusy.current)return;semanticHost.write(base);if(semanticRecorded.current)books.current.of(base.id).dropLast();semanticRecorded.current=false;bump(v=>v+1);},
+  commit:()=>{if(restoreBusy.current)return;semanticRecorded.current=false;gate.current.reset();L.save();bump(v=>v+1);},
  };
  const addNote=()=>{
   if(!sel)return;
@@ -863,14 +882,14 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
  };
  const videoEl=videoUrl?<video ref={video} src={videoUrl} muted loop playsInline onPlay={()=>setVideoPlaying(true)} onPause={()=>setVideoPlaying(false)}/>:null;
  const sheetHead=(title:string)=><div className="ws-sheet-head"><strong>{title}</strong><button type="button" aria-label="关闭面板" onClick={()=>setSheet(null)}><X size={18}/></button></div>;
- return <div className={`ws-shell ${generationLockedUi?'ws-generation-locked':''} ${compact?'ws-compact':''} ${sheet?`ws-sheet-${sheet}`:''} ws-mode-${mode}`} data-mode={mode}>
+ return <div inert={restoring} aria-busy={restoring} className={`ws-shell ${generationLockedUi?'ws-generation-locked':''} ${compact?'ws-compact':''} ${sheet?`ws-sheet-${sheet}`:''} ws-mode-${mode}`} data-mode={mode}>
   <header className="ws-header">
    <div className="brand"><Activity size={25} strokeWidth={2}/><span>KINESIS</span><i/><h1>动作工作台</h1><small>关键帧动作编辑器</small></div>
    <nav><a href="/" className="ws-back" aria-disabled={leaving} onClick={e=>{e.preventDefault();void returnToLab();}}><ArrowLeft size={14}/>返回实验室</a></nav>
    <div className="ws-save-state" data-testid="save-state" data-state={L.saveState} role="status" aria-live="polite"><span>{L.saveState==='error'?`保存失败：${L.lastError}`:L.saveState==='saving'?leaving?'保存中 · 完成后返回实验室…':'保存中…':'已保存到本机'}</span>{L.saveState!=='saved'?<button type="button" onClick={()=>exportDoc()}><Download size={12}/>导出当前动作 JSON</button>:null}</div>
   </header>
-  <Group orientation="horizontal" className="ws-main" id="workshop-panes">
-   <Panel id="ws-library" className="ws-library-panel" defaultSize={250} minSize={200} maxSize={420}><aside className="ws-left" aria-label="动作与关键帧">
+  <Group groupRef={panelGroup} orientation="horizontal" className="ws-main" id="workshop-panes">
+   <Panel id="ws-library" panelRef={libraryPanel} collapsible collapsedSize={0} onResize={size=>setLibraryOpen(size.inPixels>1)} className="ws-library-panel" defaultSize={0} minSize={280} maxSize={420}><aside className="ws-left" aria-label="动作与关键帧">
     {sheetHead('动作 · 关键帧 · 参考')}
     {handoffHasCard(handoff)?<section className="ws-card ws-handoff" data-testid="lab-handoff" inert={generationLockedUi}>
      {handoff.kind==='preset'?<>
@@ -889,7 +908,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
      </>:null}
     </section>:null}
     <section className="ws-card" inert={generationLockedUi}><h2>动作库 <small>{L.docs.length} 个动作</small></h2>
-     <LibraryList docs={L.docs} activeId={d.id} onSelect={selectDoc} onDuplicate={duplicateDoc} onRemove={removeDoc} onReorder={(active,over)=>{L.reorder(active,over);bump(v=>v+1);}}/>
+     <LibraryList docs={L.docs} activeId={d.id} onSelect={selectDoc} onDuplicate={duplicateDoc} onRemove={removeDoc} onReorder={(active,over)=>{if(restoreBusy.current||generationLocked.current)return;L.reorder(active,over);bump(v=>v+1);}}/>
      <div className="ws-row">
       <input className="ws-newname" aria-label="新动作名称" value={newName} placeholder="新动作名称（可选）…" onChange={e=>setNewName(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')createDoc();}}/>
       <button onClick={createDoc}><Plus size={13}/>新建</button>
@@ -921,10 +940,10 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
      </div>
      <p className="ws-note" style={L.lastError?{color:'var(--red)'}:undefined}>{L.lastError?`保存未完成：${L.lastError}`:'动作自动保存到本机浏览器；导出 JSON 可跨设备分享。'}</p>
      {L.quarantine.length?<div className="ws-quarantine"><p className="ws-note" style={{color:'var(--red)'}}>{L.quarantine.length} 个恢复稿或隔离项，尚未参与播放。可恢复为副本或导出后修复。</p>
-      {L.quarantine.map((q,i)=><div key={`${q.id}-${i}`} className="ws-row"><small>{q.name||q.id||'未命名'}：{q.reason}</small><button onClick={()=>recoverQuarantine(i)}>恢复为副本</button><button onClick={()=>exportQuarantine(i)}><Download size={12}/>导出</button><button aria-label={`丢弃 ${q.name||q.id}`} onClick={()=>{if(confirm('丢弃这个隔离动作？此操作不可撤销。'))L.discardQuarantine(i);bump(v=>v+1);}}><Trash2 size={12}/></button></div>)}
+      {L.quarantine.map((q,i)=><div key={`${q.id}-${i}`} className="ws-row"><small>{q.name||q.id||'未命名'}：{q.reason}</small><button onClick={()=>recoverQuarantine(i)}>恢复为副本</button><button onClick={()=>exportQuarantine(i)}><Download size={12}/>导出</button><button aria-label={`丢弃 ${q.name||q.id}`} onClick={()=>{if(restoreBusy.current||generationLocked.current)return;if(confirm('丢弃这个隔离动作？此操作不可撤销。'))L.discardQuarantine(i);bump(v=>v+1);}}><Trash2 size={12}/></button></div>)}
      </div>:null}
     </section>
-    <section className="ws-card" inert={generationLockedUi} aria-label="快速插入"><h2>快速插入 <small>播放头一键</small></h2>
+    <section className="ws-card" inert={generationLockedUi||review} aria-label="快速插入"><h2>快速插入 <small>播放头一键</small></h2>
      <div className="ws-quick-poses" role="group" aria-label="快速姿态（一键插入）">
       <span className="ws-quick-label">姿态</span>
       {BASIC_PRESETS.map(p=>{
@@ -983,7 +1002,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
      </section>
      </div>
     </details>
-    <details className="ws-fold" data-fold="keys" inert={generationLockedUi}>
+    <details className="ws-fold" data-fold="keys" inert={generationLockedUi||review}>
      <summary>关键帧清单 <small>{orderedKeys.length} / {WORKSHOP_LIMITS.maxKeys} · 时间轴是主入口</small></summary>
      <div className="ws-fold-body">
      <section className="ws-card ws-keyframes" inert={generationLockedUi} aria-label="关键帧管理">
@@ -1011,7 +1030,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
      </section>
      </div>
     </details>
-    <details className="ws-fold" data-fold="generator" inert={generationLockedUi}>
+    <details className="ws-fold" data-fold="generator">
      <summary>约束轨迹生成 <small>实验功能 · 后台计算</small></summary>
      <div className="ws-fold-body">
      <section className="ws-card ws-generator" data-testid="generator-panel">
@@ -1076,7 +1095,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
     <details className="ws-fold" data-fold="doc" inert={generationLockedUi}>
      <summary>动作属性 · 高级导出 <small>时长 / 循环 / 坐标系 / GLB</small></summary>
      <div className="ws-fold-body">
-     <section className="ws-card ws-doc-card" inert={generationLockedUi}><h2>动作属性</h2>
+     <section className="ws-card ws-doc-card" inert={generationLockedUi}><div inert={review}><h2>动作属性</h2>
      <label className="ws-field"><span>时长 s（{WORKSHOP_LIMITS.minDuration}–{WORKSHOP_LIMITS.maxDuration}）</span><input type="number" min={WORKSHOP_LIMITS.minDuration} max={WORKSHOP_LIMITS.maxDuration} step=".1" value={d.duration} onChange={e=>edit(dd=>retimeKeys(dd,clampDuration(Number(e.target.value))))}/></label>
      <p className="ws-note">{d.keys.length} 个关键帧 · {d.inbetweens?'Hermite 补间':'逐帧保持'}</p>
      <Row label="循环播放" detail={loopBlockers(d).join('；')||'首帧位于 0 s，末帧早于时长'} checked={d.loop} disabled={!d.loop&&loopBlockers(d).length>0} onChange={v=>edit(dd=>{if(v&&loopBlockers(dd).length)return;dd.loop=v;})}/>
@@ -1091,6 +1110,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
       {/* x=0 平面整档镜像：同一动作换边（右手正手→左手正手）。产出入库并选
           中，原文档保留；撤销一步回到镜像前的文档。 */}
       <button onClick={mirrorActiveDoc} title="生成当前动作的左右镜像副本（换握拍侧，几何 x→−x）"><FlipHorizontal2 size={13}/>镜像动作</button>
+     </div>
      </div>
      {/* Single-motion JSON import/export lives in the library card's
          导入/导出/备份 block — one entry point, not one per card. */}
@@ -1157,8 +1177,8 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
      <button type="button" data-testid="mode-edit" aria-pressed={!review} onClick={()=>switchMode('edit')}><Hand size={15}/>编辑</button>
     </div>
     <div className="ws-quickbar" role="toolbar" aria-label="快捷操作">
-     <button type="button" data-testid="sheet-left" aria-expanded={sheet==='left'} onClick={()=>setSheet(v=>v==='left'?null:'left')}><ListVideo size={16}/>动作</button>
-     <button type="button" data-testid="sheet-right" aria-expanded={sheet==='right'} onClick={()=>setSheet(v=>v==='right'?null:'right')}><SlidersHorizontal size={16}/>调整</button>
+     <button type="button" data-testid="sheet-left" aria-expanded={compact?sheet==='left':libraryOpen} onClick={()=>{if(compact)setSheet(v=>v==='left'?null:'left');else{const right=inspectorPanel.current?.getSize().asPercentage??0,left=libraryOpen?0:24;panelGroup.current?.setLayout({'ws-library':left,'ws-stage':100-left-right,'ws-inspector':right});}}}><ListVideo size={16}/>动作</button>
+     <button type="button" data-testid="sheet-right" aria-expanded={compact?sheet==='right':inspectorOpen} onClick={()=>compact?setSheet(v=>v==='right'?null:'right'):inspectorOpen?inspectorPanel.current?.collapse():inspectorPanel.current?.resize('340px')}><SlidersHorizontal size={16}/>调整</button>
      <button type="button" data-testid="display-menu" aria-expanded={optsOpen} onClick={()=>setOptsOpen(v=>!v)}><Eye size={15}/>显示</button>
      <button type="button" data-testid="fit-view" onClick={()=>{setSheet(null);setView('threeQuarter');engine.current?.setView('threeQuarter');}}>全视野</button>
      {optsOpen?<><button type="button" className="ws-popscrim" aria-label="关闭显示菜单" onClick={()=>setOptsOpen(false)}/>
@@ -1180,7 +1200,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
     {!info?<div className="ws-loading"><div className="loading-orbit"/><strong>{error?'加载失败':'正在读取人体模型'}</strong><p>{error}</p></div>:null}
    </section></Panel>
    <Separator className="pane-resize"/>
-   <Panel id="ws-inspector" className="ws-inspector-panel" defaultSize={272} minSize={220} maxSize={480} inert={generationLockedUi}><aside className="ws-right" aria-label="姿态调整与检查" inert={generationLockedUi}>
+   <Panel id="ws-inspector" panelRef={inspectorPanel} collapsible collapsedSize={0} onResize={size=>setInspectorOpen(size.inPixels>1)} className="ws-inspector-panel" defaultSize={0} minSize={320} maxSize={480} inert={generationLockedUi}><aside className="ws-right" aria-label="姿态调整与检查" inert={generationLockedUi}>
     {sheetHead('姿态调整 · 检查')}
     {review?<p className="ws-review-lock">审阅模式：姿态控件已锁定。<button type="button" data-testid="unlock-edit" onClick={()=>switchMode('edit')}><Hand size={13}/>切换到编辑</button></p>:null}
     <section className="ws-card ws-key-card" inert={review}><h2>选中关键帧 {sel?<small>@{sel.time.toFixed(2)}s</small>:null}</h2>
@@ -1293,7 +1313,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
      </div>
     </section>
     <details className="ws-fold" data-fold="inspect">
-     <summary>检查 · 反馈 · 显示 <small>按需展开</small></summary>
+     <summary>检查 · 反馈 <small>按需展开</small></summary>
      <div className="ws-fold-body">
      <section className="ws-card"><h2>合理性检查 <small>运动学 · 非动力学</small></h2>
      {analysis?<div className="ws-checks">{analysis.items.map((it,i)=><div key={i} className={it.ok?'':'warn'}>{it.ok?<Check size={12}/>:<X size={12}/>}<span>{it.label}</span><small>{it.detail}</small></div>)}</div>:<p className="ws-note">求解后显示关节限位、支撑与重心。</p>}
@@ -1313,18 +1333,6 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
       <button type="button" aria-label={`删除反馈 ${n.keyLabel} ${n.issue}`} onClick={()=>setNotes(all=>all.filter(x=>x.id!==n.id))}><X size={12}/></button>
      </li>)}</ul>:<p className="ws-note">尚无反馈；结构化 JSON 可直接交给 agent 修复。</p>}
     </section>
-    <section className="ws-card"><h2>显示</h2>
-     <SkinSwitch disabled={!info} change={s=>engine.current!.setSkin(s)}/>
-     <Row label="编辑手柄" checked={opts.handles} onChange={v=>{setOpts(o=>({...o,handles:v}));engine.current?.setOptions({handles:v});}}/>
-     <Row label="运动轨迹线" checked={opts.trajectories} onChange={v=>{setOpts(o=>({...o,trajectories:v}));engine.current?.setOptions({trajectories:v});}}/>
-     <Row label="重心 / 支撑" checked={opts.balance} onChange={v=>{setOpts(o=>({...o,balance:v}));engine.current?.setOptions({balance:v});}}/>
-     <Row label="洋葱皮" detail="叠加前后姿态的幽灵骨架线框" checked={opts.onion} onChange={v=>{setOpts(o=>({...o,onion:v}));engine.current?.setOptions({onion:v});}}/>
-     {opts.onion?<>
-      <label className="ws-field"><span>数量</span><input type="number" min={1} max={3} step={1} value={opts.onionCount} onChange={e=>{const v=Math.max(1,Math.min(3,Math.round(Number(e.target.value)||1)));setOpts(o=>({...o,onionCount:v}));engine.current?.setOptions({onionCount:v});}}/></label>
-      <label className="ws-field"><span>模式</span><select value={opts.onionMode} onChange={e=>{const v=e.target.value as 'keys'|'step';setOpts(o=>({...o,onionMode:v}));engine.current?.setOptions({onionMode:v});}}><option value="keys">相邻关键帧</option><option value="step">固定步长</option></select></label>
-      {opts.onionMode==='step'?<label className="ws-field"><span>步长 s</span><input type="number" min={.02} max={1} step={.02} value={opts.onionStep} onChange={e=>{const v=Math.max(.02,Math.min(1,Number(e.target.value)||.1));setOpts(o=>({...o,onionStep:v}));engine.current?.setOptions({onionStep:v});}}/></label>:null}
-     </>:null}
-     </section>
      </div>
     </details>
    </aside></Panel>
@@ -1337,8 +1345,8 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
     <button aria-label="上一关键帧" data-testid="key-prev" onClick={()=>stepKey(-1)} disabled={!info}><ChevronLeft size={19}/></button>
     <button aria-label="下一关键帧" data-testid="key-next" onClick={()=>stepKey(1)} disabled={!info}><ChevronRight size={19}/></button>
     <button aria-label="回到开头" onClick={()=>engine.current?.seek(0)}><RotateCcw size={17}/></button>
-    <button aria-label="撤销" title="撤销 (Ctrl+Z)" disabled={!books.current.of(d.id).canUndo()} onClick={undo}><Undo2 size={17}/></button>
-    <button aria-label="重做" title="重做 (Ctrl+Shift+Z)" disabled={!books.current.of(d.id).canRedo()} onClick={redo}><Redo2 size={17}/></button>
+    <button aria-label="撤销" title="撤销 (Ctrl+Z)" disabled={review||!books.current.of(d.id).canUndo()} onClick={undo}><Undo2 size={17}/></button>
+    <button aria-label="重做" title="重做 (Ctrl+Shift+Z)" disabled={review||!books.current.of(d.id).canRedo()} onClick={redo}><Redo2 size={17}/></button>
     <span className="ws-time">{fmt(frame.time)}<i>/</i>{fmt(d.duration)}</span>
    </div>
    <Timeline doc={displayDoc} time={frame.time} selected={sel?.id??''} retime={!review} onSelect={selectKey} onSeek={t=>engine.current?.seek(t)} onRetime={(id,t)=>changeKeyTime(id,t,false)} onBeginRetime={()=>engine.current?.beginInteractiveEdit()} onEndRetime={()=>engine.current?.endInteractiveEdit()}/>

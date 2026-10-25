@@ -1,17 +1,20 @@
 import assert from 'node:assert/strict';
 import {chromium} from 'playwright';
+import {launchQaBrowser} from './lib/qa-browser.mjs';
 import {verifyWebIdentity} from './lib/worktree-check.mjs';
 
 // Browser plugin not available. Hold the real Web Lock to interleave actual UI writes.
 const base=new URL(process.env.QA_WEB_URL??'http://127.0.0.1:5173/');
 assert((await verifyWebIdentity(process.cwd(),base)).ok);
-const browser=await chromium.launch({headless:true,...(process.env.QA_BROWSER_CHANNEL?{channel:process.env.QA_BROWSER_CHANNEL}:{})});
+const browser=await launchQaBrowser(chromium,{...(process.env.QA_BROWSER_CHANNEL?{channel:process.env.QA_BROWSER_CHANNEL}:{})});
 const context=await browser.newContext({viewport:{width:1440,height:1000}}),errors=[];
 const open=async route=>{const p=await context.newPage();p.on('pageerror',e=>errors.push(e.message));p.on('console',m=>{if(m.type()==='error')errors.push(m.text());});await p.goto(new URL(route,base).href);await p.waitForFunction(()=>window.__WS__?.ready||window.__LAB__?.ready,null,{timeout:60000});assert.match(await p.title(),/KINESIS/);assert.equal(await p.locator('vite-error-overlay').count(),0);return p;};
 const file=p=>p.evaluate(()=>JSON.parse(localStorage.getItem('kinesis-workshop-library')));
-const edit=async(p,label)=>{await p.locator('.ws-keyframe-select').first().click();await p.getByRole('textbox',{name:'关键帧名称',exact:true}).fill(label);};
-const saved=p=>p.getByTestId('save-to-library').click().then(()=>p.getByTestId('save-state').filter({hasText:'已保存到本机'}).waitFor());
+const panel=async p=>{const button=p.getByTestId('sheet-left');if(await button.getAttribute('aria-expanded')!=='true')await button.click();await p.locator('.ws-left').waitFor({state:'visible'});};
+const edit=async(p,label)=>{const button=p.getByTestId('mode-edit');if(await button.getAttribute('aria-pressed')!=='true')await button.click();await panel(p);await p.locator('.ws-keyframe-select').first().click();await p.getByRole('textbox',{name:'关键帧名称',exact:true}).fill(label);};
+const saved=async p=>{await panel(p);await p.getByTestId('save-to-library').click();await p.getByTestId('save-state').filter({hasText:'已保存到本机'}).waitFor();};
 const hold=async p=>{await p.evaluate(()=>{window.__qaHolding=false;void navigator.locks.request('kinesis-workshop-library',()=>new Promise(resolve=>{window.__qaHolding=true;window.__qaRelease=resolve;}));});await p.waitForFunction(()=>window.__qaHolding);};
+const holdPoses=async p=>{await p.evaluate(()=>{window.__qaHoldingPoses=false;void navigator.locks.request('kinesis-workshop-poses',()=>new Promise(resolve=>{window.__qaHoldingPoses=true;window.__qaReleasePoses=resolve;}));});await p.waitForFunction(()=>window.__qaHoldingPoses);};
 try{
  const a=await open('/workshop.html');await saved(a);const first=await a.evaluate(()=>window.__WS__.getDoc().id);
  await a.getByRole('textbox',{name:'新动作名称',exact:true}).fill('并发第二段');
@@ -24,6 +27,13 @@ try{
  assert.notEqual((await file(lab)).docs.find(d=>d.id===first).keys[0].label,'A 独立修改');
  await lab.evaluate(()=>window.__qaRelease());await saved(a);await saved(b);
  let stored=await file(lab);assert.equal(stored.docs.find(d=>d.id===first).keys[0].label,'A 独立修改');assert.equal(stored.docs.find(d=>d.id===second).keys[0].label,'B 独立修改');
+ // A page opening during the two-key restore lock must not read the old
+ // IndexedDB snapshot before the writer commits and emits its storage events.
+ await hold(a);
+ await b.evaluate(()=>{window.__qaReadDone=false;void import('/src/platform/platform.ts').then(({webPlatform})=>webPlatform.readStorages(['kinesis-workshop-library','kinesis-workshop-poses'])).then(value=>{window.__qaReadResult=value;window.__qaReadDone=true;},error=>{window.__qaReadError=String(error);window.__qaReadDone=true;});});
+ await b.waitForTimeout(250);assert.equal(await b.evaluate(()=>window.__qaReadDone),false,'multi-key read did not wait for the active writer lock');
+ await a.evaluate(()=>window.__qaRelease());await b.waitForFunction(()=>window.__qaReadDone);
+ assert.equal(await b.evaluate(()=>window.__qaReadError??null),null);
  // Both editors now change the same document before either is allowed to persist.
  await b.getByTitle(first,{exact:true}).click();
  await hold(lab);await edit(a,'A 冲突修改');await edit(b,'B 冲突修改');await lab.evaluate(()=>window.__qaRelease());await saved(a);await saved(b);
@@ -37,6 +47,22 @@ try{
  const before=await camera();await lab.evaluate(()=>{window.__qaSource=window.__LAB__.source;});
  await edit(a,'当前播放稿更新');await saved(a);await lab.waitForFunction(()=>window.__qaSource!==window.__LAB__.source);
  const after=await camera();for(let i=0;i<3;i++)after[i].forEach((v,j)=>assert(Math.abs(v-before[i][j])<1e-8,'source refresh reset the camera'));assert.deepEqual(after.slice(3),before.slice(3));
+ // Two actual capture flows queue behind the same pose lock. Their separate
+ // page snapshots must merge instead of the later write replacing the first.
+ for(const page of [a,b]){
+  const button=page.getByTestId('mode-edit');if(await button.getAttribute('aria-pressed')!=='true')await button.click();
+  await panel(page);
+ }
+ for(const page of [a,b])await page.evaluate(()=>{window.__qaDateNow=Date.now;Date.now=()=>123456789;});
+ await holdPoses(lab);
+ a.once('dialog',d=>d.accept('并发姿态 A'));b.once('dialog',d=>d.accept('并发姿态 B'));
+ await a.getByTestId('pose-capture').click();await b.getByTestId('pose-capture').click();
+ assert.deepEqual(await lab.evaluate(()=>JSON.parse(localStorage.getItem('kinesis-workshop-poses')??'[]')),[],'pose writes escaped the active lock');
+ await lab.evaluate(()=>window.__qaReleasePoses());
+ await lab.waitForFunction(()=>{const poses=JSON.parse(localStorage.getItem('kinesis-workshop-poses')??'[]');return poses.some(p=>p.name==='并发姿态 A')&&poses.some(p=>p.name==='并发姿态 B');});
+ await Promise.all([a.getByRole('button',{name:'并发姿态 A',exact:true}).waitFor(),b.getByRole('button',{name:'并发姿态 B',exact:true}).waitFor()]);
+ for(const page of [a,b])await page.evaluate(()=>{Date.now=window.__qaDateNow;delete window.__qaDateNow;});
+ const poses=await lab.evaluate(()=>JSON.parse(localStorage.getItem('kinesis-workshop-poses')));assert.equal(new Set(poses.map(p=>p.id)).size,poses.length);
  await a.reload();await a.waitForFunction(()=>window.__WS__?.ready);stored=await file(a);assert.equal(stored.docs.find(d=>d.id===first).keys[0].label,'当前播放稿更新');assert(stored.quarantine.length>0);
- assert.deepEqual(errors,[]);console.log('Concurrent UI QA passed: exclusive lock, two independent edits, same-document recovery/export/reload, current-source refresh preserves orbit/playhead/pause.');
+ assert.deepEqual(errors,[]);console.log('Concurrent UI QA passed: exclusive locks, locked multi-key reads, two independent edits, same-document recovery/export/reload, camera continuity, concurrent pose captures.');
 }finally{await context.close();await browser.close();}

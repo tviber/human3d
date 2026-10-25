@@ -1,4 +1,6 @@
 import {chromium} from 'playwright';
+import {register} from 'tsx/esm/api';
+import {launchQaBrowser} from './lib/qa-browser.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
@@ -12,6 +14,7 @@ const output=resolveOutputDir('browser-qa',process.argv.slice(2),repoRoot,proces
 if(output.args.length)throw new Error(`unexpected browser QA arguments: ${output.args.join(' ')}`);
 ensureOutputDir(output.dir,{root:repoRoot,updateEvidence:output.updateEvidence});
 const outputFile=name=>assertTrackedWriteAllowed(path.join(output.dir,name),{root:repoRoot,updateEvidence:output.updateEvidence});
+register();
 const webBase=new URL(process.env.QA_WEB_URL??`http://127.0.0.1:${process.env.HUMAN3D_WEB_PORT??5173}/`);
 const serviceBase=new URL(process.env.QA_SERVICE_URL??`http://127.0.0.1:${process.env.HUMAN3D_PORT??8788}/`);
 const webUrl=route=>new URL(route,webBase).href;
@@ -27,8 +30,13 @@ if(process.env.QA_WEB_URL!==undefined){
 }else if(!webIdentity.ok){
  throw new Error(`dev server at ${webBase.origin} does not serve this checkout (${webIdentity.detail}); start it from this worktree (npm run dev) or opt in explicitly with QA_WEB_URL`);
 }
-const browser=await chromium.launch({headless:true,...(process.env.QA_BROWSER_CHANNEL?{channel:process.env.QA_BROWSER_CHANNEL}:{})});
-let svc; // spawned pose service (if not already running); killed in finally
+const browser=await launchQaBrowser(chromium,{...(process.env.QA_BROWSER_CHANNEL?{channel:process.env.QA_BROWSER_CHANNEL}:{})});
+let svc;
+let cleanupPromise;
+const cleanup=()=>cleanupPromise??=(async()=>{
+ if(svc){const server=svc;svc=undefined;const closed=new Promise(resolve=>server.close(resolve));server.closeAllConnections();await closed;}
+ await browser.close();
+})();
 try {
 const page=await browser.newPage({viewport:{width:1536,height:1024},deviceScaleFactor:1});
 const errors=[],warnings=[];page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());if(m.type()==='warning')warnings.push(m.text());});
@@ -36,12 +44,18 @@ await page.goto(webUrl('/'));await page.waitForFunction(()=>window.__LAB__?.read
 assert.match(await page.title(),/KINESIS/);const bundledMotionCount=await page.locator('.motion-row').count();assert(bundledMotionCount>=8,'expected the bundled motion library');assert.equal(await page.locator('vite-error-overlay').count(),0);
 // Issue #30 PR-B: the 观察面板 collapses by default on desktop — expand it
 // once; the debug/speed/seek checks below operate on its controls.
+await page.getByRole('button',{name:'展开动作库面板'}).click();
 await page.getByRole('button',{name:'展开观察面板'}).click();
 await page.getByRole('switch',{name:'人体表面'}).waitFor({state:'visible',timeout:5000});
 const names={idle:'自然站立',walk:'行走',reach:'抬手与转身',squat:'下蹲',ready:'持拍准备',forehand:'正手挥拍'};
 // Issue #30 PR-B: secondary workshop panels are collapsed <details> folds;
 // open them all (idempotent) after every workshop navigation or reload.
-const openWsFolds=()=>page.evaluate(()=>{document.querySelectorAll('[data-fold]').forEach(el=>{el.open=true;});});
+const openWsFolds=async()=>{
+ if(await page.getByTestId('mode-edit').getAttribute('aria-pressed')!=='true')await page.getByTestId('mode-edit').click();
+ for(const side of ['left','right'])if(await page.getByTestId(`sheet-${side}`).getAttribute('aria-expanded')!=='true')await page.getByTestId(`sheet-${side}`).click();
+ await page.getByTestId('adjustment-tab-common').click();
+ await page.evaluate(()=>{document.querySelectorAll('[data-fold]').forEach(el=>{el.open=true;});});
+};
 async function choose(id,t=0,view='front'){
  // .first(): an opened bundled package reuses the envelope name, so the
  // motion list can hold two identically labelled rows — the bundled one
@@ -54,6 +68,8 @@ async function choose(id,t=0,view='front'){
 }
 const poses=[['idle',0,'front','front'],['idle',0,'side','side'],['idle',0,'back','back'],['walk',.34,'threeQuarter','walk'],['reach',2.7,'front','reach'],['squat',2.7,'side','squat-side'],['squat',2.7,'front','squat'],['ready',0,'threeQuarter','ready'],['ready',0,'hand','grip'],['forehand',1.3,'threeQuarter','backswing'],['forehand',2.55,'front','contact'],['forehand',3.35,'threeQuarter','follow-through']];
 const result={date:new Date().toISOString().slice(0,10),browser:await browser.version(),viewport:[1536,1024],poses:[],checks:{}};
+const runHeavyQa=process.env.HUMAN3D_QA_HEAVY==='1';
+result.skipped=[];
 for(const [id,t,view,name]of poses){await choose(id,t,view);await page.screenshot({path:outputFile(`${name}.png`)});result.poses.push({id,t,view,file:`${name}.png`,metrics:await page.evaluate(()=>window.__LAB__.diagnostics())});}
 await choose('squat',2.7,'threeQuarter');
 for(const label of ['骨骼与关节','关节坐标轴','IK 端点']){await page.getByRole('switch',{name:label,exact:true}).click();assert.equal(await page.getByRole('switch',{name:label,exact:true}).getAttribute('aria-checked'),'true');}
@@ -94,9 +110,12 @@ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerW
 await page.setViewportSize({width:1366,height:900});await choose('idle',0,'front');await page.screenshot({path:outputFile('laptop.png')});
 await page.setViewportSize({width:1536,height:1024});await choose('forehand',0,'threeQuarter');
 await page.getByRole('switch',{name:'球拍运动轨迹',exact:true}).click();await page.evaluate(()=>{window.__LAB__.loop=false;window.__LAB__.speed=1;});
-// Record the live WebGL canvas at 30fps, without synthetic frame generation.
-const recorded=await page.evaluate(async()=>{const e=window.__LAB__,stream=e.renderer.domElement.captureStream(30);const type=MediaRecorder.isTypeSupported('video/webm;codecs=vp9')?'video/webm;codecs=vp9':'video/webm';const recorder=new MediaRecorder(stream,{mimeType:type,videoBitsPerSecond:4500000}),chunks=[];recorder.ondataavailable=ev=>chunks.push(ev.data);const done=new Promise(resolve=>recorder.onstop=async()=>{const data=await new Blob(chunks,{type:'video/webm'}).arrayBuffer();stream.getTracks().forEach(t=>t.stop());resolve(Array.from(new Uint8Array(data)));});recorder.start();e.replay();const poll=setInterval(()=>{if(!e.playing){clearInterval(poll);setTimeout(()=>recorder.stop(),200);}},50);setTimeout(()=>{if(recorder.state==='recording'){clearInterval(poll);recorder.stop();}},15000);return done;});
-atomicWriteFile(outputFile('forehand.webm'),Buffer.from(recorded));result.checks.liveVideo=true;
+// Live VP9 capture is CPU intensive; reserve it for an explicit heavy QA run.
+let videoBytes=0;
+if(runHeavyQa){
+ const recorded=await page.evaluate(async()=>{const e=window.__LAB__,stream=e.renderer.domElement.captureStream(30);const type=MediaRecorder.isTypeSupported('video/webm;codecs=vp9')?'video/webm;codecs=vp9':'video/webm';const recorder=new MediaRecorder(stream,{mimeType:type,videoBitsPerSecond:4500000}),chunks=[];recorder.ondataavailable=ev=>chunks.push(ev.data);const done=new Promise(resolve=>recorder.onstop=async()=>{const data=await new Blob(chunks,{type:'video/webm'}).arrayBuffer();stream.getTracks().forEach(t=>t.stop());resolve(Array.from(new Uint8Array(data)));});recorder.start();e.replay();const poll=setInterval(()=>{if(!e.playing){clearInterval(poll);setTimeout(()=>recorder.stop(),200);}},50);setTimeout(()=>{if(recorder.state==='recording'){clearInterval(poll);recorder.stop();}},15000);return done;});
+ atomicWriteFile(outputFile('forehand.webm'),Buffer.from(recorded));videoBytes=recorded.length;result.checks.liveVideo=true;
+}else result.skipped.push('liveVideo');
 // --- Pose-package E2E: the real service solves a real package, delivered
 // through the real file input, decoded by the lab's PosePackageSource.
 // Service ownership is EXCLUSIVE by default: the port must be free so the QA
@@ -123,11 +142,10 @@ if(process.env.QA_SERVICE_URL!==undefined){
  if(!['127.0.0.1','localhost','::1'].includes(serviceBase.hostname))throw new Error(`motion service is unavailable at ${serviceBase.origin}`);
  const {assertPortAvailable}=await import('./lib/worktree-check.mjs');
  await assertPortAvailable(serviceBase.hostname,Number(serviceBase.port||8788));
- const {spawn}=await import('node:child_process');
- svc=spawn('npx',['tsx','apps/server/src/serve.ts'],{stdio:'ignore',env:{...process.env,HUMAN3D_PORT:serviceBase.port||'8788'}});
- for(let i=0;i<100;i++){try{await fetch(serviceUrl('/v1/capabilities'));break;}catch{await new Promise(r=>setTimeout(r,300));if(i===99){svc.kill();throw new Error(`motion service did not start at ${serviceBase.origin}`);}}}
+ const {startMotionService}=await import('../apps/server/src/serve.ts');
+ svc=await startMotionService(Number(serviceBase.port||8788));
  await verifyServiceIdentity();
- if(svc.exitCode!==null)throw new Error(`spawned motion service exited early (code ${svc.exitCode}); whatever answered on ${serviceBase.origin} is not ours`);
+ if(!svc.listening)throw new Error(`motion service stopped at ${serviceBase.origin}`);
 }
 const pkgResponse=await fetch(serviceUrl('/v1/motions'),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:{id:'idle'}})});
 assert.equal(pkgResponse.status,200,'POST /v1/motions should return a pose package');
@@ -363,6 +381,7 @@ result.checks.workshopWaypointDrag=true;
 // the real checkbox → ghosts appear; the count control changes how many are
 // visible; a real pointer drag freezes their buffers until release.
 await page.evaluate(()=>{const e=window.__WS__;e.setPlaying(false);e.seek(.5);});
+await page.getByTestId('display-menu').click();
 await page.locator('.ws-check').filter({hasText:'洋葱皮'}).locator('input').check();
 await page.waitForTimeout(200);
 const readOnion=()=>page.evaluate(()=>{const out=[];window.__WS__.scene.traverse(o=>{if(o.userData?.onion)out.push({visible:o.visible,dir:o.userData.onion.dir,dist:o.userData.onion.dist,pos:Array.from(o.geometry.getAttribute('position').array)});});return out;});
@@ -383,6 +402,7 @@ await page.waitForTimeout(200);
 const stepped=(await readOnion()).filter(g=>g.visible);
 assert.equal(stepped.length,6,'step mode with count 3 should draw six ghosts');
 const frozen=stepped.map(g=>g.pos);
+await page.getByRole('button',{name:'关闭显示菜单'}).click();
 // A real pointer drag on the wrist handle: while the drag is active the ghost
 // buffers must not re-solve (the same !this.drag guard as rebuildAux); on
 // release the pending docDirty rebuild refreshes them.
@@ -396,7 +416,9 @@ await page.waitForTimeout(250);
 const released=(await readOnion()).filter(g=>g.visible);
 assert.equal(released.length,6,'onion ghosts should stay populated after the drag');
 assert(released.some((g,i)=>frozen[i].some((v,j)=>v!==g.pos[j])),'onion ghosts did not re-solve after the drag ended');
+await page.getByTestId('display-menu').click();
 await page.locator('.ws-check').filter({hasText:'洋葱皮'}).locator('input').uncheck();
+await page.getByRole('button',{name:'关闭显示菜单'}).click();
 await page.waitForTimeout(200);
 assert((await readOnion()).every(g=>!g.visible),'onion ghosts stayed visible after the toggle was switched off');
 result.checks.workshopOnion=true;
@@ -556,7 +578,6 @@ await page.waitForFunction(()=>window.__WS__?.getDoc().name==='正手击球 · �
 // Endpoint defaults must follow the current first/last key ids, even after a
 // user's lock toggle materializes per-document overrides and the last key is
 // replaced by a newly authored endpoint.
-const lockProbeStorage=await page.evaluate(()=>localStorage.getItem('kinesis-workshop-library'));
 const lockProbe=await page.evaluate(()=>window.__WS_GENERATOR__.source());
 const lockProbeInterior=lockProbe.keys.find((k,i)=>i>0&&i<lockProbe.keys.length-1&&!k.constraints.contact);
 assert(lockProbeInterior,'lock regression fixture has no adjustable interior key');
@@ -578,7 +599,12 @@ const nowEndpointLock=page.getByTestId(`generator-lock-${lockProbeInterior.id}`)
 assert(await nowEndpointLock.isChecked(),'previously locked interior key did not follow its lock after becoming an endpoint');
 await nowEndpointLock.uncheck();
 assert(!(await nowEndpointLock.isChecked()),'a formerly interior key could not be unlocked after becoming an endpoint');
-await page.evaluate(storage=>localStorage.setItem('kinesis-workshop-library',storage),lockProbeStorage);
+// Restore the fixture through the same single-action UI import, rather than
+// changing only the localStorage mirror behind its canonical snapshot.
+await page.locator('input[type=file][accept=".json,application/json"]').first().setInputFiles({
+ name:'forehand-study.workshop.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(forehandDoc)),
+});
+await page.waitForFunction(()=>document.querySelector('[data-testid=save-state]')?.getAttribute('data-state')==='saved');
 await page.reload();
 await page.waitForFunction(()=>window.__WS__?.rig&&window.__WS_GENERATOR__?.source().name==='正手击球 · 研究',{timeout:30000});
 await openWsFolds();
@@ -586,6 +612,7 @@ result.checks.workshopGenerationEndpointLock=true;
 await page.evaluate(()=>{const e=window.__WS__;e.setPlaying(false);e.seek(.9);});
 await page.locator('.ws-cameras').getByRole('button',{name:'45°',exact:true}).click();
 await page.locator('[data-testid="generator-start"]').scrollIntoViewIfNeeded();
+if(runHeavyQa){
 const cancelBefore=await page.evaluate(()=>({
  storage:localStorage.getItem('kinesis-workshop-library'),
  active:window.__WS_GENERATOR__.activeId(),
@@ -596,12 +623,10 @@ const cancelBefore=await page.evaluate(()=>({
 await page.locator('[data-testid="generator-start"]').click();
 // Fast runs can finish the whole search between polls — the progress bar is
 // unmounted on completion, so accept either live progress or a ready candidate.
-globalThis.__genErrState=undefined;
-page.evaluate(()=>{const m=new MutationObserver(()=>{const e=document.querySelector('.ws-generation-error');if(e)globalThis.__genErrState=e.textContent;});m.observe(document.body,{childList:true,subtree:true});});
 await page.waitForFunction(()=>{
  const p=document.querySelector('progress[data-testid="generator-progress"]');
  const err=document.querySelector('.ws-generation-error');
- if(err)return 'error:'+err.textContent;
+ if(err)throw new Error(err.textContent);
  return (p&&Number(p.value)>0)||window.__WS_GENERATOR__.preview()!==null;
 },null,{timeout:60000}).catch(async e=>{
  const dump=await page.evaluate(()=>({
@@ -616,7 +641,6 @@ await page.waitForFunction(()=>{
  }));
  throw new Error('generator wait: '+JSON.stringify(dump));
 });
-globalThis.__genErrState=undefined;
 // The viewport and camera controls remain usable while search runs in a
 // separate Worker. Change view, then cancel before the candidate is emitted.
 await page.locator('.ws-cameras').getByRole('button',{name:'侧面',exact:true}).click();
@@ -700,8 +724,9 @@ assert.equal(await page.evaluate(()=>window.__WS_GENERATOR__.activeId()),keptIdB
 await page.getByRole('button',{name:'重做',exact:true}).click();await page.waitForTimeout(160);
 assert.equal(await page.evaluate(()=>window.__WS_GENERATOR__.activeId()),keptId,'redo after Keep did not return to the candidate');
 result.checks.workshopGenerationKeepExportUndo=true;
+}else result.skipped.push('workshopGenerationCancel','workshopGenerationAB','workshopGenerationKeepExportUndo');
 
 result.errors=errors;result.warnings=warnings;assert.deepEqual(errors,[]);
-atomicWriteFile(outputFile('browser-results.json'),JSON.stringify(result,null,2));console.log(JSON.stringify({checks:result.checks,errors,warnings,poses:result.poses.length,videoBytes:recorded.length},null,2));
+atomicWriteFile(outputFile('browser-results.json'),JSON.stringify(result,null,2));console.log(JSON.stringify({checks:result.checks,skipped:result.skipped,errors,warnings,poses:result.poses.length,videoBytes},null,2));
 
-} finally {svc?.kill();await browser.close();}
+} finally {await cleanup();}

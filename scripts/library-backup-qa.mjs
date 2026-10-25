@@ -172,7 +172,7 @@ try{
  const before=await read(page);await page.locator('.ws-canvas').tap({position:{x:180,y:170}});assert.deepEqual((await read(page)).doc,before.doc);
  await panel(page,'left');assert(await page.getByTestId('backup-download').isVisible());await closeMobile(page);
  await page.getByTestId('mode-edit').click();await page.getByTestId('semantic-panel').waitFor({state:'visible'});await page.screenshot({path:path.join(output.dir,'workshop-mobile-edit.png')});checks.mobileReviewAndPanels=true;
- await page.goto(new URL('/',base).href);await page.waitForFunction(()=>window.__LAB__?.ready,null,{timeout:60000});await page.screenshot({path:path.join(output.dir,'lab-mobile.png')});await page.getByTestId('sheet-library').click();assert(await page.locator('.motion-row').first().isVisible());checks.labMobile=true;
+ await page.goto(new URL('/',base).href);await page.waitForFunction(()=>window.__LAB__?.ready,null,{timeout:60000});await page.screenshot({path:path.join(output.dir,'lab-mobile.png')});const sheet=page.getByTestId('sheet-library');if(await sheet.getAttribute('aria-expanded')!=='true')await sheet.click();await page.locator('.motion-row').first().waitFor({state:'visible'});checks.labMobile=true;
  await context.close();
  context=await browser.newContext({viewport:{width:1440,height:1000}});page=await context.newPage();await page.goto(base.href);await page.waitForFunction(()=>window.__LAB__?.ready,null,{timeout:60000});await page.getByRole('button',{name:'展开动作库面板'}).waitFor();await page.screenshot({path:path.join(output.dir,'lab-desktop.png')});await page.getByRole('button',{name:'展开动作库面板'}).click();await page.locator('.motion-row').first().waitFor({state:'visible'});checks.labDesktop=true;
  assert.deepEqual(errors,[]);

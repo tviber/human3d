@@ -44,9 +44,13 @@ try{
  // The production quarantine export button returns the complete conflicting document.
  const download=await Promise.all([b.waitForEvent('download'),b.locator('.ws-quarantine').getByRole('button',{name:'导出',exact:true}).first().click()]);assert(download[0].suggestedFilename());
  const labLibrary=lab.getByRole('button',{name:'展开动作库面板'});if(await labLibrary.isVisible())await labLibrary.click();
+ // Three pages share one context: an unfocused page gets its rAF paused, so
+ // bring the lab forward before rAF-driven orbit/drag assertions.
+ await lab.bringToFront();
  await lab.getByTestId(`motion-local:${first}`).click();await lab.getByRole('button',{name:'暂停',exact:true}).click();
- const canvas=lab.locator('#lab-stage canvas'),box=await canvas.boundingBox();await lab.mouse.move(box.x+box.width*.5,box.y+box.height*.5);await lab.mouse.down();await lab.mouse.move(box.x+box.width*.65,box.y+box.height*.6,{steps:12});await lab.mouse.up();await lab.waitForFunction(()=>{const e=window.__LAB__,p=[...e.camera.position.toArray(),...e.camera.quaternion.toArray()],previous=window.__qaCamera;window.__qaCamera=p;return previous&&p.every((v,i)=>Math.abs(v-previous[i])<1e-10);},null,{polling:'raf',timeout:60000});
+ const canvas=lab.locator('#lab-stage canvas'),box=await canvas.boundingBox();await lab.mouse.move(box.x+box.width*.5,box.y+box.height*.5);await lab.mouse.down();await lab.mouse.move(box.x+box.width*.65,box.y+box.height*.6,{steps:12});await lab.mouse.up();await lab.waitForFunction(()=>{const e=window.__LAB__,p=[...e.camera.position.toArray(),...e.camera.quaternion.toArray()],previous=window.__qaCamera;window.__qaCamera=p;return previous&&p.every((v,i)=>Math.abs(v-previous[i])<1e-10);},null,{polling:50,timeout:60000});
  const camera=()=>lab.evaluate(()=>{const e=window.__LAB__;return [e.camera.position.toArray(),e.controls.target.toArray(),e.camera.quaternion.toArray(),e.view,e.time,e.playing];});
+ await a.bringToFront();
  const before=await camera();await lab.evaluate(()=>{window.__qaSource=window.__LAB__.source;});
  await edit(a,'当前播放稿更新');await saved(a);await lab.waitForFunction(()=>window.__qaSource!==window.__LAB__.source);
  const after=await camera();for(let i=0;i<3;i++)after[i].forEach((v,j)=>assert(Math.abs(v-before[i][j])<1e-8,'source refresh reset the camera'));assert.deepEqual(after.slice(3),before.slice(3));

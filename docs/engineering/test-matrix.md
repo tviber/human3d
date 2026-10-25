@@ -28,7 +28,7 @@
 - `apps/web/src/{workshop,playback}/*.test.ts`：工作台文档/镜像、播放源/导入校验
 - `tests/*.test.ts`：包边界（`architecture.test.ts`）、bench 冒烟
 - 定向：`npm test -- <path>`；低资源：`--maxWorkers=1 --no-file-parallelism`
-- 浏览器 E2E：`npm run qa` / `npm run qa:dynamics`（未进 CI，状态要单独记录）
+- 浏览器 E2E：`npm run qa` / `npm run qa:dynamics`（未进 CI，状态要单独记录）；动作库备份恢复与跨页签并发：`npm run qa:library`，由 CI 的 `browser-qa` workflow 执行
 
 ## check:affected 选择器映射（已实现）
 

@@ -40,7 +40,7 @@
 - `npm run spec:check` — 契约测试：Ajv 严格编译、OpenAPI 与服务一致、golden 样例（CI 门禁）
 - `npm run docs:check` — Markdown 相对链接存在性检查（CI 门禁）
 - `npm run build` — 生产构建（CI 门禁，已含 `tsc -b`）
-- `npm run qa` / `npm run qa:dynamics` — 浏览器 E2E（需 dev server；`QA_BROWSER_CHANNEL=chrome` 走系统 Chrome；**未进 CI**，状态单独记录）；`npm run qa` 默认跳过 WebGL 录屏和两轮动作优化，需 `HUMAN3D_QA_HEAVY=1` 显式启用
+- `npm run qa` / `npm run qa:dynamics` — 浏览器 E2E（需 dev server；`QA_BROWSER_CHANNEL=chrome` 走系统 Chrome；状态单独记录）；`npm run qa` 默认跳过 WebGL 录屏和两轮动作优化，需 `HUMAN3D_QA_HEAVY=1` 显式启用。动作库备份恢复与跨页签并发两项在 CI 的 `browser-qa` workflow（`npm run qa:library`）里跑，其余浏览器 E2E 仍不进 CI
 - `npm run protocol:example` — 重生成 `spec/examples/idle.pose.json`
 - `npm run package-to-glb -- <in.pose.json> [out.glb]` — 姿态包转 GLB（与浏览器「导出 GLB」共用 `glb-export.ts`）
 - `npm run service` — 本地 Motion Protocol v1 服务（127.0.0.1:8788）
@@ -50,6 +50,7 @@
 - `sh scripts/check-process-limit.sh --npx && npx tsx scripts/generate-motion.mts [forehand|squat|forehand-detuned|squat-detuned|all]` — 确定性约束轨迹优化器；实现在 `generate.ts`，输出 `evidence/generate-*.json`
 - `sh scripts/check-process-limit.sh && node scripts/workshop-capture.mjs <doc.json> [--times …] [--views front,side,back,threeQuarter]` — 经工作台真实 UI 导入 + `captureStill` 固定相机路径把任意动作文档渲染成 PNG，并逐帧记录求解后的肘角、大臂仰角/方位角、腕目标残差与拍头位置，供视觉判定（`scripts/workshop-capture.mjs`）
 - `npm run qa:pose-validity` / `sh scripts/check-process-limit.sh && node scripts/pose-visual-qa.mjs [动作名…]` — 姿态有效性浏览器验收 / 多方位纯渲染截图（需 dev server；未进 CI）
+- `npm run qa:library` — 动作库备份恢复 + 跨页签并发两项浏览器验收（需 dev server；CI 的 `browser-qa` workflow 跑同一入口）
 - `npm run bench` — workshop 管线性能基线（`--quick` 冒烟 / `--compare` 对比；基线 `evidence/bench-workshop.json`，仅同机可比，GC 趋势需 `NODE_OPTIONS=--expose-gc`）
 - `npm run worktree:check -- --source-root <源 checkout> [--worktree-root <worktree>]` — worktree 隔离检查：workspace link 解析、端口冲突、路径边界（不进 CI，任务并行前自跑）
 - `npm run check:affected -- --base <sha> [--head <sha>] [--run]` — affected-check 选择器（PR-11B）：plan-only 出选择回执（轻量快照，`single-collected-boundary-git-visible`），`--run` 顺序执行选中检查并出完整一致性回执；类别映射以 `docs/engineering/test-matrix.md` 为唯一权威（与 `CATEGORY_CHECKS` 有测试钉死）

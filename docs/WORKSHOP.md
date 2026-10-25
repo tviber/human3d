@@ -60,13 +60,13 @@ MuscleMimic（amathislab/musclemimic）已提供全身肌肉驱动模仿学习�
 
 「动作」面板中的「导入动作 / 导出动作」往返可继续编辑的 H3D JSON。「备份全部」包含动作、自建姿态与隔离原文，不改原库。「从备份恢复」限 64 MB，校验后先预览，再选择合并或替换；损坏的姿态/隔离容器整份拒绝，无法解析的动作则保留原文进隔离区。合并保留双方，重复动作 ID 重建帧 ID。仅含姿态或隔离项的备份也可恢复，空动作列表会建立空白工作区。
 
-「替换全部」是两步：先下载当前数据的快照并要求勾选「已确认快照文件已保存并可打开」，才允许提交——下载调用返回不等于文件已落盘，所以这一步是用户对文件的确认，不是程序担保。替换本身还会在 IndexedDB 快照库写入一个恢复点（`kinesis-workshop-restore-point`，只存快照库、不占 localStorage 配额），与动作库、姿态键在同一次锁定事务里提交：替换生效就意味着恢复点已生效。恢复点刷新后仍在，面板显示「撤销替换」；撤销会把替换前的动作和姿态恢复到刚读取的备份，替换后新增或改过的动作移入隔离区、姿态以新编号保留，两边都不丢。恢复点不可读时不提供撤销，只能使用替换前下载的 JSON。
+「替换全部」是两步：先下载当前数据的快照并要求勾选「已确认快照文件已保存并可打开」，才允许提交——下载调用返回不等于文件已落盘，所以这一步是用户对文件的确认，不是程序担保。替换本身还会在 IndexedDB 快照库写入一个恢复点（`kinesis-workshop-restore-point`，只存快照库、不占 localStorage 配额），与动作库、姿态键在同一次锁定事务里提交：替换生效就意味着恢复点已生效。恢复点**在锁内按最新规范快照生成**（不是本页内存）：另一个页签刚保存、本页还没收到 `storage` 事件时，那次保存照样进恢复点；因此替换不会因为「其他页面已更新」而中止（替换内容只来自备份文件，没有可被覆盖的本页数据），而合并仍会在这种情况下中止并要求刷新。恢复点刷新后仍在，面板显示「撤销替换」；撤销会把替换前的动作和姿态恢复到刚读取的备份，替换后新增或改过的动作移入隔离区、姿态以新编号保留，两边都不丢。恢复点不可读时不提供撤销，只能使用替换前下载的 JSON。
 
 动作与姿态通过平台多键锁和同一个 IndexedDB 事务提交，localStorage 为兼容镜像；配额或事务失败时保持旧库。成功替换会清理被替换文档的撤销书，避免同 ID 的旧历史覆盖恢复结果。自建姿态普通保存也使用相同快照路径，返回实验室会等待两类保存完成。
 
-恢复点的提交与跨页面冲突由 `library-backup.test.ts` 的 `restore point commits with the replace` 覆盖；真实 UI 回归包含在下面的 `library-backup-qa` 里（勾选门禁、刷新后撤销、撤销保留双方）。
+恢复点的提交、锁内快照与跨页面冲突由 `library-backup.test.ts` 的 `restore point commits with the replace` 覆盖（含「另一个页签保存但本页未同步」的竞争窗口）；真实 UI 回归包含在 `npm run qa:library` 里（勾选门禁、刷新后撤销、撤销保留双方、未同步窗口），CI 的 `browser-qa` workflow 跑同一入口。
 
-真实 UI 回归：`sh scripts/check-process-limit.sh && node scripts/library-backup-qa.mjs --out-dir <仓库外目录>`（需 dev server，桌面 + 手机模拟，单页串行；包括冲突、异常文件、配额/事务失败与新浏览器往返）。
+真实 UI 回归：`npm run qa:library`（需 dev server；桌面 + 手机模拟，单页串行）。它依次跑 `library-backup-qa.mjs`（冲突、异常文件、配额/事务失败、新浏览器往返、替换门禁与撤销）和 `library-concurrency-browser-qa.mjs`（独占锁、跨页签保存、未同步窗口下的替换与撤销）；CI 的 `browser-qa` workflow 跑同一入口。单独跑某一项：`sh scripts/check-process-limit.sh && node scripts/library-backup-qa.mjs --out-dir <仓库外目录>`。
 
 ### 拼接与混合
 

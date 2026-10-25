@@ -5,7 +5,7 @@ import {HumanRig,normalizeDoc} from '@human3d/motion-core';
 import type {WorkshopDoc} from '@human3d/motion-core';
 import {LIBRARY_KEY,MotionLibrary,type StorageLike} from './library';
 import {PoseLibrary} from './pose-library';
-import {BACKUP_KIND,MAX_BACKUP_BYTES,backupText,mergeBackup,parseBackup,replaceLibrary} from './library-backup';
+import {BACKUP_KIND,MAX_BACKUP_BYTES,RESTORE_POINT_KEY,backupText,mergeBackup,parseBackup,replaceLibrary} from './library-backup';
 
 let rig:HumanRig;
 beforeAll(async()=>{
@@ -133,6 +133,43 @@ describe('MotionLibrary.add on import clash',()=>{
  });
 });
 
+describe('restore point commits with the replace',()=>{
+ // Same contract as webPlatform.storageLock: writes go to a staged snapshot
+ // and land only when the callback returns; snapshotOnly keys skip the mirror.
+ const lockOver=(store:StorageLike&{map:Map<string,string>},canonical:Map<string,string>)=>{
+  const calls:{keys:string[];snapshotOnly:readonly string[]}[]=[];
+  const lock=async(key:string,write:(s?:StorageLike)=>void|Promise<void>,related:readonly string[]=[],options?:{snapshotOnly?:readonly string[]})=>{
+   const keys=[key,...related],snapshotOnly=options?.snapshotOnly??[],updates=new Map<string,string>();
+   calls.push({keys,snapshotOnly});
+   await write({getItem:k=>updates.get(k)??canonical.get(k)??store.getItem(k),setItem:(k,v)=>{if(!keys.includes(k))throw new Error('unlocked key');updates.set(k,v);}});
+   for(const [k,v] of updates){canonical.set(k,v);if(!snapshotOnly.includes(k))store.setItem(k,v);}
+  };
+  return {lock,calls};
+ };
+ it('writes the pre-replace backup in the same locked commit, outside the localStorage mirror',async()=>{
+  const store=memStorage(),canonical=new Map<string,string>(),{lock,calls}=lockOver(store,canonical);
+  const l=new MotionLibrary(rig.rest,store,lock).load();await l.saved;
+  const before=backupText(l.docs,l.quarantine,l.activeId,[]);
+  const blank=lib(memStorage()).active();
+  await l.restore({schemaVersion:2,docs:[blank],quarantine:[],activeId:blank.id},{key:'kinesis-workshop-poses',text:'[]',previous:'[]'},{key:RESTORE_POINT_KEY,text:before});
+  const commit=calls.at(-1)!;
+  expect(commit.keys).toEqual(expect.arrayContaining([LIBRARY_KEY,'kinesis-workshop-poses',RESTORE_POINT_KEY]));
+  expect(commit.snapshotOnly).toEqual([RESTORE_POINT_KEY]);
+  expect(canonical.get(RESTORE_POINT_KEY)).toBe(before);
+  expect(store.map.has(RESTORE_POINT_KEY)).toBe(false);
+  const point=parseBackup(canonical.get(RESTORE_POINT_KEY)!);
+  expect(point.ok&&point.docs.map(d=>d.id)).toEqual(JSON.parse(before).library.docs.map((d:WorkshopDoc)=>d.id));
+ });
+ it('writes neither the library nor the restore point when another page changed storage',async()=>{
+  const store=memStorage(),canonical=new Map<string,string>(),{lock}=lockOver(store,canonical);
+  const l=new MotionLibrary(rig.rest,store,lock).load();await l.saved;
+  canonical.set(LIBRARY_KEY,JSON.stringify({schemaVersion:2,activeId:'',docs:[],quarantine:[]}));
+  const libraryBefore=canonical.get(LIBRARY_KEY);
+  await expect(l.restore({schemaVersion:2,docs:l.docs,quarantine:[],activeId:l.activeId},{key:'kinesis-workshop-poses',text:'[]',previous:'[]'},{key:RESTORE_POINT_KEY,text:'x'})).rejects.toThrow('其他页面');
+  expect(canonical.get(LIBRARY_KEY)).toBe(libraryBefore);
+  expect(canonical.has(RESTORE_POINT_KEY)).toBe(false);
+ });
+});
 
 describe('restore preserves recovery material and identities',()=>{
  it('merge keeps both quarantine and invalid documents without changing the parsed preview',()=>{

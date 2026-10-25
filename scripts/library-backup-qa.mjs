@@ -20,6 +20,7 @@ const checks=new Proxy({},{set(target,key,value){target[key]=value;console.log('
 let context;
 const ready=page=>page.waitForFunction(()=>window.__WS__?.ready,null,{timeout:60000});
 const saved=page=>page.waitForFunction(()=>document.querySelector('[data-testid=save-state]')?.getAttribute('data-state')==='saved');
+const labelled=(lib,label)=>lib.docs.some(d=>d.name==='备份回归动作'&&d.keys.some(k=>k.label===label));
 const read=page=>page.evaluate(()=>({doc:structuredClone(window.__WS__.getDoc()),library:localStorage.getItem('kinesis-workshop-library'),poses:localStorage.getItem('kinesis-workshop-poses')}));
 const panel=async(page,side)=>{const button=page.getByTestId(`sheet-${side}`);if(await button.getAttribute('aria-expanded')!=='true')await button.click();await page.locator(side==='left'?'.ws-left':'.ws-right').waitFor({state:'visible'});};
 const closeMobile=async page=>{const close=page.getByRole('button',{name:'关闭面板，返回三维视图'});if(await close.isVisible())await page.locator('.ws-sheet-head button:visible').click();};
@@ -58,9 +59,37 @@ try{
  await page.getByTestId('selected-key-name').fill('恢复前新编辑');await saved(page);
  assert.equal(await page.getByRole('button',{name:'撤销',exact:true}).isEnabled(),true);
  await upload(page,backup);await page.getByTestId('backup-preview').waitFor();
- const snap=page.waitForEvent('download');page.once('dialog',d=>d.accept());await page.getByTestId('backup-replace').click();await snap;
+ const beforeReplace=await read(page);
+ // Replace is gated on an explicit acknowledgement of the downloaded snapshot.
+ const snapFile=await download(page,'backup-replace');
+ assert(labelled(JSON.parse(snapFile).library,'恢复前新编辑'),'pre-replace snapshot misses the latest edit');
+ await page.getByTestId('backup-replace-confirm').waitFor();
+ assert.equal(await page.getByTestId('backup-replace-commit').isDisabled(),true,'replace allowed before the snapshot was acknowledged');
+ assert.deepEqual(await read(page),beforeReplace,'arming replace changed data');checks.replaceRequiresSnapshotAck=true;
+ await page.getByTestId('backup-replace-ack').check();await page.getByTestId('backup-replace-commit').click();
  await page.getByTestId('backup-preview').waitFor({state:'detached'});await saved(page);
  assert.equal((await read(page)).doc.keys[0].label,'备份里的帧');assert.equal(await page.getByRole('button',{name:'撤销',exact:true}).isDisabled(),true);checks.replaceClearsHistory=true;
+ // The restore point is in the canonical snapshot store (not localStorage)
+ // and survives a reload; undo brings back the pre-replace edit.
+ const restorePoint=()=>page.evaluate(()=>import('/src/platform/platform.ts').then(({webPlatform})=>webPlatform.readStorage('kinesis-workshop-restore-point')));
+ assert(labelled(JSON.parse(await restorePoint()).library,'恢复前新编辑'),'restore point misses the latest edit');
+ assert.equal(await page.evaluate(()=>localStorage.getItem('kinesis-workshop-restore-point')),null,'restore point leaked into the localStorage mirror');
+ await page.reload();await ready(page);await saved(page);await panel(page,'left');
+ await page.getByTestId('restore-point').waitFor();assert.equal((await read(page)).doc.keys[0].label,'备份里的帧');checks.restorePointSurvivesReload=true;
+ await page.getByTestId('mode-edit').click();await panel(page,'right');await page.getByTestId('selected-key-name').fill('替换后的编辑');await saved(page);await panel(page,'left');
+ page.once('dialog',d=>d.accept());await page.getByTestId('restore-point-undo').click();
+ await page.getByTestId('restore-point').waitFor({state:'detached'});await saved(page);
+ const undone=await read(page);
+ assert(labelled(JSON.parse(undone.library),'恢复前新编辑'),'undo did not restore the pre-replace edit');
+ assert(JSON.parse(undone.library).quarantine.some(q=>q.raw?.keys?.some(k=>k.label==='替换后的编辑')),'undo dropped the post-replace edit instead of quarantining it');
+ assert.deepEqual(JSON.parse(undone.poses),JSON.parse(beforeReplace.poses));
+ assert.equal(await restorePoint(),'','undo left a stale restore point');
+ await page.reload();await ready(page);await saved(page);await panel(page,'left');
+ assert.equal(await page.getByTestId('restore-point').count(),0);
+ assert(labelled(JSON.parse((await read(page)).library),'恢复前新编辑'));checks.undoReplaceKeepsBothSides=true;
+ // Put the replaced state back for the remaining checks.
+ await upload(page,backup);await download(page,'backup-replace');await page.getByTestId('backup-replace-ack').check();await page.getByTestId('backup-replace-commit').click();
+ await page.getByTestId('backup-preview').waitFor({state:'detached'});await saved(page);
  // An import started before restore must not commit after the restore lock is held.
  const lateImport=structuredClone(backup.library.docs[0]);lateImport.id='late-import';lateImport.name='恢复期间延迟导入';lateImport.keys.forEach((key,i)=>{key.id=`late-import-k${i}`;});
  await page.evaluate(()=>{const original=File.prototype.text;File.prototype.text=function(){return this.name==='late-import.workshop.json'?new Promise(resolve=>{window.__releaseImportText=()=>void original.call(this).then(resolve);}):original.call(this);};});
@@ -75,12 +104,16 @@ try{
  assert.equal(JSON.parse((await read(page)).library).docs.some(d=>d.name==='恢复期间延迟导入'),false);checks.importCannotRaceRestore=true;
  const recovery={id:'recovery',name:'隔离原文',reason:'corrupt',raw:'{broken-json'};
  const mixed=structuredClone(backup);mixed.library.quarantine.push(recovery);mixed.library.docs.push({id:'bad',name:'坏动作',keys:'bad'});
+ // The merge queued behind the held lock above has landed, so count deltas.
+ const beforeMixed=await read(page),docsBefore=JSON.parse(beforeMixed.library).docs.length,posesBefore=JSON.parse(beforeMixed.poses).length;
  await upload(page,mixed);await page.getByTestId('backup-merge').click();await page.getByTestId('backup-preview').waitFor({state:'detached'});await saved(page);
  let restored=JSON.parse((await read(page)).library);
- assert.equal(restored.docs.length,backup.library.docs.length*2);assert.equal(new Set(restored.docs.map(d=>d.id)).size,restored.docs.length);
+ assert.equal(restored.docs.length,docsBefore+backup.library.docs.length);assert.equal(new Set(restored.docs.map(d=>d.id)).size,restored.docs.length);
  assert(restored.quarantine.some(q=>q.id==='recovery'&&q.raw==='{broken-json'));assert(restored.quarantine.some(q=>q.id==='bad'));
- assert.equal(new Set(JSON.parse((await read(page)).poses).map(p=>p.id)).size,backup.poses.length*2);checks.mergeConflictsAndQuarantine=true;
+ const mergedPoses=JSON.parse((await read(page)).poses);assert.equal(mergedPoses.length,posesBefore+backup.poses.length);assert.equal(new Set(mergedPoses.map(p=>p.id)).size,mergedPoses.length);checks.mergeConflictsAndQuarantine=true;
  const restoredPose=JSON.parse((await read(page)).poses)[0];
+ // Pose chips are edit-mode controls; the reloads above returned to review.
+ if(await page.getByTestId('mode-edit').getAttribute('aria-pressed')!=='true')await page.getByTestId('mode-edit').click();await panel(page,'left');
  page.once('dialog',d=>d.accept());
  await page.getByTestId(`pose-apply-${restoredPose.id}`).locator('xpath=..').locator('.ws-pose-delete').click();
  await page.getByTestId(`pose-apply-${restoredPose.id}`).waitFor({state:'detached'});
@@ -111,7 +144,7 @@ try{
  }
  checks.atomicQuotaAndIdbFailures=true;
  const posesOnly={...backup,library:{schemaVersion:2,activeId:'',docs:[],quarantine:[]}};
- await upload(page,posesOnly);const snapshot=page.waitForEvent('download');page.once('dialog',d=>d.accept());await page.getByTestId('backup-replace').click();await snapshot;
+ await upload(page,posesOnly);await download(page,'backup-replace');await page.getByTestId('backup-replace-ack').check();await page.getByTestId('backup-replace-commit').click();
  await page.getByTestId('backup-preview').waitFor({state:'detached'});await saved(page);
  assert.equal((await read(page)).doc.keys.length>0,true);assert.deepEqual(JSON.parse((await read(page)).poses),backup.poses);checks.posesOnlyReplace=true;
  const badOnly={...backup,poses:[],library:{schemaVersion:2,activeId:'',docs:[{id:'only-bad',name:'无法解析'}],quarantine:[]}};

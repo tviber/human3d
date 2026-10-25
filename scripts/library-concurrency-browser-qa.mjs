@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import {chromium} from 'playwright';
 import {launchQaBrowser} from './lib/qa-browser.mjs';
 import {verifyWebIdentity} from './lib/worktree-check.mjs';
@@ -11,7 +12,8 @@ const context=await browser.newContext({viewport:{width:1440,height:1000}}),erro
 const open=async route=>{const p=await context.newPage();p.on('pageerror',e=>errors.push(e.message));p.on('console',m=>{if(m.type()==='error')errors.push(m.text());});await p.goto(new URL(route,base).href);await p.waitForFunction(()=>window.__WS__?.ready||window.__LAB__?.ready,null,{timeout:60000});assert.match(await p.title(),/KINESIS/);assert.equal(await p.locator('vite-error-overlay').count(),0);return p;};
 const file=p=>p.evaluate(()=>JSON.parse(localStorage.getItem('kinesis-workshop-library')));
 const panel=async p=>{const button=p.getByTestId('sheet-left');if(await button.getAttribute('aria-expanded')!=='true')await button.click();await p.locator('.ws-left').waitFor({state:'visible'});};
-const edit=async(p,label)=>{const button=p.getByTestId('mode-edit');if(await button.getAttribute('aria-pressed')!=='true')await button.click();await panel(p);await p.locator('.ws-keyframe-select').first().click();await p.getByRole('textbox',{name:'关键帧名称',exact:true}).fill(label);};
+// The keyframe list is a collapsed fold by default (issue #30 PR-B).
+const edit=async(p,label)=>{const button=p.getByTestId('mode-edit');if(await button.getAttribute('aria-pressed')!=='true')await button.click();await panel(p);await p.evaluate(()=>{const fold=document.querySelector('details[data-fold="keys"]');if(fold)fold.open=true;});await p.locator('.ws-keyframe-select').first().click();await p.getByRole('textbox',{name:'关键帧名称',exact:true}).fill(label);};
 const saved=async p=>{await panel(p);await p.getByTestId('save-to-library').click();await p.getByTestId('save-state').filter({hasText:'已保存到本机'}).waitFor();};
 const hold=async p=>{await p.evaluate(()=>{window.__qaHolding=false;void navigator.locks.request('kinesis-workshop-library',()=>new Promise(resolve=>{window.__qaHolding=true;window.__qaRelease=resolve;}));});await p.waitForFunction(()=>window.__qaHolding);};
 const holdPoses=async p=>{await p.evaluate(()=>{window.__qaHoldingPoses=false;void navigator.locks.request('kinesis-workshop-poses',()=>new Promise(resolve=>{window.__qaHoldingPoses=true;window.__qaReleasePoses=resolve;}));});await p.waitForFunction(()=>window.__qaHoldingPoses);};
@@ -41,6 +43,7 @@ try{
  assert(labels.includes('A 冲突修改'));assert(labels.includes('B 冲突修改'));
  // The production quarantine export button returns the complete conflicting document.
  const download=await Promise.all([b.waitForEvent('download'),b.locator('.ws-quarantine').getByRole('button',{name:'导出',exact:true}).first().click()]);assert(download[0].suggestedFilename());
+ const labLibrary=lab.getByRole('button',{name:'展开动作库面板'});if(await labLibrary.isVisible())await labLibrary.click();
  await lab.getByTestId(`motion-local:${first}`).click();await lab.getByRole('button',{name:'暂停',exact:true}).click();
  const canvas=lab.locator('#lab-stage canvas'),box=await canvas.boundingBox();await lab.mouse.move(box.x+box.width*.5,box.y+box.height*.5);await lab.mouse.down();await lab.mouse.move(box.x+box.width*.65,box.y+box.height*.6,{steps:12});await lab.mouse.up();await lab.waitForFunction(()=>{const e=window.__LAB__,p=[...e.camera.position.toArray(),...e.camera.quaternion.toArray()],previous=window.__qaCamera;window.__qaCamera=p;return previous&&p.every((v,i)=>Math.abs(v-previous[i])<1e-10);},null,{polling:'raf',timeout:60000});
  const camera=()=>lab.evaluate(()=>{const e=window.__LAB__;return [e.camera.position.toArray(),e.controls.target.toArray(),e.camera.quaternion.toArray(),e.view,e.time,e.playing];});
@@ -64,5 +67,23 @@ try{
  for(const page of [a,b])await page.evaluate(()=>{Date.now=window.__qaDateNow;delete window.__qaDateNow;});
  const poses=await lab.evaluate(()=>JSON.parse(localStorage.getItem('kinesis-workshop-poses')));assert.equal(new Set(poses.map(p=>p.id)).size,poses.length);
  await a.reload();await a.waitForFunction(()=>window.__WS__?.ready);stored=await file(a);assert.equal(stored.docs.find(d=>d.id===first).keys[0].label,'当前播放稿更新');assert(stored.quarantine.length>0);
- assert.deepEqual(errors,[]);console.log('Concurrent UI QA passed: exclusive locks, locked multi-key reads, two independent edits, same-document recovery/export/reload, camera continuity, concurrent pose captures.');
+ // Cross-tab replace: B saves after A armed the replace. The restore point is
+ // taken inside A's commit lock, so B's save is captured rather than lost, and
+ // B picks up the replaced library through the normal storage sync.
+ await panel(a);
+ const backupDownload=await Promise.all([a.waitForEvent('download'),a.getByTestId('backup-download').click()]);
+ const backupText=fs.readFileSync(await backupDownload[0].path(),'utf8');
+ await a.getByTestId('backup-restore').click();
+ await a.locator('input[type=file][accept=".json,application/json"]').nth(1).setInputFiles({name:'backup.json',mimeType:'application/json',buffer:Buffer.from(backupText)});
+ await Promise.all([a.waitForEvent('download'),a.getByTestId('backup-replace').click()]);await a.getByTestId('backup-replace-ack').check();
+ await b.getByTitle(first,{exact:true}).click();await edit(b,'B 在替换前保存');await saved(b);
+ await a.waitForFunction(id=>JSON.parse(localStorage.getItem('kinesis-workshop-library')).docs.find(d=>d.id===id)?.keys.some(k=>k.label==='B 在替换前保存'),first);
+ await a.waitForFunction(()=>document.querySelector('[data-testid=save-state]')?.getAttribute('data-state')==='saved');
+ await a.getByTestId('backup-replace-commit').click();await a.getByTestId('backup-preview').waitFor({state:'detached'});
+ assert.equal(await a.getByRole('alert').count(),0,await a.getByRole('alert').textContent().catch(()=>''));
+ const point=JSON.parse(await a.evaluate(()=>import('/src/platform/platform.ts').then(({webPlatform})=>webPlatform.readStorage('kinesis-workshop-restore-point'))));
+ assert(point.library.docs.find(d=>d.id===first)?.keys.some(k=>k.label==='B 在替换前保存'),'restore point lost the other tab\'s save');
+ await a.getByTestId('restore-point').waitFor();
+ await b.waitForFunction(id=>!JSON.stringify(window.__WS__.getDoc()).includes('B 在替换前保存')||window.__WS__.getDoc().id!==id,first);
+ assert.deepEqual(errors,[]);console.log('Concurrent UI QA passed: exclusive locks, locked multi-key reads, two independent edits, same-document recovery/export/reload, camera continuity, concurrent pose captures, cross-tab replace restore point.');
 }finally{await context.close();await browser.close();}

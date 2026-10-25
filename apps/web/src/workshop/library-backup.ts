@@ -14,6 +14,10 @@ export const BACKUP_KIND='h3d-library-backup';
 export const BACKUP_SCHEMA_VERSION=1;
 /** Maximum JSON file size accepted by the action and library import paths. */
 export const MAX_BACKUP_BYTES=64*1024*1024;
+/** Backup-format copy of the data a replace overwrote, committed in the same
+ * transaction as the replace (snapshot store only, no localStorage mirror).
+ * An empty string means "no restore point". */
+export const RESTORE_POINT_KEY='kinesis-workshop-restore-point';
 
 export interface BackupFile{
  kind:string;schemaVersion:number;exportedAt:string;

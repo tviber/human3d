@@ -16,7 +16,9 @@
 
 export interface StorageLike{getItem(k:string):string|null;setItem(k:string,v:string):void;removeItem?(k:string):void;readonly length?:number;key?(index:number):string|null}
 
-export type StorageLock=(key:string,write:(snapshot?:StorageLike)=>void|Promise<void>,relatedKeys?:readonly string[])=>Promise<void>;
+/** `snapshotOnly` keys commit to the canonical snapshot store without a
+ * localStorage mirror, so large records cannot exhaust the mirror's quota. */
+export type StorageLock=(key:string,write:(snapshot?:StorageLike)=>void|Promise<void>,relatedKeys?:readonly string[],options?:{snapshotOnly?:readonly string[]})=>Promise<void>;
 export interface DraftOwner{id:string;ready:Promise<void>;active(id:string):Promise<boolean>}
 
 export interface AppPlatform{
@@ -103,18 +105,24 @@ export const webPlatform:AppPlatform={
     }
     return draftOwner;
   },
-  async storageLock(key,write,relatedKeys=[]){
+  async storageLock(key,write,relatedKeys=[],{snapshotOnly=[]}={}){
     if(!globalThis.navigator?.locks)throw new Error('浏览器不支持安全的跨页面保存，请导出 JSON 备份');
     const keys=[...new Set([key,...relatedKeys])].sort();
+    const unmirrored=new Set(snapshotOnly);
     const commit=async()=>{
       const native=safeStorage();if(!native)throw new Error('浏览器存储不可用，请导出 JSON 备份');
       const values=new Map<string,string|null>(),updates=new Map<string,string>(),uninitialized:string[]=[];
-      for(const k of keys){const value=await storageSnapshot(k);if(value===undefined)uninitialized.push(k);values.set(k,value===undefined?native.getItem(k):value);}
+      for(const k of keys){
+        const value=await storageSnapshot(k);
+        if(unmirrored.has(k)){values.set(k,value??null);continue;}
+        if(value===undefined)uninitialized.push(k);values.set(k,value===undefined?native.getItem(k):value);
+      }
       await write({getItem:k=>values.has(k)?updates.get(k)??values.get(k)!:native.getItem(k),setItem:(k,text)=>{
         if(!values.has(k))throw new Error('不能写入未锁定的存储键');updates.set(k,text);
       }});
       if(!updates.size)return;
-      const previous=new Map([...updates.keys()].map(k=>[k,native.getItem(k)]));
+      const mirrored=[...updates].filter(([k])=>!unmirrored.has(k));
+      const previous=new Map(mirrored.map(([k])=>[k,native.getItem(k)]));
       const db=await storageDatabase!;
       // Freeze fallback values before touching mirrors. If the page dies
       // during the later write transaction, reload still reads BOTH old keys,
@@ -137,7 +145,7 @@ export const webPlatform:AppPlatform={
           for(const [k,value] of updates)transaction.objectStore('snapshots').put(value,k);
           // A quota error aborts the SAME transaction, before either canonical
           // snapshot commits. Readers wait for this transaction to complete.
-          for(const [k,value] of updates)native.setItem(k,value);
+          for(const [k,value] of mirrored)native.setItem(k,value);
         }catch(err){failure=err;transaction.abort();}
       });
     };

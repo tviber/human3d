@@ -12,13 +12,13 @@ import {WorkshopEngine} from './engine';
 import type {WorkshopFrame} from './engine';
 import type {HandFrame,KeyInterpolation,WorkshopDoc,WorkshopKey,V3} from '@human3d/motion-core';
 import {blankDocument,contactStartKey,defaultDocument,ensureKey,isReleaseKey,keyAt,loopBlockers,mirrorDoc,mirrorKey,nearestKey,newDocId,normalizeDoc,parseDoc,retimeKeys,serializeDoc,sortedKeys} from '@human3d/motion-core';
-import {BASIC_PRESETS,LIBRARY_KEY,MotionLibrary,OTHER_PRESETS,RACKET_PRESETS,WORKSHOP_PRESETS} from './library';
+import {BASIC_PRESETS,LIBRARY_KEY,MotionLibrary,OTHER_PRESETS,RACKET_PRESETS,WORKSHOP_PRESETS,type QuarantineEntry} from './library';
 import {clearLabHandoff,handoffConsumedByCreate,handoffHasCard,resolveLabHandoff} from './lab-handoff';
 import type {LabHandoff} from './lab-handoff';
 import {combineMotions} from './combine-motions';
 import {basicInsertRefusal,insertBasicAction,type BasicInsertion} from './basic-actions';
 import {applyPoseAt,PoseLibrary,POSE_LIBRARY_KEY,stampPoseIntoKey,type PoseApplyReport,type PoseStampReport,type UserPosePreset} from './pose-library';
-import {MAX_BACKUP_BYTES,backupText,mergeBackup,parseBackup,replaceLibrary,type ParsedBackup} from './library-backup';
+import {MAX_BACKUP_BYTES,RESTORE_POINT_KEY,backupText,mergeBackup,parseBackup,replaceLibrary,type ParsedBackup} from './library-backup';
 import {HistoryBook,RecordGate} from './history';
 import {SemanticPanel,type SemanticHost} from './semantic-panel';
 import {copyKeyframe,keyframeInsertSlot,keyframeTimeProblem,moveKeyframe,removeKeyframe} from './keyframes';
@@ -138,7 +138,7 @@ function Timeline({doc,time,selected,retime,onSelect,onSeek,onRetime,onBeginReti
   <div className="ws-track-labels">{sortedKeys(doc).map(k=><button key={k.id} className={k.id===selected?'sel':''} title={`${k.label||'关键帧'} · ${k.time.toFixed(3)}s`} style={{left:`${k.time/doc.duration*100}%`}} onClick={()=>{onSelect(k.id);onSeek(k.time);}}>{k.label||fmt(k.time)}</button>)}</div>
  </div>;
 }
-export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,storageError}:{info:RigInfo;initialLibrary?:string|null;initialPoses?:string|null;storageError?:string}){
+export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRestorePoint,storageError}:{info:RigInfo;initialLibrary?:string|null;initialPoses?:string|null;initialRestorePoint?:string|null;storageError?:string}){
  const mount=useRef<HTMLDivElement>(null),engine=useRef<WorkshopEngine|null>(null),video=useRef<HTMLVideoElement>(null),fileRef=useRef<HTMLInputElement>(null),importRef=useRef<HTMLInputElement>(null);
  const lib=useRef<MotionLibrary|null>(null);
  const syncLibrary=useRef<(force?:boolean)=>void>(()=>{});
@@ -183,6 +183,13 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,storageErr
  const [restorePreview,setRestorePreview]=useState<Extract<ParsedBackup,{ok:true}>|null>(null);
  const backupRef=useRef<HTMLInputElement>(null);
  const [restoring,setRestoring]=useState(false);const restoreBusy=useRef(false);
+ // Replace is two-step: the snapshot download arms it, the user's explicit
+ // acknowledgement that the file is saved enables the final confirmation.
+ const [replaceArmed,setReplaceArmed]=useState<string|null>(null),[replaceAck,setReplaceAck]=useState(false);
+ const [restorePoint,setRestorePoint]=useState<{savedAt:string;docs:number;poses:number}|null>(()=>{
+  const point=initialRestorePoint?parseBackup(initialRestorePoint):null;
+  return point?.ok?{savedAt:point.file.exportedAt,docs:point.docs.length,poses:point.poses.length}:null;
+ });
  const [generationBusy,setGenerationBusy]=useState(false),[generationProgress,setGenerationProgress]=useState<GenerationProgress|null>(null);
  const [generationError,setGenerationError]=useState('');
  const [candidateSession,setCandidateSession]=useState<CandidateSession|null>(null);
@@ -404,7 +411,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,storageErr
   setHint(`已导出整库备份（${L.docs.length} 个动作 · ${poseLib.current!.presets.length} 个姿态 · ${L.quarantine.length} 条可恢复数据）。`);
  };
  const chooseRestore=async(f:File)=>{
-  setRestorePreview(null);
+  setRestorePreview(null);setReplaceArmed(null);setReplaceAck(false);
   try{
    if(f.size>MAX_BACKUP_BYTES){setError('备份文件过大（上限 64 MB），请确认选择了正确的备份。');return;}
    const parsed=parseBackup(await f.text(),f.size);
@@ -422,27 +429,83 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,storageErr
   if(poseLib.current!.lastError){setError(`动作已恢复，但姿态保存失败：${poseLib.current!.lastError}。`);return;}
   setError('');setHint(`${parts.join('；')}。`);
  };
- const restoreBackup=async(mode:'merge'|'replace')=>{
-  if(!restorePreview||generationLocked.current||restoreBusy.current||leaving)return;
-  if(mode==='replace'){
-   download('h3d-library-before-replace.json',new Blob([backupText(L.docs,L.quarantine,L.activeId,poseLib.current!.presets)],{type:'application/json'}));
-   if(!webPlatform.confirm('替换将把动作库与自建姿态整体换成备份内容；当前数据刚已下载为快照，隔离数据始终保留。确定替换？'))return;
-  }
+ const cancelRestore=()=>{setRestorePreview(null);setReplaceArmed(null);setReplaceAck(false);};
+ // Step 1 of replace: download the current data and require the user to
+ // acknowledge that file. A download call returning is not proof the file
+ // reached disk, so the replace itself also commits an in-browser restore
+ // point in the same transaction (see restoreBackup).
+ const armReplace=()=>{
+  if(!restorePreview||restoreBusy.current)return;
+  const name=`h3d-library-before-replace-${new Date().toISOString().replace(/[:.]/g,'-')}.json`;
+  download(name,new Blob([backupText(L.docs,L.quarantine,L.activeId,poseLib.current!.presets)],{type:'application/json'}));
+  setReplaceArmed(name);setReplaceAck(false);
+ };
+ const applyLibrary=(next:{schemaVersion:2;docs:WorkshopDoc[];quarantine:QuarantineEntry[];activeId:string},poses:UserPosePreset[],restorePointText?:string)=>
+  L.restore(next,{key:POSE_LIBRARY_KEY,text:JSON.stringify(poses),previous:JSON.stringify(poseLib.current!.presets)},restorePointText===undefined?undefined:{key:RESTORE_POINT_KEY,text:restorePointText}).then(()=>{
+   poseLib.current!.load({snapshotText:JSON.stringify(poses)});
+   gate.current.reset();wristEpoch.current++;
+   setSelected(sortedKeys(L.active())[0].id);engine.current?.seek(0);engine.current?.markDirty();
+  });
+ const withRestoreLock=async(run:()=>Promise<void>,failure:string)=>{
   restoreBusy.current=true;setRestoring(true);engine.current?.setEditable(false);engine.current?.setPlaying(false);
   try{
    await L.saved;await poseLib.current!.saved;
    if(poseLib.current!.lastError)throw new Error(`当前姿态尚未保存：${poseLib.current!.lastError}`);
+   await run();
+  }catch(err){setError(`${failure}：${err instanceof Error?err.message:String(err)}`);}
+  finally{restoreBusy.current=false;setRestoring(false);engine.current?.setEditable(!review);}
+ };
+ const restoreBackup=async(mode:'merge'|'replace')=>{
+  if(!restorePreview||generationLocked.current||restoreBusy.current||leaving)return;
+  if(mode==='replace'&&(!replaceArmed||!replaceAck))return;
+  const preview=restorePreview;
+  await withRestoreLock(async()=>{
    const next={schemaVersion:2 as const,docs:[...L.docs],quarantine:structuredClone(L.quarantine),activeId:L.activeId};
    const poses=structuredClone(poseLib.current!.presets);
-   const report=mode==='merge'?mergeBackup(next,poses,restorePreview):replaceLibrary(next,poses,restorePreview);
+   const before=mode==='replace'?backupText(L.docs,L.quarantine,L.activeId,poseLib.current!.presets):undefined;
+   const report=mode==='merge'?mergeBackup(next,poses,preview):replaceLibrary(next,poses,preview);
    if(!next.docs.length){const doc=blankDocument(new Map(rigInfo.bones.map(b=>[b.name,new Vector3().fromArray(b.head)])),'新动作',newDocId('新动作'));next.docs=[doc];next.activeId=doc.id;}
-   await L.restore(next,{key:POSE_LIBRARY_KEY,text:JSON.stringify(poses),previous:JSON.stringify(poseLib.current!.presets)});
-   poseLib.current!.load({snapshotText:JSON.stringify(poses)});
-   gate.current.reset();wristEpoch.current++;
-   setSelected(sortedKeys(L.active())[0].id);engine.current?.seek(0);engine.current?.markDirty();
-   finishRestore(report,mode);
-  }catch(err){setError(`恢复未完成，原数据已保留：${err instanceof Error?err.message:String(err)}`);}
-  finally{restoreBusy.current=false;setRestoring(false);engine.current?.setEditable(!review);}
+   await applyLibrary(next,poses,before);
+   if(before){
+    // Read the restore point back from the canonical store before offering
+    // undo: the offer is only made for data that verifiably persisted.
+    const stored=await webPlatform.readStorage(RESTORE_POINT_KEY);
+    const point=stored&&stored===before?parseBackup(stored):null;
+    setRestorePoint(point?.ok?{savedAt:point.file.exportedAt,docs:point.docs.length,poses:point.poses.length}:null);
+    if(!point?.ok){setReplaceArmed(null);setReplaceAck(false);finishRestore(report,mode);setError('替换已完成，但浏览器内恢复点校验失败；请使用替换前下载的 JSON 快照恢复。');return;}
+   }
+   setReplaceArmed(null);setReplaceAck(false);finishRestore(report,mode);
+  },'恢复未完成，原数据已保留');
+ };
+ const undoReplace=async()=>{
+  if(!restorePoint||generationLocked.current||restoreBusy.current||leaving)return;
+  if(!webPlatform.confirm('撤销替换会把动作库与自建姿态恢复为替换前的状态；当前动作若与恢复点不同，会移入隔离区，可恢复为副本。确定撤销？'))return;
+  await withRestoreLock(async()=>{
+   const stored=await webPlatform.readStorage(RESTORE_POINT_KEY);
+   const point=stored?parseBackup(stored):null;
+   if(!point?.ok)throw new Error('浏览器内恢复点不可用，请使用替换前下载的 JSON 快照');
+   const lib=point.file.library;
+   // Undo must not destroy what the replace brought in or what was edited
+   // since: anything not already in the restore point stays recoverable.
+   const kept=new Set(point.docs.map(doc=>JSON.stringify(doc)));
+   const quarantine=structuredClone(lib.quarantine),seen=new Set(quarantine.map(q=>JSON.stringify(q)));
+   const keep=(q:QuarantineEntry)=>{const text=JSON.stringify(q);if(!seen.has(text)){seen.add(text);quarantine.push(q);}};
+   for(const q of L.quarantine)keep(structuredClone(q));
+   for(const doc of L.docs)if(!kept.has(JSON.stringify(doc)))keep({id:doc.id,name:doc.name,reason:'撤销替换时的当前动作：可恢复为副本或导出 JSON',raw:structuredClone(doc)});
+   const next={schemaVersion:2 as const,docs:point.docs,quarantine,activeId:point.docs.some(d=>d.id===lib.activeId)?lib.activeId:point.docs[0]?.id??''};
+   if(!next.docs.length){const doc=blankDocument(new Map(rigInfo.bones.map(b=>[b.name,new Vector3().fromArray(b.head)])),'新动作',newDocId('新动作'));next.docs=[doc];next.activeId=doc.id;}
+   // Poses have no quarantine: current poses absent from the point are kept.
+   const poses=structuredClone(point.poses),poseIds=new Set(poses.map(p=>p.id)),poseTexts=new Set(poses.map(p=>JSON.stringify(p)));
+   for(const pose of poseLib.current!.presets){
+    if(poseTexts.has(JSON.stringify(pose)))continue;
+    const copy=structuredClone(pose);let suffix=2;while(poseIds.has(copy.id))copy.id=`${pose.id}-copy-${suffix++}`;
+    poseIds.add(copy.id);poses.push(copy);
+   }
+   await applyLibrary(next,poses,'');
+   setRestorePoint(null);bump(v=>v+1);
+   if(L.lastError){setError(`撤销已在当前页面生效，但保存失败：${L.lastError}。请立即导出 JSON 备份。`);return;}
+   setError('');setHint(`已撤销替换：恢复 ${next.docs.length} 个动作、${poses.length} 个自建姿态；替换后的动作已移入隔离区。`);
+  },'撤销未完成，当前数据已保留');
  };
  const restoreMerge=()=>void restoreBackup('merge');
  const restoreReplace=()=>void restoreBackup('replace');
@@ -930,12 +993,28 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,storageErr
        <h4>恢复备份 <small>{new Date(restorePreview.file.exportedAt).toLocaleString()}</small></h4>
        <p className="ws-note">{restorePreview.docs.length} 个动作 · {restorePreview.poses.length} 个姿态 · {restorePreview.file.library.quarantine.length} 条可恢复数据{restorePreview.invalidDocs.length?` · ${restorePreview.invalidDocs.length} 条无法识别（恢复时隔离）`:''}。</p>
        <ul className="ws-restore-list">{restorePreview.docs.slice(0,6).map(doc=><li key={doc.id}>{doc.name}</li>)}{restorePreview.docs.length>6?<li>… 共 {restorePreview.docs.length} 个动作</li>:null}</ul>
-       <div className="ws-row">
-        <button type="button" data-testid="backup-merge" onClick={restoreMerge}>合并导入（保留现有）</button>
-        <button type="button" data-testid="backup-replace" onClick={restoreReplace}>替换全部</button>
-        <button type="button" data-testid="backup-cancel" onClick={()=>setRestorePreview(null)}>取消</button>
-       </div>
-       <p className="ws-note">「替换全部」会先自动下载当前数据的快照，再要求确认；无论哪种方式，隔离数据都不会丢。</p>
+       {replaceArmed?<div className="ws-replace-confirm" data-testid="backup-replace-confirm" role="group" aria-label="确认替换全部">
+        <p className="ws-note">已请求下载当前数据快照 <code>{replaceArmed}</code>。浏览器可能拦截或询问保存位置，请先确认文件已出现在下载目录中。</p>
+        <label className="ws-check"><input type="checkbox" data-testid="backup-replace-ack" checked={replaceAck} onChange={e=>setReplaceAck(e.target.checked)}/><span>我已确认快照文件已保存并可打开</span></label>
+        <p className="ws-note">替换还会在浏览器内保留一个恢复点，可随时「撤销替换」；隔离数据始终保留。</p>
+        <div className="ws-row">
+         <button type="button" data-testid="backup-replace-commit" className="danger" disabled={!replaceAck} onClick={restoreReplace}>确认替换全部</button>
+         <button type="button" data-testid="backup-replace-redownload" onClick={armReplace}><Download size={12}/>重新下载快照</button>
+         <button type="button" data-testid="backup-cancel" onClick={cancelRestore}>取消</button>
+        </div>
+       </div>:<>
+        <div className="ws-row">
+         <button type="button" data-testid="backup-merge" onClick={restoreMerge}>合并导入（保留现有）</button>
+         <button type="button" data-testid="backup-replace" onClick={armReplace}>替换全部…</button>
+         <button type="button" data-testid="backup-cancel" onClick={cancelRestore}>取消</button>
+        </div>
+        <p className="ws-note">「替换全部」先下载当前数据的快照，确认文件已保存后才能替换；无论哪种方式，隔离数据都不会丢。</p>
+       </>}
+      </div>:null}
+      {restorePoint&&!restorePreview?<div className="ws-restore" data-testid="restore-point">
+       <h4>替换前的恢复点 <small>{new Date(restorePoint.savedAt).toLocaleString()}</small></h4>
+       <p className="ws-note">{restorePoint.docs} 个动作 · {restorePoint.poses} 个姿态，已保存在本机浏览器，刷新后仍可撤销。</p>
+       <div className="ws-row"><button type="button" data-testid="restore-point-undo" onClick={()=>void undoReplace()}><Undo2 size={12}/>撤销替换</button></div>
       </div>:null}
      </div>
      <p className="ws-note" style={L.lastError?{color:'var(--red)'}:undefined}>{L.lastError?`保存未完成：${L.lastError}`:'动作自动保存到本机浏览器；导出 JSON 可跨设备分享。'}</p>

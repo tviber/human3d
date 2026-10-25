@@ -205,7 +205,11 @@ export class MotionLibrary{
     return this.saved;
   }
   /** Export one quarantined document as JSON text, so it can be repaired by hand or re-imported. */
-  async restore(file:LibraryFile,related:{key:string;text:string;previous:string}){
+  /** Commit a restored library, the related pose key and (optionally) a
+   * restore point of the pre-restore data in ONE locked transaction: if the
+   * restore lands, its undo snapshot landed with it. The restore point lives
+   * only in the snapshot store, so it never competes for localStorage quota. */
+  async restore(file:LibraryFile,related:{key:string;text:string;previous:string},restorePoint?:{key:string;text:string}){
     await this.saved;
     if(this.saveState!=='saved')throw new Error(this.lastError||'请等待当前动作保存后再恢复');
     if(!this.store||!this.lock)throw new Error('浏览器不支持安全恢复，请保留备份文件');
@@ -213,7 +217,8 @@ export class MotionLibrary{
     await this.lock(LIBRARY_KEY,snapshot=>{
       if(snapshot!.getItem(LIBRARY_KEY)!==this.rawText||JSON.stringify(JSON.parse(snapshot!.getItem(related.key)??'[]'))!==related.previous)throw new Error('其他页面已更新动作或姿态，请刷新后重新恢复');
       snapshot!.setItem(LIBRARY_KEY,text);snapshot!.setItem(related.key,related.text);
-    },[related.key]);
+      if(restorePoint)snapshot!.setItem(restorePoint.key,restorePoint.text);
+    },restorePoint?[related.key,restorePoint.key]:[related.key],restorePoint?{snapshotOnly:[restorePoint.key]}:undefined);
     for(const doc of this.docs)if(file.docs.find(d=>d.id===doc.id)!==doc)this.onRemoved?.(doc.id);
     this.docs=file.docs;this.quarantine=file.quarantine;this.activeId=file.activeId;
     this.rawText=text;this.remember();this.lastError='';this.onSaveState?.(false);

@@ -10,7 +10,7 @@ const context=await browser.newContext({viewport:{width:1440,height:1000}}),erro
 const open=async route=>{const p=await context.newPage();p.on('pageerror',e=>errors.push(e.message));p.on('console',m=>{if(m.type()==='error')errors.push(m.text());});await p.goto(new URL(route,base).href);await p.waitForFunction(()=>window.__WS__?.ready||window.__LAB__?.ready,null,{timeout:60000});assert.match(await p.title(),/KINESIS/);assert.equal(await p.locator('vite-error-overlay').count(),0);return p;};
 const file=p=>p.evaluate(()=>JSON.parse(localStorage.getItem('kinesis-workshop-library')));
 const edit=async(p,label)=>{await p.locator('.ws-keyframe-select').first().click();await p.getByRole('textbox',{name:'关键帧名称',exact:true}).fill(label);};
-const saved=p=>p.getByTestId('save-to-library').click().then(()=>p.getByRole('status').filter({hasText:/已保存「/}).waitFor());
+const saved=p=>p.getByTestId('save-to-library').click().then(()=>p.getByTestId('save-state').filter({hasText:'已保存到本机'}).waitFor());
 const hold=async p=>{await p.evaluate(()=>{window.__qaHolding=false;void navigator.locks.request('kinesis-workshop-library',()=>new Promise(resolve=>{window.__qaHolding=true;window.__qaRelease=resolve;}));});await p.waitForFunction(()=>window.__qaHolding);};
 try{
  const a=await open('/workshop.html');await saved(a);const first=await a.evaluate(()=>window.__WS__.getDoc().id);

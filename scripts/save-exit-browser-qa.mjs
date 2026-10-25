@@ -20,7 +20,9 @@ const edit=async(p,label)=>{await p.locator('.ws-keyframe-select').first().click
 const hold=async p=>{await p.evaluate(()=>{window.__qaHolding=false;void navigator.locks.request('kinesis-workshop-library',()=>new Promise(resolve=>{window.__qaHolding=true;window.__qaRelease=resolve;}));});await p.waitForFunction(()=>window.__qaHolding);};
 const draftLabels=p=>p.evaluate(()=>Object.keys(localStorage).filter(k=>k.startsWith('kinesis-workshop-library:draft:')).flatMap(k=>JSON.parse(localStorage.getItem(k)).docs.flatMap(d=>d.keys.map(k=>k.label))));
 try{
- const holder=await open(context,'/'),workshop=await open(context,'/workshop.html');await saved(workshop);
+ const holder=await open(context,'/'),clean=await open(context,'/workshop.html');await saved(clean);
+ await hold(holder);await clean.getByRole('link',{name:'返回实验室'}).click();await clean.waitForURL(base.href);await ready(clean);await holder.evaluate(()=>window.__qaRelease());
+ const workshop=await open(context,'/workshop.html');await saved(workshop);
  const id=await workshop.evaluate(()=>window.__WS__.getDoc().id);
  await hold(holder);await edit(workshop,'等待后返回');assert((await draftLabels(holder)).includes('等待后返回'));
  assert.notEqual((await file(holder)).docs.find(d=>d.id===id).keys[0].label,'等待后返回');
@@ -56,6 +58,6 @@ try{
  await mobile.getByRole('button',{name:'导出当前动作 JSON'}).waitFor();
  const [backup]=await Promise.all([mobile.waitForEvent('download'),mobile.getByRole('button',{name:'导出当前动作 JSON'}).click()]);assert(JSON.parse(await fs.readFile(await backup.path(),'utf8')).keys.length>0);
  await mobile.getByRole('link',{name:'返回实验室'}).click();await mobile.getByTestId('save-state').filter({hasText:'保存失败'}).waitFor();assert.equal(new URL(mobile.url()).pathname,'/workshop.html');
- await mobile.screenshot({path:out('mobile-save-failure.png')});await unsupported.close();
- assert.deepEqual(errors,[]);console.log(`Save/exit QA passed: lock-blocked navigation with continued editing, native unload warning, forced close and durable recovery/export/copy/reload, unsupported Web Locks visible on phone with JSON backup and blocked navigation. Screenshots: ${output.dir}`);
+ await mobile.locator('#ws-inspector').waitFor({state:'hidden'});await mobile.screenshot({path:out('mobile-save-failure.png')});await unsupported.close();
+ assert.deepEqual(errors,[]);console.log(`Save/exit QA passed: clean navigation bypasses busy lock, lock-blocked navigation with continued editing, native unload warning, forced close and durable recovery/export/copy/reload, unsupported Web Locks visible on phone with JSON backup and blocked navigation. Screenshots: ${output.dir}`);
 }catch(err){for(const [i,p]of browser.contexts().flatMap(c=>c.pages()).entries())await p.screenshot({path:out(`failure-${i}.png`)}).catch(()=>{});throw err;}finally{await context.close();await browser.close();}

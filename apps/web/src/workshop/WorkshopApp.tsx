@@ -622,8 +622,9 @@ export function WorkshopApp({info:rigInfo}:{info:RigInfo}){
   return()=>{window.removeEventListener('storage',sync);window.removeEventListener('beforeunload',unload);window.removeEventListener('pagehide',checkpoint);document.removeEventListener('visibilitychange',hidden);L.onSaveState=undefined;};
  },[]);
  const returnToLab=async()=>{
-  if(leaving)return;setLeaving(true);
-  await L.save();
+  if(leaving)return;L.checkpoint();
+  const state=L.saveState;if(state==='saved'){webPlatform.navigate('/');return;}
+  setLeaving(true);await L.save();
   let pending:Promise<void>;do{pending=L.saved;await pending;}while(pending!==L.saved);
   if(L.saveState!=='saved'){setLeaving(false);return;}
   webPlatform.navigate('/');
@@ -818,7 +819,7 @@ export function WorkshopApp({info:rigInfo}:{info:RigInfo}){
   <header className="ws-header">
    <div className="brand"><Activity size={25} strokeWidth={2}/><span>KINESIS</span><i/><h1>动作工作台</h1><small>姿态优先 · 关键帧 + 约束</small></div>
    <nav><a href="/" className="ws-back" aria-disabled={leaving} onClick={e=>{e.preventDefault();void returnToLab();}}><ArrowLeft size={14}/>返回实验室</a></nav>
-   <div className="ws-save-state" data-testid="save-state" data-state={L.saveState} role="status" aria-live="polite"><span>{L.saveState==='error'?`保存失败：${L.lastError}。请导出备份。`:L.saveState==='saving'?leaving?'保存中 · 完成后返回实验室…':'保存中…':'已保存到本机'}</span>{L.saveState!=='saved'?<button type="button" onClick={()=>exportDoc()}><Download size={12}/>导出当前动作 JSON</button>:null}</div>
+   <div className="ws-save-state" data-testid="save-state" data-state={L.saveState} role="status" aria-live="polite"><span>{L.saveState==='error'?`保存失败：${L.lastError}`:L.saveState==='saving'?leaving?'保存中 · 完成后返回实验室…':'保存中…':'已保存到本机'}</span>{L.saveState!=='saved'?<button type="button" onClick={()=>exportDoc()}><Download size={12}/>导出当前动作 JSON</button>:null}</div>
   </header>
   <Group orientation="horizontal" className="ws-main" id="workshop-panes">
    <Panel id="ws-library" className="ws-library-panel" defaultSize={250} minSize={200} maxSize={420}><aside className="ws-left" aria-label="动作与关键帧">

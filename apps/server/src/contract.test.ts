@@ -121,13 +121,9 @@ describe('motion file envelopes',()=>{
  it('every assets/motions/*.json satisfies its published schema and normalizes',()=>{
   const files=fs.readdirSync(dir).filter(n=>n.endsWith('.json')&&!n.endsWith('.schema.json')).sort();
   expect(files).toEqual([
-   'alejandro-davidovich-fokina-forehand.json','alex-de-minaur-forehand.json','alexander-bublik-forehand.json','alexander-zverev-forehand.json',
    'baseball-throw.json','basic-arms-up.json','basic-forward-fold.json','basic-full-squat.json','basic-half-squat.json',
-   'basic-lunge.json','basic-push-turn.json','basic-weight-shift.json','basic-wide-squat.json','ben-shelton-forehand.json',
-   'carlos-alcaraz-forehand.json','daniil-medvedev-forehand.json',
-   'felix-auger-aliassime-forehand.json','flavio-cobolli-forehand.json','forehand.json','frances-tiafoe-forehand.json',
-   'holger-rune-forehand.json','idle.json','ignacio-buse-forehand.json','jakub-mensik-forehand.json','karen-khachanov-forehand.json',
-   'marin-cilic-forehand.json','novak-djokovic-forehand.json','punch.json','reach.json','ready.json','roger-federer-forehand.json',
+   'basic-lunge.json','basic-push-turn.json','basic-weight-shift.json','basic-wide-squat.json',
+   'forehand.json','idle.json','punch.json','reach.json','ready.json',
    'squat.json','walk.json',
   ]);
   for(const name of files){

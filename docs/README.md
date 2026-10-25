@@ -40,9 +40,7 @@
 
 - 门禁：`npx tsc -b`、`npm test`、`npm run spec:check`、`npm run build`、`npm run docs:check`（CI 的 `full` job 全部执行；Draft PR 只跑 `fast` bounded 检查，矩阵见 [engineering/ci-lifecycle.md](engineering/ci-lifecycle.md)；浏览器 `npm run qa`/`qa:dynamics` 未进 CI）
 - 定向：`npm test -- <test-file>`（低资源 `--maxWorkers=1 --no-file-parallelism`）
-- 测量/工具：`scripts/measure-motions.mts`、`measure-quality-probe.mts`、`generate-motion.mts`、`bench-workshop.mts`、`package-to-glb.mts`、`forehand-study/drive.mjs`、`measure-forehand-depth.mts`——用途见根 `AGENTS.md`「项目验证命令」与 [engineering/test-matrix.md](engineering/test-matrix.md)
-- 视频动作复现与框架边界评估：[reports/forehand-video-retargeting.md](reports/forehand-video-retargeting.md)
-- 正手视频、选定关键帧与独立姿态比较工具：[research/forehand-retargeting/README.md](../research/forehand-retargeting/README.md)
+- 测量/工具：`scripts/measure-motions.mts`、`measure-quality-probe.mts`、`generate-motion.mts`、`bench-workshop.mts`、`package-to-glb.mts`——用途见根 `AGENTS.md`「项目验证命令」与 [engineering/test-matrix.md](engineering/test-matrix.md)
 - 动力学：`npm run dynamics:validate` / `dynamics:test` / `dynamics:new` / `dynamics:build`（需 `.venv-dynamics`，CI 门禁）
 
 ## 已知死链与阻塞项

@@ -615,7 +615,7 @@ describe('motion library',()=>{
  it('creates independent editable copies of every bundled trajectory and preserves solved poses',()=>{
   const store=memStorage(),l=lib(store),previous=serializeDoc(l.active());
   expect(WORKSHOP_PRESETS.map(p=>p.id)).toEqual(MOTION_FILES.filter(p=>p.kind==='workshop-motion').map(p=>p.id));
-  expect(WORKSHOP_PRESETS.some(p=>p.id==='roger-federer-forehand')).toBe(true);
+  expect(WORKSHOP_PRESETS.some(p=>p.id==='forehand')).toBe(true);
   for(const preset of WORKSHOP_PRESETS){
    const original=JSON.stringify(preset),source=preset.document!;
    const copy=l.createFromPreset(preset.id),again=l.createFromPreset(preset.id,'  我的动作  ');

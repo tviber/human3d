@@ -47,16 +47,9 @@
 - `npx tsx scripts/measure-motions.mts` — 内置动作语义峰值测量，阈值校准用（见 `docs/validation.md`）
 - `npx tsx scripts/measure-quality-probe.mts [fps=240] [motion|all]` — 高帧率质量探针；度量共享 `quality-probe.ts`，基线在 `evidence/quality-probe-*.json`
 - `npx tsx scripts/generate-motion.mts [forehand|squat|forehand-detuned|squat-detuned|all]` — 确定性约束轨迹优化器；实现在 `generate.ts`，输出 `evidence/generate-*.json`
-- `npx tsx scripts/generate-player-forehands.mts` — 按各球员参数重生成 17 个球员正手预设；下肢各键深度读 `evidence/forehand-depth.json`（`scripts/lib/forehand-depth.mts` 的 `depthTargets`，生成器与测试共用），后踝守卫只把骨盆后移、不抬高；站姿够不到的键按下限求解，下限记入回执 `evidence/forehand-presets.json` 的 `stanceFloor`；**手臂参考是用户手捏的工作台文档** `scripts/forehand-arm-reference.json`（仅 引拍1/引拍2/击球 三键的手臂是作者姿态，其余键是该文件里注明的旧生成器遗留、不得当参考）。`scripts/lib/forehand-arms.mts` 用生产求解把这三键读成**躯干系系数**（腕方向 + 可达比 + 肘铰链 + 拍轴），再按各球员求解肩位重建，因此不随躯干转角剪切；其余键（准备/延伸/折肘/随挥/恢复）是该模块里声明的设计锚点。需加载 `public/models`；手臂目标不映射 2D 关键点，`scripts/player-forehand-landmarks.json` 只供帧提取与研究比对；MediaPipe 比对工具与模型仅存于 `research/`，不进入 h3d 运行路径
 - `node scripts/workshop-capture.mjs <doc.json> [--times …] [--views front,side,back,threeQuarter]` — 经工作台真实 UI 导入 + `captureStill` 固定相机路径把任意动作文档渲染成 PNG，并逐帧记录求解后的肘角、大臂仰角/方位角、腕目标残差与拍头位置，供视觉判定（`scripts/workshop-capture.mjs`）
-- `npx tsx scripts/measure-forehand-depth.mts [--write] [球员 id…]` — 经 `research/` 姿态工具以 MediaPipe `worldLandmarks`（米、+y 向下）测量 17 位球员正手各阶段髋高于支撑踝的下降，含站立帧单位/方向核对与异常帧标记；`--write` 才更新 `evidence/forehand-depth.json`（生成器下肢深度的唯一来源）。需源视频与系统 Chrome；未进 CI
-- `npm test -- scripts/forehand-depth.test.ts` — 正手下肢深度契约：引拍深度与三维测量 ±1.5 cm；每键深度 ≥ 目标 − 0.05 cm 且 ≤ max(目标, 2.4) + 0.05 cm（守卫不抬骨盆）；站姿下限键按回执 `stanceFloor` 验收（下限须高于目标 > 0.05 cm、≤ 4 cm，求解深度 = 下限 ± 0.05 cm）；双腕随骨盆平移后仍够到目标、后踝 ≤ 20.05°、服务 40/60 Hz 无 422 且根加速度 ≤ 36 m/s²、支撑滑移 ≤ 9 mm；改正手生成器或资产后必跑
-- `npx tsx scripts/forehand-arms.test.ts`（vitest）— 手捏参考的三条守卫：JSON 作者键集合、躯干系数往返重建（腕/肘位移 < 0.1 mm）、重建后落在关节限位内
-- `npx tsx scripts/measure-player-forehands.mts [samples=24] [--json]` — 真实回放路径测量全部持拍动作：肘角是否顶到 145° 钳位、腕目标可达比与残差、腕锥钳位、蒙皮手臂—躯干交叉（`PoseValidityChecker`）；改正手资产或生成器后必跑
 - `npm run qa:pose-validity` / `node scripts/pose-visual-qa.mjs [动作名…]` — 姿态有效性浏览器验收 / 多方位纯渲染截图（需 dev server；未进 CI）
-- `npx tsx scripts/extract-player-forehand-frames.mts` — 需要 ffmpeg；按选定时间点从 `research/forehand-retargeting/videos/` 提取 JPEG 关键帧，保存在研究目录，不进入运行时资产
 - `npm run bench` — workshop 管线性能基线（`--quick` 冒烟 / `--compare` 对比；基线 `evidence/bench-workshop.json`，仅同机可比，GC 趋势需 `NODE_OPTIONS=--expose-gc`）
-- `node scripts/forehand-study/drive.mjs <ops.json> <out.doc.json>` — 工作台真实 UI 写路径回放器（需 dev server :5173）；账本见 `spec/examples/forehand-study.md`
 - `npm run worktree:check -- --source-root <源 checkout> [--worktree-root <worktree>]` — worktree 隔离检查：workspace link 解析、端口冲突、路径边界（不进 CI，任务并行前自跑）
 - `npm run check:affected -- --base <sha> [--head <sha>] [--run]` — affected-check 选择器（PR-11B）：plan-only 出选择回执（轻量快照，`single-collected-boundary-git-visible`），`--run` 顺序执行选中检查并出完整一致性回执；类别映射以 `docs/engineering/test-matrix.md` 为唯一权威（与 `CATEGORY_CHECKS` 有测试钉死）
 

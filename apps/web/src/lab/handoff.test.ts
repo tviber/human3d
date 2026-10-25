@@ -17,7 +17,9 @@ describe('workshopEditability',()=>{
  });
  it('covers every editable motion with a from-parameterized url',()=>{
   const editable=MOTIONS.filter(m=>m.source?.kind==='document');
-  expect(editable.length).toBeGreaterThan(20);
+  // Generic set only: the 17 player presets were ablated (#30/#21) — the guard
+  // still catches a registry that silently shrinks below the generic motions.
+  expect(editable.length).toBeGreaterThan(10);
   for(const m of editable)
    expect(workshopEditability(m)).toEqual({editable:true,url:`/workshop.html?from=${encodeURIComponent(m.id)}`,reason:''});
  });

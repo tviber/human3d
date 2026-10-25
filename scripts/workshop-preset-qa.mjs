@@ -76,7 +76,7 @@ try{
   'preset start control must be visible above the existing motion list on the initial desktop view');
  assert.deepEqual(await select.locator('option').evaluateAll(opts=>opts.map(o=>o.value)),presets.filter(p=>p.kind==='workshop-motion').map(p=>p.id));
  const before=(await read()).doc;
- const preset=presets.find(p=>p.id==='roger-federer-forehand');
+ const preset=presets.find(p=>p.id==='forehand');
  await select.selectOption(preset.id);
  await page.getByRole('textbox',{name:'新动作名称',exact:true}).fill('QA 预设调整');
  await startButton.click();
@@ -191,7 +191,7 @@ try{
  assertRestoredDoc(restored.doc,saved.doc);
  assert(restored.wrist.every((v,i)=>Math.abs(v-saved.wrist[i])<1e-9),'solved pose changed across reload');
  assert.deepEqual(await page.evaluate(async url=>{
-  const {motionFileById}=await import(url);return motionFileById('roger-federer-forehand').document;
+  const {motionFileById}=await import(url);return motionFileById('forehand').document;
  },`/@fs/${path.resolve(repoRoot,'packages/motion-core/src/motion-files.ts')}`),preset.document);
  // The old initial selection was a hard-coded id absent from preset copies:
  // after reload the wrist sliders moved locally without writing any key.

@@ -1,6 +1,7 @@
 import type {FootTarget,PoseParams,V3,WorkshopDoc,WorkshopKey} from '@human3d/motion-core';
 import {ensureKey,nearestKey,sortedKeys,WORKSHOP_LIMITS} from '@human3d/motion-core';
 import type {Vector3} from 'three';
+import type {StorageLock} from '../platform/platform';
 
 /** The user's own quick poses: captured from any authored key with one click,
  * applied at the playhead with another. Persisted under its own localStorage
@@ -13,6 +14,7 @@ export const POSE_LIBRARY_KEY='kinesis-workshop-poses';
 export type StorageLike={getItem(k:string):string|null;setItem(k:string,v:string):void;removeItem?(k:string):void};
 
 const isV3=(v:unknown):v is V3=>!!v&&typeof v==='object'&&['x','y','z'].every(k=>Number.isFinite((v as Record<string,unknown>)[k]));
+const isPreset=(p:unknown):p is UserPosePreset=>!!p&&typeof p==='object'&&typeof (p as UserPosePreset).id==='string'&&typeof (p as UserPosePreset).name==='string'&&isPoseShape((p as UserPosePreset).pose);
 /** A storable pose needs every channel the editor writes; partial captures
  * would silently erase channels on apply. */
 export const isPoseShape=(v:unknown):v is PoseParams=>{
@@ -31,23 +33,55 @@ export class PoseLibrary{
   /** Set when the last save() failed (quota/private mode) — the UI must not
    * claim the pose was persisted when it only lives in memory. */
   lastError='';
-  constructor(private store?:StorageLike|null){}
-  load(){
+  saved:Promise<void>=Promise.resolve();
+  private pending=0;
+  private baseline=new Set<string>();
+  get saveState(){return this.lastError?'error':this.pending?'saving':'saved';}
+  constructor(private store?:StorageLike|null,private lock?:StorageLock){}
+  load({snapshotText}:{snapshotText?:string|null}={}){
     try{
-      const raw=this.store?.getItem(POSE_LIBRARY_KEY)??null;
+      const raw=snapshotText===undefined?this.store?.getItem(POSE_LIBRARY_KEY)??null:snapshotText;
       if(raw){
         const parsed:unknown=JSON.parse(raw);
-        if(Array.isArray(parsed))this.presets=parsed.filter((p):p is UserPosePreset=>
-          !!p&&typeof p==='object'&&typeof (p as UserPosePreset).id==='string'&&typeof (p as UserPosePreset).name==='string'
-          &&isPoseShape((p as UserPosePreset).pose));
+        if(Array.isArray(parsed))this.presets=parsed.filter(isPreset);
       }
     }catch{this.presets=[];}
+    this.baseline=new Set(this.presets.map(p=>p.id));
     return this;
   }
   save(){
-    if(!this.store)return;
-    try{this.store.setItem(POSE_LIBRARY_KEY,JSON.stringify(this.presets));this.lastError='';}
-    catch(err){this.lastError=err instanceof Error?err.message:String(err);}
+    if(!this.store){this.lastError='浏览器存储不可用，请导出备份';return this.saved;}
+    const text=JSON.stringify(this.presets);
+    if(this.lock){
+      let committed:UserPosePreset[]=[];
+      this.pending++;
+      this.saved=this.saved.then(()=>this.lock!(POSE_LIBRARY_KEY,snapshot=>{
+        const raw=snapshot!.getItem(POSE_LIBRARY_KEY),parsed:unknown=raw===null?[]:JSON.parse(raw);
+        if(!Array.isArray(parsed)||parsed.some(p=>!isPreset(p)))throw new Error('其他页面的自建姿态已损坏，未覆盖原数据');
+        const remote=parsed as UserPosePreset[],local=JSON.parse(text) as UserPosePreset[];
+        const localIds=new Set(local.map(p=>p.id)),remoteById=new Map(remote.map(p=>[p.id,p] as const));
+        committed=remote.filter(p=>!this.baseline.has(p.id)||localIds.has(p.id)).map(p=>structuredClone(p));
+        const ids=new Set(committed.map(p=>p.id));
+        for(const pose of local){
+          const current=remoteById.get(pose.id);
+          if(this.baseline.has(pose.id)&&!current)continue;
+          if(!ids.has(pose.id)){committed.push(structuredClone(pose));ids.add(pose.id);}
+          else if(!this.baseline.has(pose.id)&&current&&JSON.stringify(current)!==JSON.stringify(pose)){
+            const copy=structuredClone(pose);let id=`${pose.id}-copy`,suffix=2;while(ids.has(id))id=`${pose.id}-copy-${suffix++}`;copy.id=id;
+            committed.push(copy);ids.add(id);
+          }
+        }
+        snapshot!.setItem(POSE_LIBRARY_KEY,JSON.stringify(committed));
+      })).then(()=>{
+        this.baseline=new Set(committed.map(p=>p.id));
+        if(this.pending===1)this.presets=committed;
+        this.lastError='';
+      }).catch(err=>{this.lastError=err instanceof Error?err.message:String(err);}).finally(()=>{this.pending--;});
+    }else{
+      try{this.store.setItem(POSE_LIBRARY_KEY,text);this.baseline=new Set(this.presets.map(p=>p.id));this.lastError='';}
+      catch(err){this.lastError=err instanceof Error?err.message:String(err);}
+    }
+    return this.saved;
   }
   /** Capture a pose under a unique name; returns the new preset. */
   add(name:string,pose:PoseParams):UserPosePreset{

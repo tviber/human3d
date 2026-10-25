@@ -63,11 +63,11 @@ npm test                  # 人体网格、IK、骨架、手部抓握与动画�
 npm run spec:check        # 契约：Ajv 严格编译、OpenAPI 与服务一致、golden 样例
 npm run dynamics:validate # 需要先激活 .venv-dynamics
 npm run dynamics:test     # 校验导出的物理记录与参数哈希
-npm run qa                # Playwright 浏览器交互、截图和视频
+npm run qa                # Playwright 浏览器交互与截图；重型模式另录视频并运行动作优化
 npm run qa:dynamics       # 肌骨投掷阶段截图、握拳特写与实时投掷录屏
 ```
 
-浏览器验收使用 Playwright；独立 Browser 技能未提供，应用另在本机 WebView 做了交互检查。截图和真实 WebGL 录屏保存在 `evidence/`；结构化结果见 `evidence/browser-results.json` 与 `evidence/dynamics-results.json`。验收只表明指定视口 / 模型记录符合数值和视觉检查，不代表临床或运动员验证。
+浏览器验收使用 Playwright；独立 Browser 技能未提供，应用另在本机 WebView 做了交互检查。截图和结构化结果保存在 `evidence/`；真实 WebGL 录屏及动作优化验收使用 `HUMAN3D_QA_HEAVY=1 npm run qa` 显式启用。验收只表明指定视口 / 模型记录符合数值和视觉检查，不代表临床或运动员验证。
 
 ## 项目结构
 

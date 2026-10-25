@@ -1,4 +1,5 @@
 import {chromium} from 'playwright';
+import {launchQaBrowser} from './lib/qa-browser.mjs';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {resolveOutputDir,assertTrackedWriteAllowed,atomicWriteFile,ensureOutputDir} from './lib/qa-output.mjs';
@@ -46,7 +47,7 @@ const outputFile=name=>assertTrackedWriteAllowed(path.join(output.dir,name),{roo
 const webBase=new URL(process.env.QA_WEB_URL??`http://127.0.0.1:${process.env.HUMAN3D_WEB_PORT??5173}/`);
 const identity=await verifyWebIdentity(repoRoot,webBase);
 assert(identity.ok,`dev server does not serve this checkout: ${identity.detail}`);
-const browser=await chromium.launch({headless:true,...(process.env.QA_BROWSER_CHANNEL?{channel:process.env.QA_BROWSER_CHANNEL}:{})});
+const browser=await launchQaBrowser(chromium,{...(process.env.QA_BROWSER_CHANNEL?{channel:process.env.QA_BROWSER_CHANNEL}:{})});
 try{
  const page=await browser.newPage({viewport:{width:1536,height:1024},deviceScaleFactor:1});
  const errors=[],warnings=[];
@@ -69,14 +70,18 @@ try{
   const {MOTION_FILES}=await import(url);
   return MOTION_FILES.map(p=>({id:p.id,name:p.name,kind:p.kind,document:p.document}));
  },`/@fs/${path.resolve(repoRoot,'packages/motion-core/src/motion-files.ts')}`);
+ // Issue #30 PR-B: user motions lead the panel; the preset entry lives in a
+ // collapsed fold below it and opens on demand.
+ const presetFold=page.locator('[data-fold="preset"]');
+ await presetFold.evaluate(el=>{el.open=true;});
  const select=page.getByRole('combobox',{name:'初始动作预设'});
  const startButton=page.getByRole('button',{name:'从预设开始',exact:true});
  const presetBox=await startButton.boundingBox(),firstMotionBox=await page.locator('.ws-lib-row').first().boundingBox();
- assert(presetBox&&firstMotionBox&&presetBox.y<firstMotionBox.y&&presetBox.y<1024,
-  'preset start control must be visible above the existing motion list on the initial desktop view');
+ assert(presetBox&&firstMotionBox&&presetBox.y>firstMotionBox.y,
+  'preset start fold must sit below the user motion list (user data first)');
  assert.deepEqual(await select.locator('option').evaluateAll(opts=>opts.map(o=>o.value)),presets.filter(p=>p.kind==='workshop-motion').map(p=>p.id));
  const before=(await read()).doc;
- const preset=presets.find(p=>p.id==='roger-federer-forehand');
+ const preset=presets.find(p=>p.id==='forehand');
  await select.selectOption(preset.id);
  await page.getByRole('textbox',{name:'新动作名称',exact:true}).fill('QA 预设调整');
  await startButton.click();
@@ -191,7 +196,7 @@ try{
  assertRestoredDoc(restored.doc,saved.doc);
  assert(restored.wrist.every((v,i)=>Math.abs(v-saved.wrist[i])<1e-9),'solved pose changed across reload');
  assert.deepEqual(await page.evaluate(async url=>{
-  const {motionFileById}=await import(url);return motionFileById('roger-federer-forehand').document;
+  const {motionFileById}=await import(url);return motionFileById('forehand').document;
  },`/@fs/${path.resolve(repoRoot,'packages/motion-core/src/motion-files.ts')}`),preset.document);
  // The old initial selection was a hard-coded id absent from preset copies:
  // after reload the wrist sliders moved locally without writing any key.

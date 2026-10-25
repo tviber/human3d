@@ -25,7 +25,7 @@
 
 分界来自解剖网格，跨模型对应仍是近似，不能视为 MakeHuman 人体的解剖标定；不显示真实肌肉激活或独立肌肉体积。鼠标悬停预览浅橙红高亮，点击或触摸轻点固定选择，空白处轻点或关闭按钮清除；旋转拖动、多指、取消手势与编辑手柄不触发选择。选择不写动作、撤销或持久化；静帧与拼图导出抑制交互高亮并恢复原选择。
 
-资产构建：`python3 scripts/build-anatomy-surface.py`（依赖 `scripts/requirements-anatomy.txt`，可直接处理当前 GLB）；`--check` 校验 GLB、遮罩和区域清单可重现。`scripts/build-human.py` 在 Blender 基础资产生成后自动执行该步骤。交互验收：启动 dev server 后运行 `QA_BROWSER_CHANNEL=chrome node scripts/anatomy-browser-qa.mjs --out-dir /tmp/human3d-anatomy-qa`；该脚本验证真实指针与模拟触摸，不代表真机结果。
+资产构建：`python3 scripts/build-anatomy-surface.py`（依赖 `scripts/requirements-anatomy.txt`，可直接处理当前 GLB）；`--check` 校验 GLB、遮罩和区域清单可重现。`scripts/build-human.py` 在 Blender 基础资产生成后自动执行该步骤。交互验收：启动 dev server 后运行 `sh scripts/check-process-limit.sh && QA_BROWSER_CHANNEL=chrome node scripts/anatomy-browser-qa.mjs --out-dir /tmp/human3d-anatomy-qa`；该脚本验证真实指针与模拟触摸，不代表真机结果。
 
 ## 关节活动范围
 

@@ -4,7 +4,7 @@ import {useMediaMatches} from '../lib/use-media';
 import {useEffect,useRef,useState} from 'react';
 import {Vector3} from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
-import {Group,Panel,Separator} from 'react-resizable-panels';
+import {Group,Panel,Separator,type PanelImperativeHandle,type GroupImperativeHandle} from 'react-resizable-panels';
 import {Activity,ArrowDown,ArrowLeft,ArrowUp,Camera,Check,ChevronLeft,ChevronRight,ClipboardCopy,Copy,Download,Eye,FileBox,Film,FlipHorizontal2,Hand,LayoutGrid,ListVideo,MessageSquareWarning,Package,Pause,Play,Plus,Redo2,RotateCcw,Save,SlidersHorizontal,Sparkles,Trash2,Undo2,Upload,Video,X} from 'lucide-react';
 import {LibraryList} from './chrome';
 import {useWorkshopUi} from './ui-store';
@@ -12,12 +12,13 @@ import {WorkshopEngine} from './engine';
 import type {WorkshopFrame} from './engine';
 import type {HandFrame,KeyInterpolation,WorkshopDoc,WorkshopKey,V3} from '@human3d/motion-core';
 import {blankDocument,contactStartKey,defaultDocument,ensureKey,isReleaseKey,keyAt,loopBlockers,mirrorDoc,mirrorKey,nearestKey,newDocId,normalizeDoc,parseDoc,retimeKeys,serializeDoc,sortedKeys} from '@human3d/motion-core';
-import {BASIC_PRESETS,LIBRARY_KEY,MotionLibrary,OTHER_PRESETS,RACKET_PRESETS,WORKSHOP_PRESETS} from './library';
+import {BASIC_PRESETS,LIBRARY_KEY,MotionLibrary,OTHER_PRESETS,RACKET_PRESETS,WORKSHOP_PRESETS,type QuarantineEntry} from './library';
 import {clearLabHandoff,handoffConsumedByCreate,handoffHasCard,resolveLabHandoff} from './lab-handoff';
 import type {LabHandoff} from './lab-handoff';
 import {combineMotions} from './combine-motions';
 import {basicInsertRefusal,insertBasicAction,type BasicInsertion} from './basic-actions';
-import {applyPoseAt,PoseLibrary,stampPoseIntoKey,type PoseApplyReport,type PoseStampReport,type UserPosePreset} from './pose-library';
+import {applyPoseAt,isPoseShape,PoseLibrary,POSE_LIBRARY_KEY,stampPoseIntoKey,type PoseApplyReport,type PoseStampReport,type UserPosePreset} from './pose-library';
+import {MAX_BACKUP_BYTES,RESTORE_POINT_KEY,backupText,mergeBackup,parseBackup,replaceLibrary,type ParsedBackup} from './library-backup';
 import {HistoryBook,RecordGate} from './history';
 import {SemanticPanel,type SemanticHost} from './semantic-panel';
 import {copyKeyframe,keyframeInsertSlot,keyframeTimeProblem,moveKeyframe,removeKeyframe} from './keyframes';
@@ -137,7 +138,7 @@ function Timeline({doc,time,selected,retime,onSelect,onSeek,onRetime,onBeginReti
   <div className="ws-track-labels">{sortedKeys(doc).map(k=><button key={k.id} className={k.id===selected?'sel':''} title={`${k.label||'关键帧'} · ${k.time.toFixed(3)}s`} style={{left:`${k.time/doc.duration*100}%`}} onClick={()=>{onSelect(k.id);onSeek(k.time);}}>{k.label||fmt(k.time)}</button>)}</div>
  </div>;
 }
-export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:RigInfo;initialLibrary?:string|null;storageError?:string}){
+export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRestorePoint,storageError}:{info:RigInfo;initialLibrary?:string|null;initialPoses?:string|null;initialRestorePoint?:string|null;storageError?:string}){
  const mount=useRef<HTMLDivElement>(null),engine=useRef<WorkshopEngine|null>(null),video=useRef<HTMLVideoElement>(null),fileRef=useRef<HTMLInputElement>(null),importRef=useRef<HTMLInputElement>(null);
  const lib=useRef<MotionLibrary|null>(null);
  const syncLibrary=useRef<(force?:boolean)=>void>(()=>{});
@@ -149,7 +150,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   const id=new URLSearchParams(globalThis.location?.search??'').get('doc');
   if(id&&lib.current.docs.some(d=>d.id===id))lib.current.select(id);
  }
- if(!poseLib.current)poseLib.current=new PoseLibrary(webPlatform.storage).load();
+ if(!poseLib.current)poseLib.current=new PoseLibrary(webPlatform.storage,webPlatform.storageLock).load({snapshotText:initialPoses});
  const [,bump]=useState(0);
  const [leaving,setLeaving]=useState(false);
  const selected=useWorkshopUi(s=>s.selected),setSelected=useWorkshopUi(s=>s.setSelected);
@@ -164,7 +165,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
  const [combineKind,setCombineKind]=useState<'append'|'blend'>('append');
  const [combineTransition,setCombineTransition]=useState(.3),[combineWeight,setCombineWeight]=useState(50),[combineName,setCombineName]=useState('');
  const [basicId,setBasicId]=useState(()=>BASIC_PRESETS[0]?.id??'');
- const [adjustmentTab,setAdjustmentTab]=useState<'left'|'right'|'common'|'semantic'>(()=>globalThis.matchMedia?.(COMPACT_QUERY).matches?'semantic':'common');
+ const [adjustmentTab,setAdjustmentTab]=useState<'left'|'right'|'common'|'semantic'>('semantic');
  const [info,setInfo]=useState<RigInfo|null>(null),[error,setError]=useState('');
  const [frame,setFrame]=useState<WorkshopFrame>({time:0,duration:.8,playing:true,label:''});
  const [view,setView]=useState<ViewId>('threeQuarter');
@@ -177,6 +178,18 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
  const [exportFps,setExportFps]=useState(40);
  const [exporting,setExporting]=useState(false);
  const [pkgProblems,setPkgProblems]=useState<{doc:string;items:string[]}|null>(null);
+ // Whole-library backup/restore (issue #30 PR-C): the preview card holds a
+ // fully validated backup until the user picks merge or replace.
+ const [restorePreview,setRestorePreview]=useState<Extract<ParsedBackup,{ok:true}>|null>(null);
+ const backupRef=useRef<HTMLInputElement>(null);
+ const [restoring,setRestoring]=useState(false);const restoreBusy=useRef(false);
+ // Replace is two-step: the snapshot download arms it, the user's explicit
+ // acknowledgement that the file is saved enables the final confirmation.
+ const [replaceArmed,setReplaceArmed]=useState<string|null>(null),[replaceAck,setReplaceAck]=useState(false);
+ const [restorePoint,setRestorePoint]=useState<{savedAt:string;docs:number;poses:number}|null>(()=>{
+  const point=initialRestorePoint?parseBackup(initialRestorePoint):null;
+  return point?.ok?{savedAt:point.file.exportedAt,docs:point.docs.length,poses:point.poses.length}:null;
+ });
  const [generationBusy,setGenerationBusy]=useState(false),[generationProgress,setGenerationProgress]=useState<GenerationProgress|null>(null);
  const [generationError,setGenerationError]=useState('');
  const [candidateSession,setCandidateSession]=useState<CandidateSession|null>(null);
@@ -189,11 +202,15 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
  const subtleOk=typeof globalThis.crypto?.subtle?.digest==='function';
  // Session-only display toggles (never persisted) — same convention as the
  // engine's WorkshopOptions defaults.
- const [opts,setOpts]=useState({handles:true,trajectories:true,balance:true,onion:false,onionCount:2,onionMode:'keys' as 'keys'|'step',onionStep:.1});
+ const [opts,setOpts]=useState({handles:true,trajectories:false,balance:false,onion:false,onionCount:2,onionMode:'keys' as 'keys'|'step',onionStep:.1});
+ const [optsOpen,setOptsOpen]=useState(false);
  // Issue #23: phone layout = viewport + bottom sheets; Review mode blocks every
  // viewport write. Same query as the CSS breakpoint in workshop.css.
  const compact=useMedia(COMPACT_QUERY);
- const [mode,setMode]=useState<'review'|'edit'>(()=>globalThis.matchMedia?.(COMPACT_QUERY).matches?'review':'edit');
+ const [mode,setMode]=useState<'review'|'edit'>('review');
+ const panelGroup=useRef<GroupImperativeHandle|null>(null);
+ const libraryPanel=useRef<PanelImperativeHandle|null>(null),inspectorPanel=useRef<PanelImperativeHandle|null>(null);
+ const [libraryOpen,setLibraryOpen]=useState(false),[inspectorOpen,setInspectorOpen]=useState(false);
  const [sheet,setSheet]=useState<'left'|'right'|null>(null);
  const [refLarge,setRefLarge]=useState(false);
  const [notes,setNotes]=useState<ReviewNote[]>([]);
@@ -204,7 +221,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   try{
    e=new WorkshopEngine(mount.current,()=>generationPreview.current??lib.current!.active());engine.current=e;
    e.onReady=setInfo;
-   e.setEditable(!globalThis.matchMedia?.(COMPACT_QUERY).matches);
+   e.setEditable(false);e.setOptions({trajectories:false,balance:false});
    e.onError=err=>setError(err.message);
    e.onFrame=setFrame;
    e.onSelectKey=setSelected;
@@ -212,10 +229,10 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
    // Persist drags throttled while moving and unconditionally at drag end;
    // before this, a pose edit could be lost if the page closed before the
    // next explicit save.
-   e.onDocChanged=()=>{lib.current!.checkpoint();const now=performance.now();if(now-lastDragSave>500){lastDragSave=now;lib.current!.save();}bump(v=>v+1);};
-   e.onEditEnd=()=>{lib.current!.save();bump(v=>v+1);};
+   e.onDocChanged=()=>{if(restoreBusy.current)return;lib.current!.checkpoint();const now=performance.now();if(now-lastDragSave>500){lastDragSave=now;lib.current!.save();}bump(v=>v+1);};
+   e.onEditEnd=()=>{if(!restoreBusy.current){lib.current!.save();bump(v=>v+1);}};
    e.onBeginEdit=(time,prefer)=>{
-    if(generationLocked.current)return null;
+    if(generationLocked.current||restoreBusy.current)return null;
     const d=lib.current!.active();
     // Snapshot before any key is inserted, so one drag is one undo step.
     books.current.of(d.id).record(d);gate.current.touch(d.id,performance.now());
@@ -259,7 +276,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
  /** Snapshot before an edit. Edits within 600 ms on the SAME document (a slider
   * drag) share one undo step; another document or a gap always starts a new one. */
  const recordBefore=(doc:WorkshopDoc)=>{if(gate.current.should(doc.id,performance.now()))books.current.of(doc.id).record(doc);};
- const edit=(fn:(d:WorkshopDoc)=>void)=>{if(generationLocked.current)return;recordBefore(L.active());fn(L.active());L.save();engine.current?.setPlaying(false);engine.current?.markDirty();bump(v=>v+1);};
+ const edit=(fn:(d:WorkshopDoc)=>void)=>{if(generationLocked.current||restoreBusy.current||review)return;recordBefore(L.active());fn(L.active());L.save();engine.current?.setPlaying(false);engine.current?.markDirty();bump(v=>v+1);};
  /** Write a history-restored document back under its own id. Returns false
   * when that id no longer exists in the library (deleted meanwhile). */
  const applyDoc=(next:WorkshopDoc)=>{const i=L.docs.findIndex(x=>x.id===next.id);if(i<0)return false;L.docs[i]=next;L.save();gate.current.reset();wristEpoch.current++;const e=engine.current;e?.setPlaying(false);e?.markDirty();e?.seek(Math.min(frame.time,next.duration));if(!keyAt(next,selected))setSelected(sortedKeys(next)[0]?.id??'');bump(v=>v+1);return true;};
@@ -278,7 +295,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   * that no longer names a library document is skipped WITH a hint —
   * silently consuming it would look like undo doing nothing. */
  const undo=()=>{
-  if(generationLocked.current)return;
+  if(generationLocked.current||restoreBusy.current||review)return;
   const cur=L.active(),prev=books.current.of(cur.id).undo(cur);
   if(!prev)return;
   if(prev.id!==cur.id){
@@ -288,7 +305,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   applyDoc(prev);
  };
  const redo=()=>{
-  if(generationLocked.current)return;
+  if(generationLocked.current||restoreBusy.current||review)return;
   const cur=L.active(),next=books.current.of(cur.id).redo(cur);
   if(!next)return;
   if(next.id!==cur.id){
@@ -361,18 +378,18 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   generationPreview.current=side==='candidate'?candidateSession.candidate.doc:candidateSession.source;
   setPreviewSide(side);engine.current?.setPlaying(false);engine.current?.markDirty();
  };
- const selectDoc=(id:string)=>{if(generationLocked.current)return;const doc=L.select(id);setSelected(sortedKeys(doc)[0].id);engine.current?.seek(0);engine.current?.setPlaying(false);engine.current?.markDirty();bump(v=>v+1);};
- const createDoc=()=>{if(generationLocked.current)return;const doc=L.create(newName);setNewName('');setSelected(sortedKeys(doc)[0].id);engine.current?.seek(0);engine.current?.markDirty();bump(v=>v+1);};
- const duplicateDoc=(id:string)=>{if(generationLocked.current)return;const doc=L.duplicate(id);if(doc)selectDoc(doc.id);};
+ const selectDoc=(id:string)=>{if(generationLocked.current||restoreBusy.current)return;const doc=L.select(id);setSelected(sortedKeys(doc)[0].id);engine.current?.seek(0);engine.current?.setPlaying(false);engine.current?.markDirty();bump(v=>v+1);};
+ const createDoc=()=>{if(generationLocked.current||restoreBusy.current)return;switchMode('edit');const doc=L.create(newName);setNewName('');setSelected(sortedKeys(doc)[0].id);engine.current?.seek(0);engine.current?.markDirty();bump(v=>v+1);};
+ const duplicateDoc=(id:string)=>{if(generationLocked.current||restoreBusy.current)return;switchMode('edit');const doc=L.duplicate(id);if(doc)selectDoc(doc.id);};
  const saveToLibrary=async()=>{
-  if(generationLocked.current)return;
+  if(generationLocked.current||restoreBusy.current)return;
   if(!webPlatform.storage){setError('浏览器存储不可用，动作尚未保存，请导出 JSON 备份。');return;}
   await L.save();bump(v=>v+1);
   if(L.lastError){setError(`保存失败：${L.lastError}。请导出 JSON 备份。`);return;}
   setError('');setHint(`已保存「${L.active().name}」，返回实验室即可在动作库中播放或删除。`);
  };
  const saveCombined=async()=>{
-  if(generationLocked.current)return;
+  if(generationLocked.current||restoreBusy.current)return;
   const e=engine.current;if(!e?.ready){setHint('请等待模型加载完成。');return;}
   const target=combineTarget.startsWith('local:')?L.docs.find(doc=>doc.id===combineTarget.slice(6)):WORKSHOP_PRESETS.find(p=>`preset:${p.id}`===combineTarget)?.document;
   if(!target){setHint('请选择要组合的动作。');return;}
@@ -386,13 +403,144 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
    setError('');setHint(`已${combineKind==='append'?'拼接':'混合'}并保存「${added.name}」，可在动作库播放；两份源动作已保留。`);
   }catch(err){setHint(err instanceof Error?err.message:String(err));}
  };
+ // Whole-library backup / restore. Export snapshots the CURRENT in-memory
+ // state (never storage); restore validates and previews before anything is
+ // written, replace always downloads a snapshot of the present data first.
+ const exportBackup=()=>{
+  download(`h3d-backup-${new Date().toISOString().slice(0,10)}.json`,new Blob([backupText(L.docs,L.quarantine,L.activeId,poseLib.current!.presets)],{type:'application/json'}));
+  setHint(`已导出整库备份（${L.docs.length} 个动作 · ${poseLib.current!.presets.length} 个姿态 · ${L.quarantine.length} 条可恢复数据）。`);
+ };
+ const chooseRestore=async(f:File)=>{
+  setRestorePreview(null);setReplaceArmed(null);setReplaceAck(false);
+  try{
+   if(f.size>MAX_BACKUP_BYTES){setError('备份文件过大（上限 64 MB），请确认选择了正确的备份。');return;}
+   const parsed=parseBackup(await f.text(),f.size);
+   if(!parsed.ok){setError(`无法恢复备份：${parsed.error}`);return;}
+   if(!parsed.docs.length&&!parsed.poses.length&&!parsed.file.library.quarantine.length&&!parsed.invalidDocs.length){setError('这份备份里没有可恢复的内容。');return;}
+   setError('');setRestorePreview(parsed);
+  }catch(err){setError(`无法读取备份：${err instanceof Error?err.message:String(err)}`);}
+ };
+ const finishRestore=(report:{docsAdded:number;posesAdded:number;conflicts:string[];invalidDocs:{name:string;reason:string}[]},mode:'merge'|'replace')=>{
+  const parts=[`${mode==='merge'?'已合并':'已替换'} ${report.docsAdded} 个动作、${report.posesAdded} 个自建姿态`];
+  if(report.conflicts.length)parts.push(`冲突处理：${report.conflicts.join('；')}`);
+  if(report.invalidDocs.length)parts.push(`${report.invalidDocs.length} 条无法识别的动作已隔离，可导出修复`);
+  setRestorePreview(null);bump(v=>v+1);
+  if(L.lastError){setError(`恢复已在当前页面生效，但保存失败：${L.lastError}。请立即导出 JSON 备份，刷新会丢失。`);return;}
+  if(poseLib.current!.lastError){setError(`动作已恢复，但姿态保存失败：${poseLib.current!.lastError}。`);return;}
+  setError('');setHint(`${parts.join('；')}。`);
+ };
+ const cancelRestore=()=>{setRestorePreview(null);setReplaceArmed(null);setReplaceAck(false);};
+ // Step 1 of replace: download the current data and require the user to
+ // acknowledge that file. A download call returning is not proof the file
+ // reached disk, so the replace itself also commits an in-browser restore
+ // point in the same transaction (see restoreBackup).
+ const armReplace=()=>{
+  if(!restorePreview||restoreBusy.current)return;
+  const name=`h3d-library-before-replace-${new Date().toISOString().replace(/[:.]/g,'-')}.json`;
+  download(name,new Blob([backupText(L.docs,L.quarantine,L.activeId,poseLib.current!.presets)],{type:'application/json'}));
+  setReplaceArmed(name);setReplaceAck(false);
+ };
+ // Built INSIDE the replace's write lock from the canonical snapshot, so a save
+ // from another tab that this page has not synced yet is still captured. Both
+ // stores are re-parsed: unreadable documents, quarantine entries and a broken
+ // pose list stay recoverable instead of being dropped from the restore point.
+ const buildRestorePoint=(latest:{libraryText:string|null;relatedText:string|null})=>{
+  const snapshotLib=new MotionLibrary(new Map()).load({readOnly:true,snapshotText:latest.libraryText});
+  const quarantine=structuredClone(snapshotLib.quarantine);
+  let poses:UserPosePreset[]=[];
+  try{
+   const parsed:unknown=JSON.parse(latest.relatedText??'[]');
+   if(!Array.isArray(parsed))throw new Error('不是数组');
+   const valid=parsed.filter((p):p is UserPosePreset=>!!p&&typeof p==='object'&&typeof (p as UserPosePreset).id==='string'&&typeof (p as UserPosePreset).name==='string'&&isPoseShape((p as UserPosePreset).pose));
+   if(valid.length!==parsed.length)throw new Error(`${parsed.length-valid.length} 个条目格式不完整`);
+   poses=valid;
+  }catch(err){
+   quarantine.push({id:'poses-file',name:'自建姿态文件',reason:`替换时的自建姿态无法读取，已保留原文：${err instanceof Error?err.message:String(err)}`,raw:latest.relatedText});
+  }
+  return backupText(snapshotLib.docs,quarantine,snapshotLib.activeId,poses);
+ };
+ const applyLibrary=(next:{schemaVersion:2;docs:WorkshopDoc[];quarantine:QuarantineEntry[];activeId:string},poses:UserPosePreset[],restorePoint?:{build:(latest:{libraryText:string|null;relatedText:string|null})=>string},concurrent:'abort'|'capture'='abort')=>
+  L.restore(next,{key:POSE_LIBRARY_KEY,text:JSON.stringify(poses),previous:JSON.stringify(poseLib.current!.presets)},restorePoint?{key:RESTORE_POINT_KEY,build:restorePoint.build}:undefined,{concurrent}).then(result=>{
+   poseLib.current!.load({snapshotText:JSON.stringify(poses)});
+   gate.current.reset();wristEpoch.current++;
+   setSelected(sortedKeys(L.active())[0].id);engine.current?.seek(0);engine.current?.markDirty();
+   return result;
+  });
+ const withRestoreLock=async(run:()=>Promise<void>,failure:string)=>{
+  restoreBusy.current=true;setRestoring(true);engine.current?.setEditable(false);engine.current?.setPlaying(false);
+  try{
+   await L.saved;await poseLib.current!.saved;
+   if(poseLib.current!.lastError)throw new Error(`当前姿态尚未保存：${poseLib.current!.lastError}`);
+   await run();
+  }catch(err){setError(`${failure}：${err instanceof Error?err.message:String(err)}`);}
+  finally{restoreBusy.current=false;setRestoring(false);engine.current?.setEditable(!review);}
+ };
+ const restoreBackup=async(mode:'merge'|'replace')=>{
+  if(!restorePreview||generationLocked.current||restoreBusy.current||leaving)return;
+  if(mode==='replace'&&(!replaceArmed||!replaceAck))return;
+  const preview=restorePreview;
+  await withRestoreLock(async()=>{
+   const next={schemaVersion:2 as const,docs:[...L.docs],quarantine:structuredClone(L.quarantine),activeId:L.activeId};
+   const poses=structuredClone(poseLib.current!.presets);
+   const report=mode==='merge'?mergeBackup(next,poses,preview):replaceLibrary(next,poses,preview);
+   if(!next.docs.length){const doc=blankDocument(new Map(rigInfo.bones.map(b=>[b.name,new Vector3().fromArray(b.head)])),'新动作',newDocId('新动作'));next.docs=[doc];next.activeId=doc.id;}
+   // A replace takes its content from the file alone, so an unseen save from
+   // another tab must not abort it — it is captured in the restore point
+   // instead. A merge is built from this page's data and still aborts.
+   const result=await applyLibrary(next,poses,mode==='replace'?{build:buildRestorePoint}:undefined,mode==='replace'?'capture':'abort');
+   if(mode==='replace'){
+    const stored=await webPlatform.readStorage(RESTORE_POINT_KEY);
+    const point=stored&&stored===result.restorePointText?parseBackup(stored):null;
+    setRestorePoint(point?.ok?{savedAt:point.file.exportedAt,docs:point.docs.length,poses:point.poses.length}:null);
+    if(!point?.ok){setReplaceArmed(null);setReplaceAck(false);finishRestore(report,mode);setError('替换已完成，但浏览器内恢复点校验失败；请使用替换前下载的 JSON 快照恢复。');return;}
+   }
+   setReplaceArmed(null);setReplaceAck(false);finishRestore(report,mode);
+   if(mode==='replace'&&result.capturedConcurrent)setHint('已替换；其他页面刚保存的修改与替换前数据一并保存在恢复点，可「撤销替换」找回。');
+  },'恢复未完成，原数据已保留');
+ };
+ const undoReplace=async()=>{
+  if(!restorePoint||generationLocked.current||restoreBusy.current||leaving)return;
+  if(!webPlatform.confirm('撤销替换会把动作库与自建姿态恢复为替换前的状态；当前动作若与恢复点不同，会移入隔离区，可恢复为副本。确定撤销？'))return;
+  await withRestoreLock(async()=>{
+   const stored=await webPlatform.readStorage(RESTORE_POINT_KEY);
+   const point=stored?parseBackup(stored):null;
+   if(!point?.ok)throw new Error('浏览器内恢复点不可用，请使用替换前下载的 JSON 快照');
+   const lib=point.file.library;
+   // Undo must not destroy what the replace brought in or what was edited
+   // since: anything not already in the restore point stays recoverable.
+   const kept=new Set(point.docs.map(doc=>JSON.stringify(doc)));
+   const quarantine=structuredClone(lib.quarantine),seen=new Set(quarantine.map(q=>JSON.stringify(q)));
+   const keep=(q:QuarantineEntry)=>{const text=JSON.stringify(q);if(!seen.has(text)){seen.add(text);quarantine.push(q);}};
+   for(const q of L.quarantine)keep(structuredClone(q));
+   for(const doc of L.docs)if(!kept.has(JSON.stringify(doc)))keep({id:doc.id,name:doc.name,reason:'撤销替换时的当前动作：可恢复为副本或导出 JSON',raw:structuredClone(doc)});
+   const next={schemaVersion:2 as const,docs:point.docs,quarantine,activeId:point.docs.some(d=>d.id===lib.activeId)?lib.activeId:point.docs[0]?.id??''};
+   if(!next.docs.length){const doc=blankDocument(new Map(rigInfo.bones.map(b=>[b.name,new Vector3().fromArray(b.head)])),'新动作',newDocId('新动作'));next.docs=[doc];next.activeId=doc.id;}
+   // Poses have no quarantine: current poses absent from the point are kept.
+   const poses=structuredClone(point.poses),poseIds=new Set(poses.map(p=>p.id)),poseTexts=new Set(poses.map(p=>JSON.stringify(p)));
+   for(const pose of poseLib.current!.presets){
+    if(poseTexts.has(JSON.stringify(pose)))continue;
+    const copy=structuredClone(pose);let suffix=2;while(poseIds.has(copy.id))copy.id=`${pose.id}-copy-${suffix++}`;
+    poseIds.add(copy.id);poses.push(copy);
+   }
+   // Clearing the point is part of the same commit: an undone restore must not
+   // leave an undo offer behind. An empty restore point already means "none"
+   // for every reader, so this writes ''. 
+   await applyLibrary(next,poses,{build:()=>''});
+   setRestorePoint(null);bump(v=>v+1);
+   if(L.lastError){setError(`撤销已在当前页面生效，但保存失败：${L.lastError}。请立即导出 JSON 备份。`);return;}
+   setError('');setHint(`已撤销替换：恢复 ${next.docs.length} 个动作、${poses.length} 个自建姿态；替换后的动作已移入隔离区。`);
+  },'撤销未完成，当前数据已保留');
+ };
+ const restoreMerge=()=>void restoreBackup('merge');
+ const restoreReplace=()=>void restoreBackup('replace');
  // Handoff actions: dismissing only clears the offer and the URL parameter.
  // Creation — from the card button OR the regular 从预设开始 — goes through
  // the flow below, which reconciles the offer when it creates the offered
  // preset, so the two entry points can never leave a stale card behind.
  const dismissHandoff=()=>{setHandoff(null);clearLabHandoff();};
  const createFromPreset=(id=presetId)=>{
-  if(generationLocked.current)return undefined;
+  if(generationLocked.current||restoreBusy.current)return undefined;
+  switchMode('edit');
   const source=L.active();
   const doc=L.createFromPreset(id,newName);
   books.current.of(doc.id).record(source);
@@ -409,7 +557,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   return doc;
  };
  const acceptHandoff=()=>{
-  if(!handoff||handoff.kind!=='preset'||generationLocked.current)return;
+  if(!handoff||handoff.kind!=='preset'||generationLocked.current||restoreBusy.current)return;
   const doc=createFromPreset(handoff.file.id);
   if(doc)setPresetId(handoff.file.id);
  };
@@ -424,7 +572,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
  // step is seeded on the new document's book — its first "previous state" is
  // the source it was mirrored from, so 撤销 lands back on the source.
  const mirrorActiveDoc=()=>{
-  if(generationLocked.current)return;
+  if(generationLocked.current||restoreBusy.current)return;
   const src=L.active(),m=mirrorDoc(src);
   while(L.docs.some(x=>x.id===m.id))m.id=newDocId(m.name); // a second mirror of the same source regenerates
   const added=L.add(m);
@@ -433,7 +581,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   engine.current?.setPlaying(false);engine.current?.seek(0);engine.current?.markDirty();
   bump(v=>v+1);setHint(`已生成镜像动作「${added.name}」——左右互换，原文档保留在动作库中。`);
  };
- const removeDoc=(id:string)=>{if(generationLocked.current)return;const victim=L.docs.find(x=>x.id===id);if(victim&&!webPlatform.confirm(`删除动作「${victim.name}」？此操作不可撤销。`))return;L.remove(id);setSelected(sortedKeys(L.active())[0].id);engine.current?.seek(0);engine.current?.markDirty();bump(v=>v+1);};
+ const removeDoc=(id:string)=>{if(generationLocked.current||restoreBusy.current)return;const victim=L.docs.find(x=>x.id===id);if(victim&&!webPlatform.confirm(`删除动作「${victim.name}」？此操作不可撤销。`))return;L.remove(id);setSelected(sortedKeys(L.active())[0].id);engine.current?.seek(0);engine.current?.markDirty();bump(v=>v+1);};
  const selectKey=(id:string)=>{
   if(generationLocked.current)return;
   const key=keyAt(L.active(),id);if(!key)return;
@@ -487,14 +635,14 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
  };
  /** 我的姿态：capture the selected key's full pose (arms included) as a
   * reusable one-click preset, Blender/Houdini pose-library style. */
- const capturePose=()=>{
-  const k=sel;if(!k)return;
+ const capturePose=async()=>{
+  const k=sel;if(!k||restoreBusy.current)return;
   const name=webPlatform.prompt('给这个姿态起个名字：');
   if(name===null)return;
   const preset=poseLib.current!.add(name,k.pose);
-  bump(v=>v+1);
+  await poseLib.current!.saved;bump(v=>v+1);
   setHint(poseLib.current!.lastError
-   ?`姿态「${preset.name}」已保存（仅存于本页内存）：${poseLib.current!.lastError}`
+   ?`姿态「${preset.name}」未保存（仅存于本页内存）：${poseLib.current!.lastError}`
    :`已保存姿态「${preset.name}」，之后在任何动作里一键应用。`);
  };
  /** Apply a captured pose at the playhead: an existing key there is
@@ -503,7 +651,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   * never consumes an undo step. */
  const applyUserPose=(p:UserPosePreset)=>{
   const e=engine.current;
-  if(generationLocked.current||!e)return;
+  if(generationLocked.current||restoreBusy.current||!e)return;
   const time=e.time;
   if(!nearestKey(d,time,.02)&&d.keys.length>=WORKSHOP_LIMITS.maxKeys){
    setHint(`已达 ${WORKSHOP_LIMITS.maxKeys} 个关键帧上限，且播放头处没有可覆盖的关键帧；请先删除不需要的帧。`);return;
@@ -516,10 +664,11 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   if(report.liftoffFoot.length)notes.push(`${report.liftoffFoot.map(s=>s==='L'?'左':'右').join('、')}脚是离地边界：离地瞬间仍从原接触点起步，新目标塑造离地后的摆动路径，脚尖朝向仍跟随支撑接触`);
   setHint(`${report.result==='replaced'?`已把当前帧姿态替换为「${p.name}」（约束不变）`:`已在播放头插入「${p.name}」姿态帧`}，可撤销${notes.length?`；${notes.join('；')}`:''}。`);
  };
- const removeUserPose=(id:string)=>{
+ const removeUserPose=async(id:string)=>{
+  if(restoreBusy.current)return;
   const p=poseLib.current!.presets.find(x=>x.id===id);if(!p)return;
   if(!webPlatform.confirm(`删除姿态「${p.name}」？此操作不可撤销。`))return;
-  poseLib.current!.remove(id);bump(v=>v+1);
+  poseLib.current!.remove(id);await poseLib.current!.saved;bump(v=>v+1);if(poseLib.current!.lastError)setError(`姿态删除未保存：${poseLib.current!.lastError}`);
  };
  /** Session pose clipboard: copy one key's full pose, paste onto another. */
  const copyPose=()=>{
@@ -606,8 +755,10 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
  };
  L.onSaveState=merged=>{if(merged)syncLibrary.current(true);bump(v=>v+1);};
  syncLibrary.current=async(force=false)=>{
+  if(restoreBusy.current)return;
   const rest=new Map(rigInfo.bones.map(b=>[b.name,new Vector3().fromArray(b.head)]));
-  try{if(!force){const snapshotText=await webPlatform.readStorage(LIBRARY_KEY);if(!L.sync(new MotionLibrary(rest,webPlatform.storage).load({readOnly:true,snapshotText})))return;}}catch(err){setError(err instanceof Error?err.message:String(err));return;}
+  try{if(!force){const snapshotText=await webPlatform.readStorage(LIBRARY_KEY);if(restoreBusy.current)return;if(!L.sync(new MotionLibrary(rest,webPlatform.storage).load({readOnly:true,snapshotText})))return;}}catch(err){setError(err instanceof Error?err.message:String(err));return;}
+  if(restoreBusy.current)return;
   if(generationLocked.current)stopGeneration();
   if(!L.docs.length){L.docs=[blankDocument(rest,'新动作',newDocId('新动作'))];L.activeId=L.docs[0].id;}
   gate.current.reset();wristEpoch.current++;setSelected(sortedKeys(L.active())[0].id);
@@ -615,22 +766,24 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   setHint('已同步其他页面保存或删除的动作。');
  };
  useEffect(()=>{
-  const sync=(event:StorageEvent)=>{if(event.key===LIBRARY_KEY||event.key===null)syncLibrary.current();};
-  const checkpoint=()=>{L.checkpoint();};
-  const unload=(event:BeforeUnloadEvent)=>{L.checkpoint();if(L.saveState!=='saved'){event.preventDefault();event.returnValue='';}};
+  const sync=async(event:StorageEvent)=>{if(restoreBusy.current)return;if(event.key===POSE_LIBRARY_KEY||event.key===null){await poseLib.current!.saved;if(restoreBusy.current)return;const snapshotText=await webPlatform.readStorage(POSE_LIBRARY_KEY);if(restoreBusy.current)return;poseLib.current!.load({snapshotText});bump(v=>v+1);}if(event.key===LIBRARY_KEY||event.key===null)syncLibrary.current();};
+  const checkpoint=()=>{if(!restoreBusy.current)L.checkpoint();};
+  const unload=(event:BeforeUnloadEvent)=>{if(restoreBusy.current){event.preventDefault();event.returnValue='';return;}L.checkpoint();if(L.saveState!=='saved'||poseLib.current!.saveState!=='saved'){event.preventDefault();event.returnValue='';}};
   const hidden=()=>{if(document.visibilityState==='hidden')checkpoint();};
   window.addEventListener('storage',sync);window.addEventListener('beforeunload',unload);window.addEventListener('pagehide',checkpoint);document.addEventListener('visibilitychange',hidden);
   return()=>{window.removeEventListener('storage',sync);window.removeEventListener('beforeunload',unload);window.removeEventListener('pagehide',checkpoint);document.removeEventListener('visibilitychange',hidden);L.onSaveState=undefined;};
  },[]);
  const returnToLab=async()=>{
-  if(leaving)return;L.checkpoint();
-  const state=L.saveState;if(state==='saved'){webPlatform.navigate('/');return;}
+  if(leaving||restoreBusy.current)return;L.checkpoint();
+  const state=L.saveState;if(state==='saved'&&poseLib.current!.saveState==='saved'){webPlatform.navigate('/');return;}
   setLeaving(true);await L.save();
   let pending:Promise<void>;do{pending=L.saved;await pending;}while(pending!==L.saved);
-  if(L.saveState!=='saved'){setLeaving(false);return;}
+  do{pending=poseLib.current!.saved;await pending;}while(pending!==poseLib.current!.saved);
+  if(L.saveState!=='saved'||poseLib.current!.saveState!=='saved'){setLeaving(false);if(poseLib.current!.lastError)setError(`姿态尚未保存：${poseLib.current!.lastError}，请先备份。`);return;}
   webPlatform.navigate('/');
  };
  const recoverQuarantine=(index:number)=>{
+  if(restoreBusy.current)return;
   try{
    const copy=parseDoc(L.quarantineText(index));copy.id=newDocId(copy.name);copy.name+=' 恢复副本';
    copy.keys.forEach((k,i)=>{k.id=`${copy.id}-k${i}`;});
@@ -643,7 +796,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   generationPreview.current=null;setCandidateSession(null);setGenerationBusy(false);setGenerationProgress(null);setGenerationError(message);unlockGeneration();
  };
  const startGeneration=()=>{
-  if(generationLocked.current)return;
+  if(generationLocked.current||restoreBusy.current)return;
   const source=JSON.parse(JSON.stringify(d)) as WorkshopDoc;
   generationLocked.current=true;generationPreview.current=null;setGenerationError('');setGenerationReport(null);setCandidateSession(null);setGenerationBusy(true);
   setGenerationProgress({evals:0,maxEvals:120,phase:'loading'});
@@ -674,7 +827,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
   catch(error){failGeneration(error instanceof Error?error.message:String(error));}
  };
  const keepCandidate=(downloadJson=false)=>{
-  if(!candidateSession||generationBusy)return;
+  if(!candidateSession||generationBusy||restoreBusy.current)return;
   const {source,candidate}=candidateSession;
   const kept=JSON.parse(JSON.stringify(candidate.doc)) as WorkshopDoc;
   kept.name=`${source.name} · 候选`;
@@ -773,11 +926,11 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
  // Motion-file envelopes unwrap to their embedded WorkshopDoc first — a bare
  // envelope's schemaVersion:1 is the ENVELOPE revision, not a document one;
  // clip-motion envelopes carry no document and unwrap throws a readable error.
- const importDoc=async(f:File)=>{try{const next=normalizeDoc(unwrapMotionFile(JSON.parse(await f.text())));const added=L.add(next);selectDoc(added.id);}catch(e){setError(e instanceof Error?e.message:String(e));}};
+ const importDoc=async(f:File)=>{try{if(f.size>MAX_BACKUP_BYTES)throw new Error('动作文件过大（上限 64 MB）。');const text=await f.text();if(restoreBusy.current)return;const next=normalizeDoc(unwrapMotionFile(JSON.parse(text)));const added=L.add(next);selectDoc(added.id);}catch(e){setError(e instanceof Error?e.message:String(e));}};
  const loadVideo=(f:File)=>{if(videoUrl)URL.revokeObjectURL(videoUrl);setVideoUrl(URL.createObjectURL(f));};
  const alignVideo=()=>{if(video.current)syncOffset.current=video.current.currentTime-frame.time;};
  const stampVideo=()=>{if(video.current)editSelected(k=>{k.videoTime=video.current!.currentTime;});};
- const switchMode=(next:'review'|'edit')=>{setMode(next);engine.current?.setEditable(next==='edit');};
+ const switchMode=(next:'review'|'edit')=>{if(restoreBusy.current)return;setMode(next);engine.current?.setEditable(next==='edit');if(next==='edit'){if(compact)setSheet('right');else inspectorPanel.current?.resize('340px');}};
  const stepKey=(dir:-1|1)=>{
   const ks=sortedKeys(d),t=frame.time;
   const k=dir>0?ks.find(x=>x.time>t+1e-6)??ks[0]:[...ks].reverse().find(x=>x.time<t-1e-6)??ks.at(-1);
@@ -790,18 +943,18 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
  const semanticHost:SemanticHost={
   context:()=>{
    const e=engine.current,k=sel;
-   if(!e?.rig||!k||generationLocked.current)return null;
+   if(!e?.rig||!k||generationLocked.current||restoreBusy.current)return null;
    return {rig:e.rig,doc:L.active(),keyId:k.id,origin:e.restRoot(),pelvisShift:()=>e.pelvisShiftAt(k.time)};
   },
   begin:base=>{semanticRecorded.current=books.current.of(base.id).record(base);gate.current.reset();engine.current?.setPlaying(false);},
   write:next=>{
-   const i=L.docs.findIndex(x=>x.id===next.id);if(i<0||generationLocked.current)return;
+   const i=L.docs.findIndex(x=>x.id===next.id);if(i<0||generationLocked.current||restoreBusy.current)return;
    L.docs[i]=JSON.parse(JSON.stringify(next)) as WorkshopDoc;L.save();
    const e=engine.current,k=keyAt(L.docs[i],selected);
    e?.setPlaying(false);e?.markDirty();if(k)e?.seek(k.time);bump(v=>v+1);
   },
-  cancel:base=>{semanticHost.write(base);if(semanticRecorded.current)books.current.of(base.id).dropLast();semanticRecorded.current=false;bump(v=>v+1);},
-  commit:()=>{semanticRecorded.current=false;gate.current.reset();L.save();bump(v=>v+1);},
+  cancel:base=>{if(restoreBusy.current)return;semanticHost.write(base);if(semanticRecorded.current)books.current.of(base.id).dropLast();semanticRecorded.current=false;bump(v=>v+1);},
+  commit:()=>{if(restoreBusy.current)return;semanticRecorded.current=false;gate.current.reset();L.save();bump(v=>v+1);},
  };
  const addNote=()=>{
   if(!sel)return;
@@ -816,14 +969,14 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
  };
  const videoEl=videoUrl?<video ref={video} src={videoUrl} muted loop playsInline onPlay={()=>setVideoPlaying(true)} onPause={()=>setVideoPlaying(false)}/>:null;
  const sheetHead=(title:string)=><div className="ws-sheet-head"><strong>{title}</strong><button type="button" aria-label="关闭面板" onClick={()=>setSheet(null)}><X size={18}/></button></div>;
- return <div className={`ws-shell ${generationLockedUi?'ws-generation-locked':''} ${compact?'ws-compact':''} ${sheet?`ws-sheet-${sheet}`:''} ws-mode-${mode}`} data-mode={mode}>
+ return <div inert={restoring} aria-busy={restoring} className={`ws-shell ${generationLockedUi?'ws-generation-locked':''} ${compact?'ws-compact':''} ${sheet?`ws-sheet-${sheet}`:''} ws-mode-${mode}`} data-mode={mode}>
   <header className="ws-header">
-   <div className="brand"><Activity size={25} strokeWidth={2}/><span>KINESIS</span><i/><h1>动作工作台</h1><small>姿态优先 · 关键帧 + 约束</small></div>
+   <div className="brand"><Activity size={25} strokeWidth={2}/><span>KINESIS</span><i/><h1>动作工作台</h1><small>关键帧动作编辑器</small></div>
    <nav><a href="/" className="ws-back" aria-disabled={leaving} onClick={e=>{e.preventDefault();void returnToLab();}}><ArrowLeft size={14}/>返回实验室</a></nav>
    <div className="ws-save-state" data-testid="save-state" data-state={L.saveState} role="status" aria-live="polite"><span>{L.saveState==='error'?`保存失败：${L.lastError}`:L.saveState==='saving'?leaving?'保存中 · 完成后返回实验室…':'保存中…':'已保存到本机'}</span>{L.saveState!=='saved'?<button type="button" onClick={()=>exportDoc()}><Download size={12}/>导出当前动作 JSON</button>:null}</div>
   </header>
-  <Group orientation="horizontal" className="ws-main" id="workshop-panes">
-   <Panel id="ws-library" className="ws-library-panel" defaultSize={250} minSize={200} maxSize={420}><aside className="ws-left" aria-label="动作与关键帧">
+  <Group groupRef={panelGroup} orientation="horizontal" className="ws-main" id="workshop-panes">
+   <Panel id="ws-library" panelRef={libraryPanel} collapsible collapsedSize={0} onResize={size=>setLibraryOpen(size.inPixels>1)} className="ws-library-panel" defaultSize={0} minSize={280} maxSize={420}><aside className="ws-left" aria-label="动作与关键帧">
     {sheetHead('动作 · 关键帧 · 参考')}
     {handoffHasCard(handoff)?<section className="ws-card ws-handoff" data-testid="lab-handoff" inert={generationLockedUi}>
      {handoff.kind==='preset'?<>
@@ -842,27 +995,100 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
      </>:null}
     </section>:null}
     <section className="ws-card" inert={generationLockedUi}><h2>动作库 <small>{L.docs.length} 个动作</small></h2>
-     <div className="ws-preset-entry">
-      <label className="ws-field"><span>动作预设</span><select aria-label="初始动作预设" value={presetId} onChange={e=>setPresetId(e.target.value)}>
-       <optgroup label="基础动作">{BASIC_PRESETS.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</optgroup>
-       <optgroup label="网球正手（球拍插件）">{RACKET_PRESETS.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</optgroup>
-       <optgroup label="其他预设">{OTHER_PRESETS.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</optgroup>
-      </select></label>
-      <button className="ws-preset-start" onClick={()=>createFromPreset()}><Plus size={14}/>从预设开始</button>
-     </div>
-     <LibraryList docs={L.docs} activeId={d.id} onSelect={selectDoc} onDuplicate={duplicateDoc} onRemove={removeDoc} onReorder={(active,over)=>{L.reorder(active,over);bump(v=>v+1);}}/>
-     <div className="ws-row"><button type="button" data-testid="save-to-library" onClick={saveToLibrary}><Save size={13}/>保存到动作库</button></div>
+     <LibraryList docs={L.docs} activeId={d.id} onSelect={selectDoc} onDuplicate={duplicateDoc} onRemove={removeDoc} onReorder={(active,over)=>{if(restoreBusy.current||generationLocked.current)return;L.reorder(active,over);bump(v=>v+1);}}/>
      <div className="ws-row">
       <input className="ws-newname" aria-label="新动作名称" value={newName} placeholder="新动作名称（可选）…" onChange={e=>setNewName(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')createDoc();}}/>
       <button onClick={createDoc}><Plus size={13}/>新建</button>
      </div>
-     <p className="ws-note">复制完整动作到手动工作台，再拖动调整；上方名称可选。仅列出可编辑的关键帧预设，外部动画与动力学动作暂不支持。</p>
+     <div className="ws-row"><button type="button" data-testid="save-to-library" onClick={saveToLibrary}><Save size={13}/>保存到动作库</button></div>
+     <div className="ws-sub"><h3>导入 / 导出 / 备份</h3>
+      <div className="ws-row">
+       <button type="button" data-testid="motion-import" onClick={()=>importRef.current?.click()}><Upload size={13}/>导入动作</button>
+       <button type="button" data-testid="motion-export" onClick={()=>exportDoc()}><Download size={13}/>导出动作</button>
+       <input ref={importRef} type="file" accept=".json,application/json" hidden onChange={e=>{const f=e.target.files?.[0];if(f)void importDoc(f);e.target.value='';}}/>
+      </div>
+      <div className="ws-row">
+       <button type="button" data-testid="backup-download" onClick={exportBackup}><Package size={13}/>备份全部</button>
+       <button type="button" data-testid="backup-restore" onClick={()=>backupRef.current?.click()}><Upload size={13}/>从备份恢复</button>
+       <input ref={backupRef} type="file" accept=".json,application/json" hidden onChange={e=>{const f=e.target.files?.[0];e.target.value='';if(f)void chooseRestore(f);}}/>
+      </div>
+      <p className="ws-note">「导出动作」是单个可编辑 JSON；「备份全部」把动作、自建姿态和可恢复数据打包成一个文件，换设备时用它恢复。</p>
+      {restorePreview?<div className="ws-restore" data-testid="backup-preview">
+       <h4>恢复备份 <small>{new Date(restorePreview.file.exportedAt).toLocaleString()}</small></h4>
+       <p className="ws-note">{restorePreview.docs.length} 个动作 · {restorePreview.poses.length} 个姿态 · {restorePreview.file.library.quarantine.length} 条可恢复数据{restorePreview.invalidDocs.length?` · ${restorePreview.invalidDocs.length} 条无法识别（恢复时隔离）`:''}。</p>
+       <ul className="ws-restore-list">{restorePreview.docs.slice(0,6).map(doc=><li key={doc.id}>{doc.name}</li>)}{restorePreview.docs.length>6?<li>… 共 {restorePreview.docs.length} 个动作</li>:null}</ul>
+       {replaceArmed?<div className="ws-replace-confirm" data-testid="backup-replace-confirm" role="group" aria-label="确认替换全部">
+        <p className="ws-note">已请求下载当前数据快照 <code>{replaceArmed}</code>。浏览器可能拦截或询问保存位置，请先确认文件已出现在下载目录中。</p>
+        <label className="ws-check"><input type="checkbox" data-testid="backup-replace-ack" checked={replaceAck} onChange={e=>setReplaceAck(e.target.checked)}/><span>我已确认快照文件已保存并可打开</span></label>
+        <p className="ws-note">替换还会在浏览器内保留一个恢复点，可随时「撤销替换」；隔离数据始终保留。</p>
+        <div className="ws-row">
+         <button type="button" data-testid="backup-replace-commit" className="danger" disabled={!replaceAck} onClick={restoreReplace}>确认替换全部</button>
+         <button type="button" data-testid="backup-replace-redownload" onClick={armReplace}><Download size={12}/>重新下载快照</button>
+         <button type="button" data-testid="backup-cancel" onClick={cancelRestore}>取消</button>
+        </div>
+       </div>:<>
+        <div className="ws-row">
+         <button type="button" data-testid="backup-merge" onClick={restoreMerge}>合并导入（保留现有）</button>
+         <button type="button" data-testid="backup-replace" onClick={armReplace}>替换全部…</button>
+         <button type="button" data-testid="backup-cancel" onClick={cancelRestore}>取消</button>
+        </div>
+        <p className="ws-note">「替换全部」先下载当前数据的快照，确认文件已保存后才能替换；无论哪种方式，隔离数据都不会丢。</p>
+       </>}
+      </div>:null}
+      {restorePoint&&!restorePreview?<div className="ws-restore" data-testid="restore-point">
+       <h4>替换前的恢复点 <small>{new Date(restorePoint.savedAt).toLocaleString()}</small></h4>
+       <p className="ws-note">{restorePoint.docs} 个动作 · {restorePoint.poses} 个姿态，已保存在本机浏览器，刷新后仍可撤销。</p>
+       <div className="ws-row"><button type="button" data-testid="restore-point-undo" onClick={()=>void undoReplace()}><Undo2 size={12}/>撤销替换</button></div>
+      </div>:null}
+     </div>
      <p className="ws-note" style={L.lastError?{color:'var(--red)'}:undefined}>{L.lastError?`保存未完成：${L.lastError}`:'动作自动保存到本机浏览器；导出 JSON 可跨设备分享。'}</p>
      {L.quarantine.length?<div className="ws-quarantine"><p className="ws-note" style={{color:'var(--red)'}}>{L.quarantine.length} 个恢复稿或隔离项，尚未参与播放。可恢复为副本或导出后修复。</p>
-      {L.quarantine.map((q,i)=><div key={`${q.id}-${i}`} className="ws-row"><small>{q.name||q.id||'未命名'}：{q.reason}</small><button onClick={()=>recoverQuarantine(i)}>恢复为副本</button><button onClick={()=>exportQuarantine(i)}><Download size={12}/>导出</button><button aria-label={`丢弃 ${q.name||q.id}`} onClick={()=>{if(confirm('丢弃这个隔离动作？此操作不可撤销。'))L.discardQuarantine(i);bump(v=>v+1);}}><Trash2 size={12}/></button></div>)}
+      {L.quarantine.map((q,i)=><div key={`${q.id}-${i}`} className="ws-row"><small>{q.name||q.id||'未命名'}：{q.reason}</small><button onClick={()=>recoverQuarantine(i)}>恢复为副本</button><button onClick={()=>exportQuarantine(i)}><Download size={12}/>导出</button><button aria-label={`丢弃 ${q.name||q.id}`} onClick={()=>{if(restoreBusy.current||generationLocked.current)return;if(confirm('丢弃这个隔离动作？此操作不可撤销。'))L.discardQuarantine(i);bump(v=>v+1);}}><Trash2 size={12}/></button></div>)}
      </div>:null}
     </section>
-    <section className="ws-card" inert={generationLockedUi}><h2>组合动作 <small>保存为新动作</small></h2>
+    <section className="ws-card" inert={generationLockedUi||review} aria-label="快速插入"><h2>快速插入 <small>播放头一键</small></h2>
+     <div className="ws-quick-poses" role="group" aria-label="快速姿态（一键插入）">
+      <span className="ws-quick-label">姿态</span>
+      {BASIC_PRESETS.map(p=>{
+       const refusal=info&&p.document?basicInsertRefusal(d,p.document,frame.time):undefined;
+       return <button key={p.id} type="button" data-testid={`basic-insert-${p.id}`} disabled={!info||!p.document||!!refusal}
+        title={refusal??`在当前帧一键插入「${p.name}」：从播放头姿态开始变化，后续关键帧整体后移，可撤销`}
+        onClick={()=>insertBasicPreset(p)}>{p.name}</button>;
+      })}
+     </div>
+     <div className="ws-quick-poses" role="group" aria-label="球拍（一键持拍）">
+      <span className="ws-quick-label">球拍</span>
+      <button type="button" data-testid="racket-right" disabled={!info} title="所有关键帧改为右手握拍并显示球拍，可撤销" onClick={()=>setGrip('R')}>右手持拍</button>
+      <button type="button" data-testid="racket-left" disabled={!info} title="所有关键帧改为左手握拍并显示球拍，可撤销" onClick={()=>setGrip('L')}>左手持拍</button>
+      <button type="button" data-testid="racket-off" disabled={!info} title="所有关键帧不再握拍，可撤销" onClick={()=>setGrip(null)}>卸下球拍</button>
+     </div>
+     <div className="ws-quick-poses" role="group" aria-label="我的姿态（自建快速姿态）">
+      <span className="ws-quick-label">我的</span>
+      <button type="button" data-testid="pose-capture" disabled={!info||!sel} title="把选中关键帧的完整姿态（含手臂）存为可复用的快速姿态，保存到本机浏览器" onClick={capturePose}><Plus size={12}/>存当前姿态</button>
+      {poseLib.current!.presets.map(p=><span key={p.id} className="ws-pose-chip">
+       <button type="button" data-testid={`pose-apply-${p.id}`} title="把该姿态写到播放头：已有帧则替换姿态，无帧则插入新帧，可撤销" onClick={()=>applyUserPose(p)}>{p.name}</button>
+       <button type="button" className="ws-pose-delete" aria-label={`删除姿态 ${p.name}`} title="删除这个自建姿态" onClick={()=>removeUserPose(p.id)}><X size={10}/></button>
+      </span>)}
+     </div>
+    </section>
+    <details className="ws-fold" data-fold="preset" inert={generationLockedUi}>
+     <summary>从预设开始 <small>内置动作副本</small></summary>
+     <div className="ws-fold-body">
+      <div className="ws-preset-entry">
+       <label className="ws-field"><span>动作预设</span><select aria-label="初始动作预设" value={presetId} onChange={e=>setPresetId(e.target.value)}>
+        <optgroup label="基础动作">{BASIC_PRESETS.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</optgroup>
+        <optgroup label="持拍动作（球拍插件）">{RACKET_PRESETS.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</optgroup>
+        <optgroup label="其他预设">{OTHER_PRESETS.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</optgroup>
+       </select></label>
+       <button className="ws-preset-start" onClick={()=>createFromPreset()}><Plus size={14}/>从预设开始</button>
+      </div>
+      <p className="ws-note">复制完整预设为可编辑副本开始调整；预设本身不会被改动。外部动画与动力学动作暂不支持。</p>
+     </div>
+    </details>
+    <details className="ws-fold" data-fold="combine" inert={generationLockedUi}>
+     <summary>组合动作 <small>拼接 / 混合</small></summary>
+     <div className="ws-fold-body">
+     <section className="ws-card" inert={generationLockedUi}><h2>组合动作 <small>保存为新动作</small></h2>
      <p className="ws-note">当前「{d.name}」作为第一段，选择另一段动作进行拼接或混合。</p>
      <label className="ws-field"><span>另一段</span><select aria-label="组合目标动作" value={combineTarget} onChange={e=>setCombineTarget(e.target.value)}>
       <optgroup label="我的动作">{L.docs.map(doc=><option key={doc.id} value={`local:${doc.id}`}>{doc.name}</option>)}</optgroup>
@@ -876,8 +1102,13 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
      <p className="ws-note">{combineKind==='append'?'当前动作 → 过渡 → 另一段动作，总时长不超过 10 秒。':'按开始 / 结束对齐进度，时长取较长动作；双足支撑取交集，持拍和触球取占比高的动作（50% 时取另一段）。'}</p>
      <label className="ws-field"><span>新名称</span><input aria-label="组合动作名称" placeholder="留空自动命名" value={combineName} onChange={e=>setCombineName(e.target.value)}/></label>
      <div className="ws-row"><button type="button" data-testid="save-combined-motion" disabled={!info} onClick={saveCombined}><Save size={13}/>{combineKind==='append'?'拼接并保存':'混合并保存'}</button></div>
-    </section>
-    <section className="ws-card ws-keyframes" inert={generationLockedUi} aria-label="关键帧管理">
+     </section>
+     </div>
+    </details>
+    <details className="ws-fold" data-fold="keys" inert={generationLockedUi||review}>
+     <summary>关键帧清单 <small>{orderedKeys.length} / {WORKSHOP_LIMITS.maxKeys} · 时间轴是主入口</small></summary>
+     <div className="ws-fold-body">
+     <section className="ws-card ws-keyframes" inert={generationLockedUi} aria-label="关键帧管理">
      <h2>关键帧 <small>{orderedKeys.length} / {WORKSHOP_LIMITS.maxKeys}</small></h2>
      <div className="ws-keyframe-list" role="group" aria-label="按时间排序的关键帧">
       {orderedKeys.map((key,index)=>{
@@ -894,41 +1125,18 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
       })}
      </div>
      <div className="ws-row ws-keyframe-actions">
-      <button type="button" data-testid="keyframe-copy-selected" disabled={!sel||insertTime===undefined||d.keys.length>=WORKSHOP_LIMITS.maxKeys} title={insertTime===undefined?'选中帧后没有可用时间':'完整复制选中帧到后方，副本可独立编辑'} onClick={()=>{if(sel)duplicateKey(sel.id);}}><Copy size={12}/>复制选中帧</button>
       <button type="button" data-testid="keyframe-add-current" disabled={!info||d.keys.length>=WORKSHOP_LIMITS.maxKeys} onClick={addKey}><Plus size={12}/>当前时刻添加</button>
       <button type="button" data-testid="keyframe-insert-after" disabled={!info||insertTime===undefined||d.keys.length>=WORKSHOP_LIMITS.maxKeys} title={insertTime===undefined?'选中帧后没有可用时间；可在前面的时间段添加':'在下一时间点前插入；末帧后可延长动作'} onClick={insertAfterKey}><Plus size={12}/>在选中帧后插入</button>
-      <button type="button" data-testid="pose-copy" disabled={!sel} title="复制选中关键帧的完整姿态（含手臂），会话内有效，可粘贴到其他帧或其他动作" onClick={copyPose}><ClipboardCopy size={12}/>复制姿态</button>
-      <button type="button" data-testid="pose-paste" disabled={!sel||!poseClipboard.current} title="把复制的姿态写到选中关键帧（约束不变），可撤销" onClick={pastePose}><Copy size={12}/>粘贴姿态</button>
-      <button type="button" data-testid="pose-mirror" disabled={!sel} title="当前帧姿态左右镜像：手脚与支撑互换、握拍侧换边，可撤销" onClick={mirrorSelectedPose}><FlipHorizontal2 size={12}/>镜像姿态</button>
      </div>
-     <div className="ws-quick-poses" role="group" aria-label="快速姿态（一键插入）">
-      <span className="ws-quick-label">快速姿态</span>
-      {BASIC_PRESETS.map(p=>{
-       const refusal=info&&p.document?basicInsertRefusal(d,p.document,frame.time):undefined;
-       return <button key={p.id} type="button" data-testid={`basic-insert-${p.id}`} disabled={!info||!p.document||!!refusal}
-        title={refusal??`在当前帧一键插入「${p.name}」：从播放头姿态开始变化，后续关键帧整体后移，可撤销`}
-        onClick={()=>insertBasicPreset(p)}>{p.name}</button>;
-      })}
-     </div>
-     <div className="ws-quick-poses" role="group" aria-label="球拍（一键持拍）">
-      <span className="ws-quick-label">球拍</span>
-      <button type="button" data-testid="racket-right" disabled={!info} title="所有关键帧改为右手握拍并显示球拍，可撤销" onClick={()=>setGrip('R')}>右手持拍</button>
-      <button type="button" data-testid="racket-left" disabled={!info} title="所有关键帧改为左手握拍并显示球拍，可撤销" onClick={()=>setGrip('L')}>左手持拍</button>
-      <button type="button" data-testid="racket-off" disabled={!info} title="所有关键帧不再握拍，可撤销" onClick={()=>setGrip(null)}>卸下球拍</button>
-     </div>
-     <div className="ws-quick-poses" role="group" aria-label="我的姿态（自建快速姿态）">
-      <span className="ws-quick-label">我的姿态</span>
-      <button type="button" data-testid="pose-capture" disabled={!info||!sel} title="把选中关键帧的完整姿态（含手臂）存为可复用的快速姿态，保存到本机浏览器" onClick={capturePose}><Plus size={12}/>存当前姿态</button>
-      {poseLib.current!.presets.map(p=><span key={p.id} className="ws-pose-chip">
-       <button type="button" data-testid={`pose-apply-${p.id}`} title="把该姿态写到播放头：已有帧则替换姿态，无帧则插入新帧，可撤销" onClick={()=>applyUserPose(p)}>{p.name}</button>
-       <button type="button" className="ws-pose-delete" aria-label={`删除姿态 ${p.name}`} title="删除这个自建姿态" onClick={()=>removeUserPose(p.id)}><X size={10}/></button>
-      </span>)}
-     </div>
-     <p className="ws-note">点击帧名，在右侧编辑名称、时间与姿态。上移 / 下移保留时间点，整帧换序。</p>
+     <p className="ws-note">点击帧名定位与编辑；上移 / 下移保留时间点，整帧换序。新增与复制在右侧「选中关键帧」或底部时间轴操作。</p>
      {d.keys.length>=WORKSHOP_LIMITS.maxKeys?<p className="ws-note">已达关键帧数量上限，请先删除不需要的帧。</p>:null}
-    </section>
-    <section className="ws-card ws-generator" data-testid="generator-panel">
-     <h2>约束轨迹生成 <small>实验功能 · 后台计算</small></h2>
+     </section>
+     </div>
+    </details>
+    <details className="ws-fold" data-fold="generator">
+     <summary>约束轨迹生成 <small>实验功能 · 后台计算</small></summary>
+     <div className="ws-fold-body">
+     <section className="ws-card ws-generator" data-testid="generator-panel">
      <p className="ws-note">生成器会尝试小幅调整关键帧时序与通道相位。候选只在当前页面预览；按“保留”后才写入动作库。</p>
      {!generationLockedUi?<>
       <div className="ws-sub"><h3>可调整方式</h3>
@@ -984,9 +1192,13 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
       <button type="button" className="ws-mini" onClick={()=>setGenerationReport(null)}>清除结果</button>
      </div>:null}
      {generationError?<div className="ws-generation-error" role="alert"><p>{generationError}</p><button type="button" className="ws-mini" onClick={()=>setGenerationError('')}>关闭</button></div>:null}
-    </section>
-    <section className="ws-card ws-doc-card" inert={generationLockedUi}><h2>动作文档</h2>
-     <label className="ws-field"><span>名称</span><input value={d.name} onChange={e=>edit(dd=>{dd.name=e.target.value;})}/></label>
+     </section>
+     </div>
+    </details>
+    <details className="ws-fold" data-fold="doc" inert={generationLockedUi}>
+     <summary>动作属性 · 高级导出 <small>时长 / 循环 / 坐标系 / GLB</small></summary>
+     <div className="ws-fold-body">
+     <section className="ws-card ws-doc-card" inert={generationLockedUi}><div inert={review}><h2>动作属性</h2>
      <label className="ws-field"><span>时长 s（{WORKSHOP_LIMITS.minDuration}–{WORKSHOP_LIMITS.maxDuration}）</span><input type="number" min={WORKSHOP_LIMITS.minDuration} max={WORKSHOP_LIMITS.maxDuration} step=".1" value={d.duration} onChange={e=>edit(dd=>retimeKeys(dd,clampDuration(Number(e.target.value))))}/></label>
      <p className="ws-note">{d.keys.length} 个关键帧 · {d.inbetweens?'Hermite 补间':'逐帧保持'}</p>
      <Row label="循环播放" detail={loopBlockers(d).join('；')||'首帧位于 0 s，末帧早于时长'} checked={d.loop} disabled={!d.loop&&loopBlockers(d).length>0} onChange={v=>edit(dd=>{if(v&&loopBlockers(dd).length)return;dd.loop=v;})}/>
@@ -998,36 +1210,34 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
      <label className="ws-field"><span>握拍侧</span><select value={d.gripSide??'R'} onChange={e=>edit(dd=>{dd.gripSide=e.target.value==='L'?'L':undefined;})}><option value="R">右手（默认）</option><option value="L">左手</option></select></label>
      <Row label="抬肩辅助" detail="手高于胸口时锁骨与肩部随动上抬" checked={d.clavicleLift===true} onChange={v=>edit(dd=>{dd.clavicleLift=v||undefined;})}/>
      <div className="ws-row">
-      <button onClick={()=>exportDoc()}><Download size={13}/>导出 JSON</button>
-      <button onClick={()=>importRef.current?.click()}><Upload size={13}/>导入</button>
-      <input ref={importRef} type="file" accept=".json,application/json" hidden onChange={e=>{const f=e.target.files?.[0];if(f)void importDoc(f);e.target.value='';}}/>
-     </div>
-     <div className="ws-row">
       {/* x=0 平面整档镜像：同一动作换边（右手正手→左手正手）。产出入库并选
           中，原文档保留；撤销一步回到镜像前的文档。 */}
       <button onClick={mirrorActiveDoc} title="生成当前动作的左右镜像副本（换握拍侧，几何 x→−x）"><FlipHorizontal2 size={13}/>镜像动作</button>
      </div>
-     <div className="ws-sub"><h3>姿态包 <small>本地求解 · 与服务同一条管线</small></h3>
+     </div>
+     {/* Single-motion JSON import/export lives in the library card's
+         导入/导出/备份 block — one entry point, not one per card. */}
+     <div className="ws-sub"><h3>高级导出 <small>本地求解 · 与服务同一条管线</small></h3>
       <label className="ws-field"><span>采样率 fps</span><input type="number" min={1} max={60} step={1} value={exportFps} disabled={!subtleOk||exporting} onChange={e=>setExportFps(Math.max(1,Math.min(60,Math.round(Number(e.target.value)||40))))}/></label>
       <div className="ws-row">
        {/* During model load a click still lands on solvePackage's own !e?.rig
            guard, which answers with a readable hint — no separate !info gate. */}
        <button onClick={()=>void exportPackage()} disabled={!subtleOk||exporting} title={subtleOk?'求解并校验当前文档，下载 .pose.json':'姿态包导出需 https 或 localhost 打开'}><Package size={13}/>{exporting?'求解中…':'导出姿态包'}</button>
        <button onClick={()=>void exportGlbFile()} disabled={!subtleOk||exporting} title={subtleOk?'同一求解结果烘焙成 glTF 动画，干净模型重新解析后导出':'GLB 导出需 https 或 localhost 打开'}><FileBox size={13}/>{exporting?'导出中…':'导出 GLB'}</button>
-      </div>
-      <p className="ws-note" style={subtleOk?undefined:{color:'var(--red)'}}>{subtleOk?'fps 进入制品 id：同一文档不同 fps 是不同包（1–60，服务端默认 40）。GLB 是派生品——可入 DCC/播放器预览，但制品身份仍以 .pose.json 为准。':'姿态包导出需 https 或 localhost 打开（crypto.subtle 不可用）。'}</p>
-      {pkgProblems&&pkgProblems.doc===d.id?<div className="ws-problems"><p className="ws-note" style={{color:'var(--red)'}}>上一次导出被语义校验拒绝，未生成文件：</p>
-       <ul>{pkgProblems.items.map((p,i)=><li key={i}>{p}</li>)}</ul></div>:null}
-     </div>
-     <div className="ws-sub"><h3>静帧渲染 <small>固定相机预设 · 固定出图尺寸</small></h3>
-      <div className="ws-row">
        <button onClick={()=>void exportStill()} disabled={exporting} title="以固定 45° 相机渲染当前时刻，640×720 PNG"><Camera size={13}/>渲染静帧</button>
        <button onClick={()=>void exportSheet()} disabled={exporting} title="每个关键帧时刻渲染一格拼成单张 PNG；超过 12 帧时均匀抽 12 格"><LayoutGrid size={13}/>关键帧拼图</button>
       </div>
-      <p className="ws-note">固定相机预设与固定出图尺寸（640×720 PNG），导出图像不含编辑器手柄等叠加物；播放与视角在导出后原样恢复。</p>
+      <p className="ws-note" style={subtleOk?undefined:{color:'var(--red)'}}>{subtleOk?'fps 进入制品 id：同一文档不同 fps 是不同包（1–60，服务端默认 40）。GLB 是派生品，可入 DCC/播放器预览；静帧与拼图为固定相机 640×720 PNG，不含编辑器叠加物。':'姿态包导出需 https 或 localhost 打开（crypto.subtle 不可用）。'}</p>
+      {pkgProblems&&pkgProblems.doc===d.id?<div className="ws-problems"><p className="ws-note" style={{color:'var(--red)'}}>上一次导出被语义校验拒绝，未生成文件：</p>
+       <ul>{pkgProblems.items.map((p,i)=><li key={i}>{p}</li>)}</ul></div>:null}
      </div>
-    </section>
-    <section className="ws-card" inert={generationLockedUi}><h2>参考视频 <small>WHAM 自动估计待接入</small></h2>
+     </section>
+     </div>
+    </details>
+    <details className="ws-fold" data-fold="video" inert={generationLockedUi}>
+     <summary>参考视频 <small>需要时打开</small></summary>
+     <div className="ws-fold-body">
+     <section className="ws-card" inert={generationLockedUi}><h2>参考视频 <small>WHAM 自动估计待接入</small></h2>
      {videoUrl?(compact?<p className="ws-note">参考视频以画中画显示在三维视图上，可切换大图并排对照。</p>:videoEl):
       <button className="ws-video-pick" onClick={()=>fileRef.current?.click()}><Video size={18}/>载入参考视频</button>}
      <input ref={fileRef} type="file" accept="video/*" hidden onChange={e=>{const f=e.target.files?.[0];if(f)loadVideo(f);e.target.value='';}}/>
@@ -1041,8 +1251,13 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
       <button className="ws-mini" onClick={stampVideo} disabled={!sel}>记录视频帧到当前关键帧</button>
       <div className="ws-vkeys">{d.keys.filter(k=>k.videoTime!==undefined).map(k=><button key={k.id} onClick={()=>{engine.current?.seek(k.time);if(video.current)video.current.currentTime=k.videoTime!;setSelected(k.id);}}><Film size={11}/>{k.label||fmt(k.time)}<small>{fmt(k.videoTime!)}</small></button>)}</div>
      </>:null}
-    </section>
-    <section className="ws-card ws-legend" inert={generationLockedUi}><h2>手柄</h2>
+     </section>
+     </div>
+    </details>
+    <details className="ws-fold" data-fold="legend" inert={generationLockedUi}>
+     <summary>手柄图例 <small>IK 末端与颜色</small></summary>
+     <div className="ws-fold-body">
+     <section className="ws-card ws-legend" inert={generationLockedUi}><h2>手柄</h2>
      <p><i style={{background:'#2469ee'}}/>髋部 / 根骨</p>
      <p><i style={{background:'#ec8c39'}}/>手腕（IK 末端）</p>
      <p><i style={{background:'#e2543a'}}/>脚踝（支撑贴地 · 离地可三维拖动）</p>
@@ -1050,7 +1265,9 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
      <p><i style={{background:'#4a9e6b'}}/>肘 / 膝极点</p>
      <p><i style={{background:'#d23c3c'}}/>拍头 · <em style={{color:'#f0b429'}}>触球点</em></p>
      <p className="ws-note">直接拖动末端，IK 自动解算整条链；在空白处拖动仍是旋转视角。</p>
-    </section>
+     </section>
+     </div>
+    </details>
    </aside></Panel>
    <Separator className="pane-resize"/>
    <Panel id="ws-stage" className="ws-stage" defaultSize="auto" minSize={320}><section className="ws-viewport">
@@ -1063,20 +1280,30 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
      <button type="button" data-testid="mode-edit" aria-pressed={!review} onClick={()=>switchMode('edit')}><Hand size={15}/>编辑</button>
     </div>
     <div className="ws-quickbar" role="toolbar" aria-label="快捷操作">
-     <button type="button" data-testid="sheet-left" aria-expanded={sheet==='left'} onClick={()=>setSheet(v=>v==='left'?null:'left')}><ListVideo size={16}/>动作</button>
-     <button type="button" data-testid="sheet-right" aria-expanded={sheet==='right'} onClick={()=>setSheet(v=>v==='right'?null:'right')}><SlidersHorizontal size={16}/>调整</button>
-     <button type="button" aria-pressed={opts.trajectories} onClick={()=>setOpt({trajectories:!opts.trajectories})}>轨迹</button>
-     <button type="button" aria-pressed={opts.onion} onClick={()=>setOpt({onion:!opts.onion})}>洋葱皮</button>
-     <button type="button" aria-pressed={opts.balance} onClick={()=>setOpt({balance:!opts.balance})}>重心</button>
-     {!review?<button type="button" aria-pressed={opts.handles} onClick={()=>setOpt({handles:!opts.handles})}>手柄</button>:null}
+     <button type="button" data-testid="sheet-left" aria-expanded={compact?sheet==='left':libraryOpen} onClick={()=>{if(compact)setSheet(v=>v==='left'?null:'left');else{const right=inspectorPanel.current?.getSize().asPercentage??0,left=libraryOpen?0:24;panelGroup.current?.setLayout({'ws-library':left,'ws-stage':100-left-right,'ws-inspector':right});}}}><ListVideo size={16}/>动作</button>
+     <button type="button" data-testid="sheet-right" aria-expanded={compact?sheet==='right':inspectorOpen} onClick={()=>compact?setSheet(v=>v==='right'?null:'right'):inspectorOpen?inspectorPanel.current?.collapse():inspectorPanel.current?.resize('340px')}><SlidersHorizontal size={16}/>调整</button>
+     <button type="button" data-testid="display-menu" aria-expanded={optsOpen} onClick={()=>setOptsOpen(v=>!v)}><Eye size={15}/>显示</button>
      <button type="button" data-testid="fit-view" onClick={()=>{setSheet(null);setView('threeQuarter');engine.current?.setView('threeQuarter');}}>全视野</button>
-     {videoUrl?<button type="button" aria-pressed={refLarge} onClick={()=>setRefLarge(v=>!v)}><Video size={15}/>参考</button>:null}
+     {optsOpen?<><button type="button" className="ws-popscrim" aria-label="关闭显示菜单" onClick={()=>setOptsOpen(false)}/>
+      <div className="ws-optmenu" role="group" aria-label="显示选项">
+       <Row label="运动轨迹线" checked={opts.trajectories} onChange={v=>setOpt({trajectories:v})}/>
+       <Row label="重心 / 支撑" checked={opts.balance} onChange={v=>setOpt({balance:v})}/>
+       {!review?<Row label="编辑手柄" checked={opts.handles} onChange={v=>setOpt({handles:v})}/>:null}
+       <Row label="洋葱皮" detail="叠加前后姿态的幽灵骨架" checked={opts.onion} onChange={v=>setOpt({onion:v})}/>
+       {opts.onion?<>
+        <label className="ws-field"><span>数量</span><input type="number" min={1} max={3} step={1} value={opts.onionCount} onChange={e=>{const v=Math.max(1,Math.min(3,Math.round(Number(e.target.value)||1)));setOpts(o=>({...o,onionCount:v}));engine.current?.setOptions({onionCount:v});}}/></label>
+        <label className="ws-field"><span>模式</span><select value={opts.onionMode} onChange={e=>{const v=e.target.value as 'keys'|'step';setOpts(o=>({...o,onionMode:v}));engine.current?.setOptions({onionMode:v});}}><option value="keys">相邻关键帧</option><option value="step">固定步长</option></select></label>
+        {opts.onionMode==='step'?<label className="ws-field"><span>步长 s</span><input type="number" min={.02} max={1} step={.02} value={opts.onionStep} onChange={e=>{const v=Math.max(.02,Math.min(1,Number(e.target.value)||.1));setOpts(o=>({...o,onionStep:v}));engine.current?.setOptions({onionStep:v});}}/></label>:null}
+       </>:null}
+       <SkinSwitch disabled={!info} change={s=>engine.current!.setSkin(s)}/>
+       {videoUrl?<Row label="放大参考视频" checked={refLarge} onChange={v=>setRefLarge(v)}/>:null}
+      </div></>:null}
     </div>
     {compact&&videoEl?<div className={`ws-ref ${refLarge?'large':''}`} data-testid="reference-pip">{videoEl}<button type="button" aria-label={refLarge?'缩小参考视频':'放大参考视频并排对照'} onClick={()=>setRefLarge(v=>!v)}/></div>:null}
     {!info?<div className="ws-loading"><div className="loading-orbit"/><strong>{error?'加载失败':'正在读取人体模型'}</strong><p>{error}</p></div>:null}
    </section></Panel>
    <Separator className="pane-resize"/>
-   <Panel id="ws-inspector" className="ws-inspector-panel" defaultSize={272} minSize={220} maxSize={480} inert={generationLockedUi}><aside className="ws-right" aria-label="姿态调整与检查" inert={generationLockedUi}>
+   <Panel id="ws-inspector" panelRef={inspectorPanel} collapsible collapsedSize={0} onResize={size=>setInspectorOpen(size.inPixels>1)} className="ws-inspector-panel" defaultSize={0} minSize={320} maxSize={480} inert={generationLockedUi}><aside className="ws-right" aria-label="姿态调整与检查" inert={generationLockedUi}>
     {sheetHead('姿态调整 · 检查')}
     {review?<p className="ws-review-lock">审阅模式：姿态控件已锁定。<button type="button" data-testid="unlock-edit" onClick={()=>switchMode('edit')}><Hand size={13}/>切换到编辑</button></p>:null}
     <section className="ws-card ws-key-card" inert={review}><h2>选中关键帧 {sel?<small>@{sel.time.toFixed(2)}s</small>:null}</h2>
@@ -1092,6 +1319,12 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
         {orderedKeys.map((key,index)=><option key={key.id} value={index}>第 {index+1} 帧 · {key.time.toFixed(3)}s</option>)}
        </select></label>
        {d.loop&&selectedKeyIndex===0?<p className="ws-note">循环首帧固定在 0s；可调整顺序来更换首帧。</p>:null}
+      <div className="ws-row ws-context-actions" role="group" aria-label="选中关键帧操作">
+       <button type="button" data-testid="keyframe-copy-selected" disabled={insertTime===undefined||d.keys.length>=WORKSHOP_LIMITS.maxKeys} title={insertTime===undefined?'选中帧后没有可用时间':'完整复制选中帧到后方，副本可独立编辑'} onClick={()=>{if(sel)duplicateKey(sel.id);}}><Copy size={12}/>复制帧</button>
+       <button type="button" data-testid="pose-copy" disabled={!sel} title="复制选中关键帧的完整姿态（含手臂），会话内有效，可粘贴到其他帧或其他动作" onClick={copyPose}><ClipboardCopy size={12}/>复制姿态</button>
+       <button type="button" data-testid="pose-paste" disabled={!sel||!poseClipboard.current} title="把复制的姿态写到选中关键帧（约束不变），可撤销" onClick={pastePose}><Copy size={12}/>粘贴姿态</button>
+       <button type="button" data-testid="pose-mirror" disabled={!sel} title="当前帧姿态左右镜像：手脚与支撑互换，可撤销" onClick={mirrorSelectedPose}><FlipHorizontal2 size={12}/>镜像姿态</button>
+      </div>
       </div>
       {Math.abs(frame.time-sel.time)>.001?<p className="ws-note">正在预览 {frame.time.toFixed(2)}s；修改时定位到选中帧 {sel.time.toFixed(2)}s。调整当前时刻请先添加关键帧。</p>:null}
       {adjustmentTab==='semantic'?<SemanticPanel key={`${d.id}:${sel.id}:${wristEpoch.current}`} host={semanticHost} defaultSide={d.gripSide??'R'} keyLabel={sel.label||`关键帧 ${selectedKeyIndex+1}`}/>:<>
@@ -1182,7 +1415,10 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
      </>:<p className="ws-note">时间轴上选择或新建关键帧。</p>}
      </div>
     </section>
-    <section className="ws-card"><h2>合理性检查 <small>运动学 · 非动力学</small></h2>
+    <details className="ws-fold" data-fold="inspect">
+     <summary>检查 · 反馈 <small>按需展开</small></summary>
+     <div className="ws-fold-body">
+     <section className="ws-card"><h2>合理性检查 <small>运动学 · 非动力学</small></h2>
      {analysis?<div className="ws-checks">{analysis.items.map((it,i)=><div key={i} className={it.ok?'':'warn'}>{it.ok?<Check size={12}/>:<X size={12}/>}<span>{it.label}</span><small>{it.detail}</small></div>)}</div>:<p className="ws-note">求解后显示关节限位、支撑与重心。</p>}
      <p className="ws-note">限位使用工程关节范围；重心为分段质量近似，支撑多边形来自锁定脚位。</p>
     </section>
@@ -1200,18 +1436,8 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
       <button type="button" aria-label={`删除反馈 ${n.keyLabel} ${n.issue}`} onClick={()=>setNotes(all=>all.filter(x=>x.id!==n.id))}><X size={12}/></button>
      </li>)}</ul>:<p className="ws-note">尚无反馈；结构化 JSON 可直接交给 agent 修复。</p>}
     </section>
-    <section className="ws-card"><h2>显示</h2>
-     <SkinSwitch disabled={!info} change={s=>engine.current!.setSkin(s)}/>
-     <Row label="编辑手柄" checked={opts.handles} onChange={v=>{setOpts(o=>({...o,handles:v}));engine.current?.setOptions({handles:v});}}/>
-     <Row label="运动轨迹线" checked={opts.trajectories} onChange={v=>{setOpts(o=>({...o,trajectories:v}));engine.current?.setOptions({trajectories:v});}}/>
-     <Row label="重心 / 支撑" checked={opts.balance} onChange={v=>{setOpts(o=>({...o,balance:v}));engine.current?.setOptions({balance:v});}}/>
-     <Row label="洋葱皮" detail="叠加前后姿态的幽灵骨架线框" checked={opts.onion} onChange={v=>{setOpts(o=>({...o,onion:v}));engine.current?.setOptions({onion:v});}}/>
-     {opts.onion?<>
-      <label className="ws-field"><span>数量</span><input type="number" min={1} max={3} step={1} value={opts.onionCount} onChange={e=>{const v=Math.max(1,Math.min(3,Math.round(Number(e.target.value)||1)));setOpts(o=>({...o,onionCount:v}));engine.current?.setOptions({onionCount:v});}}/></label>
-      <label className="ws-field"><span>模式</span><select value={opts.onionMode} onChange={e=>{const v=e.target.value as 'keys'|'step';setOpts(o=>({...o,onionMode:v}));engine.current?.setOptions({onionMode:v});}}><option value="keys">相邻关键帧</option><option value="step">固定步长</option></select></label>
-      {opts.onionMode==='step'?<label className="ws-field"><span>步长 s</span><input type="number" min={.02} max={1} step={.02} value={opts.onionStep} onChange={e=>{const v=Math.max(.02,Math.min(1,Number(e.target.value)||.1));setOpts(o=>({...o,onionStep:v}));engine.current?.setOptions({onionStep:v});}}/></label>:null}
-     </>:null}
-    </section>
+     </div>
+    </details>
    </aside></Panel>
   </Group>
   {info&&(error||hint)?<div className={`ws-feedback${error?' ws-feedback-error':''}`} role={error?'alert':'status'}><span>{error||hint}</span><button type="button" aria-label="关闭提示" onClick={()=>{setError('');setHint('');}}><X size={16}/></button></div>:null}
@@ -1222,8 +1448,8 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
     <button aria-label="上一关键帧" data-testid="key-prev" onClick={()=>stepKey(-1)} disabled={!info}><ChevronLeft size={19}/></button>
     <button aria-label="下一关键帧" data-testid="key-next" onClick={()=>stepKey(1)} disabled={!info}><ChevronRight size={19}/></button>
     <button aria-label="回到开头" onClick={()=>engine.current?.seek(0)}><RotateCcw size={17}/></button>
-    <button aria-label="撤销" title="撤销 (Ctrl+Z)" disabled={!books.current.of(d.id).canUndo()} onClick={undo}><Undo2 size={17}/></button>
-    <button aria-label="重做" title="重做 (Ctrl+Shift+Z)" disabled={!books.current.of(d.id).canRedo()} onClick={redo}><Redo2 size={17}/></button>
+    <button aria-label="撤销" title="撤销 (Ctrl+Z)" disabled={review||!books.current.of(d.id).canUndo()} onClick={undo}><Undo2 size={17}/></button>
+    <button aria-label="重做" title="重做 (Ctrl+Shift+Z)" disabled={review||!books.current.of(d.id).canRedo()} onClick={redo}><Redo2 size={17}/></button>
     <span className="ws-time">{fmt(frame.time)}<i>/</i>{fmt(d.duration)}</span>
    </div>
    <Timeline doc={displayDoc} time={frame.time} selected={sel?.id??''} retime={!review} onSelect={selectKey} onSeek={t=>engine.current?.seek(t)} onRetime={(id,t)=>changeKeyTime(id,t,false)} onBeginRetime={()=>engine.current?.beginInteractiveEdit()} onEndRetime={()=>engine.current?.endInteractiveEdit()}/>

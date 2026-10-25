@@ -4,7 +4,7 @@
 
 ## 真实写路径
 
-- 算法支持的每个能力都必须存在真实 UI 写入路径（learning [5]）：参数能进文档、有控件、禁用态合理。QA 验收用真实指针/输入事件（`scripts/forehand-study/drive.mjs`、`browser-qa.mjs`），不直调引擎写方法（读路径/播放控制除外）。
+- 算法支持的每个能力都必须存在真实 UI 写入路径（learning [5]）：参数能进文档、有控件、禁用态合理。QA 验收用真实指针/输入事件（`browser-qa.mjs`），不直调引擎写方法（读路径/播放控制除外）。
 - 测试复现「出问题的具体交互路径」（learning [10]）：修交互 bug 要配一条走真实事件的断言，旁路改数据不算覆盖。
 - 初始选中 id 必须来自已加载动作，面板显示的回退关键帧也必须可写；姿态编辑先将预览定位到该关键帧。不能只更新滑块局部数字而因旧 id 静默跳过文档写入。
 
@@ -30,7 +30,7 @@
 
 ## 审阅 / 编辑模式与语义控件（issue #23）
 
-- **Review 不写文档**：`WorkshopEngine.setEditable(false)` 隐藏手柄与触球标记并拒绝编辑拾取（允许只读肌群高亮选择）；时间轴在 Review 下只 seek、不重定时，姿态卡整体 `inert`。手机默认 Review，桌面默认 Edit。抽屉只是 CSS（`.ws-compact`），开关不重建 canvas、不丢相机/编辑状态。
+- **Review 不写文档**：`WorkshopEngine.setEditable(false)` 隐藏手柄与触球标记并拒绝编辑拾取（允许只读肌群高亮选择）；时间轴在 Review 下只 seek、不重定时，姿态卡整体 `inert`。桌面和手机均默认 Review，轨迹与重心/支撑叠加默认关闭；进入 Edit 后按需展开语义调整与编辑手柄。抽屉只是 CSS（`.ws-compact`），开关不重建 canvas、不丢相机/编辑状态。
 - **语义命令**走 `applySemanticEdit`（`packages/motion-core/src/semantic-edit.ts`）：白名单 `部位 × 侧别 × 动作 × 度数` → 编码进既有 `PoseParams` 字段（不改 schema）→ 生产 `frameAt → solveEffectiveFrame` → 从求解后的骨骼读回解剖角，返回 `requested/actual/residual/reason`；不足 0.5° 或带动支撑脚即 `ok:false`，界面显示原因，不报成功。输入文档不被修改：预览总从事务开始时的同一基底重算，确认 = 一条撤销记录，取消 = 恢复基底并丢掉该记录。
 - **只动被指令的关节**：髋 / 膝语义是对该关节以下的腿做刚性 FK（`foot.target/pole/yaw/pitch` 一起旋转），肩 / 肘同理（`rotateArmAbout`）；`CHILD_JOINTS` 列出必须不变的子关节角，超过 1.5° 判失败。支撑帧上调腿 = 本帧离地 + 相邻帧接管原接触点（显示姿态逐骨核对 ≤1 mm），并补偿掉被取消支撑后不再施加的自动骨盆后移。
 - 「落地」= `groundFoot`：只改本帧，竖直平移整体（自动骨盆后移保持为本帧原值并折算进 `root.z`），支撑腿重新求解；够不到 / 踝超限时拒绝，文档不变。

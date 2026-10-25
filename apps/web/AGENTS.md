@@ -11,7 +11,7 @@
 
 - `npm test -- apps/web/src/workshop/workshop.test.ts`（或 `mirror.test.ts`）、`apps/web/src/playback/motion-source.test.ts`
 - 移动端 / 语义控件验收：`node scripts/workshop-mobile-qa.mjs`（需 dev server；Playwright 模拟，不等于真机）
-- 真实交互验收：`npm run qa`（需 dev server；`QA_BROWSER_CHANNEL=chrome` 走系统 Chrome；未进 CI）
+- 真实交互验收：`npm run qa`（需 dev server；`QA_BROWSER_CHANNEL=chrome` 走系统 Chrome；未进 CI）；动作库备份恢复与跨页签并发由 `npm run qa:library` 覆盖，CI 的 `browser-qa` workflow 跑同一入口
 
 ## 界面
 

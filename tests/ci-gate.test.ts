@@ -134,3 +134,29 @@ describe('requiredResult status truth table',()=>{
   },
  );
 });
+
+describe('browser QA workflow',()=>{
+ // Kept in its own workflow: adding a job to `test` would change the four-job
+ // required gate contract this file pins.
+ const browserWorkflow=loadYaml(fs.readFileSync(path.join(ROOT,'.github/workflows/browser-qa.yml'),'utf8')) as Record<string,any>;
+ const browserJobs=browserWorkflow.jobs as Record<string,any>;
+ const browserTriggers=(browserWorkflow.on??browserWorkflow['on']) as Record<string,any>;
+
+ it('runs the two library browser suites on every PR update',()=>{
+  expect(Object.keys(browserJobs)).toEqual(['library']);
+  for(const type of ['opened','synchronize','reopened','ready_for_review']){
+   expect(browserTriggers.pull_request?.types).toContain(type);
+  }
+  const steps=JSON.stringify(browserJobs.library.steps);
+  expect(steps).toContain('library-backup-qa.mjs');
+  expect(steps).toContain('library-concurrency-browser-qa.mjs');
+  expect(steps).toContain('playwright install');
+  expect(Number.isInteger(browserJobs.library['timeout-minutes'])).toBe(true);
+ });
+
+ it('runs the same suites locally through qa:library',()=>{
+  const scripts=JSON.parse(fs.readFileSync(path.join(ROOT,'package.json'),'utf8')).scripts as Record<string,string>;
+  expect(scripts['qa:library']).toContain('library-backup-qa.mjs');
+  expect(scripts['qa:library']).toContain('library-concurrency-browser-qa.mjs');
+ });
+});

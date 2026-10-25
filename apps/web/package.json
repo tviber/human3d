@@ -5,6 +5,9 @@
   "type": "module",
   "description": "KINESIS web app: the motion lab and the motion workshop, one Vite build with two entry pages.",
   "scripts": {
+    "predev": "sh ../../scripts/check-process-limit.sh",
+    "prebuild": "sh ../../scripts/check-process-limit.sh",
+    "prepreview": "sh ../../scripts/check-process-limit.sh",
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1"

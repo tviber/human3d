@@ -40,15 +40,15 @@ REWORK 后只复审 blocker 修复及受影响调用链，未变区域不重复�
 | 级别 | 范围 | 开发期要求 |
 |---|---|---|
 | Level 0 | 仅文档/注释等不影响运行行为 | 检查 diff + `npm run docs:check`（改了 .md 时），无需构建测试 |
-| Level 1 | 独立函数、UI 局部逻辑、插值计算 | 直接相关的定向 vitest；行为变化补测试；涉及类型接口跑 `npx tsc -b` |
+| Level 1 | 独立函数、UI 局部逻辑、插值计算 | 直接相关的定向 vitest；行为变化补测试；涉及类型接口跑 `sh scripts/check-process-limit.sh --npx && npx tsc -b` |
 | Level 2 | 共享类型、状态流、数据格式、模块间契约 | 所有受影响模块测试 + `tsc -b`；涉及构建配置跑 `npm run build` |
 | Level 3 | 协议、骨骼运动语义、IK、动力学、持久化、关键交互路径 | **必须**验证受影响的真实实现路径（不得以 mock 代替）；补集成/E2E；资源不足可移交 CI/其他机器但必须记录未完成项 |
 
-执行细节：优先 `npm test -- <test-file>`；低资源用 `--maxWorkers=1 --no-file-parallelism`；`npm run build` 已含 `tsc -b`；失败后先查根因再决定重试，不无限重试；不反复跑未受影响的全量集合。
+执行细节：优先 `npm test -- <test-file>`；根与 workspace 的 npm 验证入口在目标命令启动前按一个额外 Node / ffmpeg 进程预留检查（只计本仓库及其 worktree 运行的进程）；直接运行 `node` 前执行 `sh scripts/check-process-limit.sh`，直接运行 `npx` 前执行 `sh scripts/check-process-limit.sh --npx`；Vitest 默认单线程 worker 且不并行测试文件，内部再复核进程上限；浏览器 QA 共享串行锁且 Chromium renderer 限 1；`npm run qa` 默认跳过 WebGL 录屏和两轮动作优化，`HUMAN3D_QA_HEAVY=1` 才启用；`npm run build` 已含 `tsc -b`；失败先查根因再决定重试，不无限重试，也不重复跑未受影响的全量集合。
 
 ## 合并门禁现状与规划
 
-- **现状（PR-11A 已落地）**：`test` workflow 区分 Draft/Ready——Draft 只跑 `fast`（bounded A1 检查）且 `required` 报 `draft_deferred`；Ready 与 `main` push 跑 `full`（`docs:check`、`tsc -b`、`spec:check`、全量 vitest、`build`）+ `dynamics`；稳定聚合检查 `test / required` 只认实际成功（skipped/cancelled/stale/unrun 一律红）。事件矩阵见 [ci-lifecycle.md](ci-lifecycle.md)（`converted_to_draft`/`ready_for_review` 已在 PR #15 实测复演；`main` push 事件与远端 branch protection 配置——`test / required` 为必需检查——仍是待完成验收项，`main` 当前无任何保护规则）。浏览器 E2E（`npm run qa`）**未进 CI**，其验证状态必须单独记录。
+- **现状（PR-11A 已落地）**：`test` workflow 区分 Draft/Ready——Draft 只跑 `fast`（bounded A1 检查）且 `required` 报 `draft_deferred`；Ready 与 `main` push 跑 `full`（`docs:check`、`tsc -b`、`spec:check`、全量 vitest、`build`）+ `dynamics`；稳定聚合检查 `test / required` 只认实际成功（skipped/cancelled/stale/unrun 一律红）。事件矩阵见 [ci-lifecycle.md](ci-lifecycle.md)（`converted_to_draft`/`ready_for_review` 已在 PR #15 实测复演；`main` push 事件与远端 branch protection 配置——`test / required` 为必需检查——仍是待完成验收项，`main` 当前无任何保护规则）。动作库备份恢复与跨页签并发两项浏览器 E2E 在独立的 `browser-qa` workflow（`npm run qa:library`）里跑，与 `test` 的四 job 契约分开；其余浏览器 E2E（`npm run qa`、`qa:dynamics`、姿态渲染截图）**未进 CI**，验证状态必须单独记录。
 - **已实现（PR-11B）**：`check:affected`（plan-only 选择回执）与 `--run`（顺序执行选中检查 + 完整一致性回执）；类别映射的唯一权威是 [test-matrix.md](test-matrix.md)「选择器映射」表，与 `CATEGORY_CHECKS` 有矩阵一致性测试钉死。
 - **规划/待实现**：`check:full`（完整本地验证的统一封装）。
 - **规划/待实现（PR-11A 遗留）**：`.agents/skills/` 下的 `task-slice`/`fast-review`/`final-review`/`handoff` 规范 skill。

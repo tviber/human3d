@@ -31,7 +31,7 @@
 
 ## 3. 语义阈值与校准
 
-阈值定义在 `VALIDATION_LIMITS`。下表由 `npx tsx scripts/measure-motions.mts`（默认 40 fps，当前代码）得到，取整个包的最坏值。WP-C 求解语义变更（Catmull-Rom 切线限界 + 手部朝向 SO(3) 三次，`SERVICE_VERSION` 0.3.0）后重测；WP-D `gripSide` 升版（0.4.0）只镜像缺省 `'R'` 之外的求解路径，全部内置动作的轨迹逐位不变，阈值沿用。0.5.0 的骨盆位移日程对内置动作是 passthrough（期望位移已落在根速率 / 根加速度阈值内），这些峰值沿用；只改变会跳变的文档，见第 5 节。
+阈值定义在 `VALIDATION_LIMITS`。下表由 `sh scripts/check-process-limit.sh --npx && npx tsx scripts/measure-motions.mts`（默认 40 fps，当前代码）得到，取整个包的最坏值。WP-C 求解语义变更（Catmull-Rom 切线限界 + 手部朝向 SO(3) 三次，`SERVICE_VERSION` 0.3.0）后重测；WP-D `gripSide` 升版（0.4.0）只镜像缺省 `'R'` 之外的求解路径，全部内置动作的轨迹逐位不变，阈值沿用。0.5.0 的骨盆位移日程对内置动作是 passthrough（期望位移已落在根速率 / 根加速度阈值内），这些峰值沿用；只改变会跳变的文档，见第 5 节。
 
 | 动作（40 fps） | 骨骼角速率 rad/s | 根速率 m/s | 根加速度 m/s² | 膝屈曲 ° | 肘屈曲 ° | 支撑脚滑移 |
 |---|---|---|---|---|---|---|
@@ -54,11 +54,11 @@
 ## 4. 负对照与随机文档
 
 - **负对照**：一根骨骼每帧独立取随机单位四元数（符号连续化，因此只触发速率检查），被骨骼角速率检查拒绝。`validate.test.ts` 固定了这一结果，说明检查确实能区分跳变的姿态数据。
-- **随机工坊文档**：`npx tsx scripts/random-document-stats.mts <seed> 8` 按种子生成随机关键帧文档并提交服务。种子 1–3 各 8 个，共 24 个：
+- **随机工坊文档**：`sh scripts/check-process-limit.sh --npx && npx tsx scripts/random-document-stats.mts <seed> 8` 按种子生成随机关键帧文档并提交服务。种子 1–3 各 8 个，共 24 个：
   - 14 个通过语义校验；这 14 个都至少有一项求解器质量检查失败（踝背屈、COM 支撑或足部深度）。
   - 10 个被 422 拒绝，共 22 条消息：根速率 5.81–6.36 m/s（6 条）、根加速度 83.4–259.0 m/s²（7 条）、支撑脚滑移 3.8–11.9 cm（9 条）。
 - 随机文档的关键帧在 ±20 cm、±30° 量级上独立随机，很多并不可行，因此这组拒绝率不代表用户手工编辑文档的拒绝率。上面 10 个拒绝的计数是 0.5.0 之前的测量：当时根跳变和支撑滑移一起被拒。0.5.0 压掉骨盆位移自身造成的根跳变；腿长不够的支撑滑移仍然拒绝。不要把这组计数当成当前求解器的拒绝分布。机制见第 5 节。
-- 加 `saveDir` 参数可导出被拒文档的请求，例如 `npx tsx scripts/random-document-stats.mts 1 8 /tmp/rejected`。
+- 加 `saveDir` 参数可导出被拒文档的请求，例如 `sh scripts/check-process-limit.sh --npx && npx tsx scripts/random-document-stats.mts 1 8 /tmp/rejected`。
 
 ## 5. 已知限制：骨盆折叠（pelvis fold）
 
@@ -90,7 +90,7 @@
 ## 7. 修改阈值的流程
 
 1. 修改 `VALIDATION_LIMITS`（`packages/motion-core/src/validate.ts`）。
-2. 运行 `npx tsx scripts/measure-motions.mts`，更新第 3 节的表格和依据。
+2. 运行 `sh scripts/check-process-limit.sh --npx && npx tsx scripts/measure-motions.mts`，更新第 3 节的表格和依据。
 3. 运行 `npm test`。`validate.test.ts` 要求内置动作通过、负对照与一帧采样包被拒绝。
 4. 若改变了内置动作或契约，再运行 `npm run spec:check`，并视情况运行 `npm run protocol:example`。
 

@@ -305,3 +305,36 @@
 .ws-feedback button{flex:0 0 36px;min-height:36px;display:grid;place-items:center;border-radius:8px;background:var(--pill)}
 .ws-feedback-error{color:var(--red);border-color:var(--red)}
 .ws-compact .ws-feedback{top:54px}
+
+/* Whole-library restore preview (issue #30 PR-C) */
+.ws-restore{margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg-1)}
+.ws-restore h4{font-size:12px;margin:0 0 4px}
+.ws-restore-list{margin:4px 0 8px;padding-left:18px;color:var(--fg-2);font-size:12px;line-height:1.7}
+
+/* ---- issue #30 PR-B: on-demand folds + display menu ---------------------- */
+.ws-fold{border:1px solid var(--line);border-radius:10px;background:var(--card);margin-top:10px;overflow:hidden;flex-shrink:0}
+.ws-fold summary{display:flex;align-items:baseline;gap:8px;padding:10px 12px;cursor:pointer;font-weight:600;font-size:12.5px;color:var(--fg);list-style:none;min-height:40px}
+.ws-fold summary::-webkit-details-marker{display:none}
+.ws-fold summary::after{content:'▸';margin-left:auto;color:var(--muted);transition:transform .18s}
+.ws-fold[open] summary::after{transform:rotate(90deg)}
+.ws-fold summary small{font-weight:500;color:var(--muted);font-size:10.5px}
+.ws-fold-body{padding:0 10px 10px}
+.ws-fold-body .ws-card{margin-top:8px;border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.ws-fold-body .ws-card:first-child{margin-top:0}
+.ws-optmenu{position:absolute;top:calc(100% + 6px);left:0;z-index:22;width:236px;padding:10px 12px;display:flex;flex-direction:column;gap:2px;background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}
+.ws-optmenu .ws-check{min-height:32px}
+.ws-popscrim{position:fixed;inset:0;z-index:21;background:transparent;border:0}
+.ws-context-actions{flex-wrap:wrap;gap:6px;margin-top:8px}
+.ws-restore h4{margin:0 0 4px;font-size:12px}
+
+/* Panels are requested from the stage; keep their triggers available on desktop. */
+.ws-quickbar [data-testid^=sheet-]{display:inline-flex}
+.ws-mode-review .ws-actions{display:none}
+.ws-card h2{font-size:15px}
+.ws-field,.ws-check,.ws-note,.ws-save-state{font-size:13px}
+.ws-field input,.ws-field select,.ws-newname{font-size:14px;min-height:36px}
+.ws-row button,.ws-mini,.ws-adjustment-tabs button,.ws-cameras button{font-size:13px;min-height:36px}
+.ws-lib-name>span{font-size:14px}
+.ws-lib-name small,.ws-card h2 small,.ws-check small{font-size:12px}
+.ws-lib-row>button:last-child,.ws-lib-row>button:nth-last-child(2){width:36px;height:36px}
+.ws-compact .ws-hint{display:none}

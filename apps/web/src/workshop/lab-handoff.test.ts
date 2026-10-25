@@ -30,7 +30,8 @@ describe('resolveLabHandoff',()=>{
  });
  it('covers every lab-editable motion id with a preset handoff and nothing else',()=>{
   const editable=MOTION_FILES.filter(f=>f.kind==='workshop-motion'&&f.document);
-  expect(editable.length).toBeGreaterThan(20);
+  // Generic set only: the 17 player presets were ablated (#30/#21).
+  expect(editable.length).toBeGreaterThan(10);
   for(const f of editable)expect(resolveLabHandoff(`?from=${encodeURIComponent(f.id)}`)?.kind).toBe('preset');
  });
 });

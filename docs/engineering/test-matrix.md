@@ -17,7 +17,7 @@
 | spec/契约文本 | `spec/*.schema.json`、`spec/openapi.yaml`、`spec/examples/` | L3 | `npm run spec:check` | golden 变化要逐位审 diff（[../decisions/0007-golden-plaintext.md](../decisions/0007-golden-plaintext.md)） |
 | 包边界/结构 | 跨包导入、`package.json` 依赖、`tsconfig` | L2 | `tests/architecture.test.ts` + `tsc -b` | 公共入口/包配置 → 保守扩大（fail-open） |
 | 动力学资产/工具链 | `assets/motions/`、`assets/dynamics/`、`scripts/*.py`、`public/dynamics/` | L2 | `npm run dynamics:validate`、`dynamics:test`（需 `.venv-dynamics`） | 信封字段 → `motion-files` 相关测试 |
-| 持拍动作资产/生成器 | `assets/motions/forehand.json`、`assets/motions/*-forehand.json`、`scripts/generate-player-forehands.mts`、`scripts/lib/forehand-arms.mts`、`scripts/lib/forehand-depth.mts`、`scripts/lib/forehand-gates.mts`、`scripts/lib/forehand-measure.mts`、`evidence/forehand-depth.json`、`evidence/forehand-semantics.json`、`evidence/forehand-semantic-overrides.json`、`evidence/forehand-presets.json`（回执） | L3（运动语义） | `apps/web/src/lab/pose-validity.test.ts`（全部持拍动作每键 + 16 等分：无 145° 肘钳位、无手臂—躯干交叉）、`scripts/forehand-depth.test.ts`（引拍深度 ±1.5 cm、每键深度 = 目标（或站姿下限，回执 `stanceFloor`）± 0.05 cm、腕残差 ≤ 1 mm、后踝 ≤ 20.05°、服务 40/60 Hz 无 422、根加速度 ≤ 36、滑移 ≤ 9 mm）、`scripts/forehand-gates.test.ts`（门限与服务余量、棘轮、逐键 ±0.05 cm 与下限键的下限）、`scripts/build-forehand-semantics.test.ts`（语义层与深度研究、2D 关键点、覆盖输入一致）、`scripts/forehand-presets.test.ts`（生成无失败、回执与资产一致）、`npx tsx scripts/measure-player-forehands.mts`、`kinematics.test.ts` | 改生成器或门限 → `npm run forehand:generate`（任一门限失败则不写文件），再 `npm run forehand:check`；改语义层（`scripts/build-forehand-semantics.mts`、`evidence/forehand-semantic*.json`）→ `npm run forehand:semantics:check`，不一致时 `npx tsx scripts/build-forehand-semantics.mts --write`；改 `forehand.json` → 另跑 `solver-baseline.test.ts`/`quality.test.ts`/`service.test.ts` 并以 `--update-evidence` 重捕获 golden 与 `evidence/quality-probe-*`；信封 notes/description 变化 → `service.test.ts`、`motion-source.test.ts` |
+| 持拍动作资产 | `assets/motions/forehand.json` | L3（运动语义） | `apps/web/src/lab/pose-validity.test.ts`（全部持拍动作每键 + 16 等分：无 145° 肘钳位、无手臂—躯干交叉）、`kinematics.test.ts` | 改 `forehand.json` → 另跑 `solver-baseline.test.ts`/`quality.test.ts`/`service.test.ts` 并以 `--update-evidence` 重捕获 golden 与 `evidence/quality-probe-*`；信封 notes/description 变化 → `service.test.ts`、`motion-source.test.ts`。（17 球员正手生成/测量链已随 #21/#30 消融删除，仓外备份 + tag `archive/forehand-17` 可恢复） |
 | CI/工具/脚本 | `.github/workflows/`、`scripts/*.mjs`/`*.mts`、`tests/` | L2 | `tsc -b`、受影响脚本定向跑、`tests/*.test.ts` | 依赖/构建行为 → `npm run build` |
 | evidence 基线 | `evidence/**` | L1 | 对应测量脚本重跑（`measure-quality-probe.mts`/`bench`/`generate-motion.mts`） | 只写既有基线外的新文件需 review 确认 |
 
@@ -28,7 +28,7 @@
 - `apps/web/src/{workshop,playback}/*.test.ts`：工作台文档/镜像、播放源/导入校验
 - `tests/*.test.ts`：包边界（`architecture.test.ts`）、bench 冒烟
 - 定向：`npm test -- <path>`；低资源：`--maxWorkers=1 --no-file-parallelism`
-- 浏览器 E2E：`npm run qa` / `npm run qa:dynamics`（未进 CI，状态要单独记录）
+- 浏览器 E2E：`npm run qa` / `npm run qa:dynamics`（未进 CI，状态要单独记录）；动作库备份恢复与跨页签并发：`npm run qa:library`，由 CI 的 `browser-qa` workflow 执行
 
 ## check:affected 选择器映射（已实现）
 

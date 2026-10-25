@@ -1,0 +1,58 @@
+name: browser-qa
+
+# Key browser E2E for the workshop library: whole-library backup/restore and
+# cross-tab concurrent writes. These drive the real UI, real Web Locks and the
+# real IndexedDB snapshot path, which unit tests cannot cover. They need a
+# stable GPU/browser host, so they run here rather than on a developer machine.
+# This workflow is separate from `test` so the four-job required gate contract
+# stays unchanged; require `browser-qa / library` in branch protection to make
+# it a merge gate.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  library:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Start dev server
+        run: |
+          npm run dev >"$RUNNER_TEMP/dev-server.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/dev-server.pid"
+          for i in $(seq 1 90); do
+            if curl -sf http://127.0.0.1:5173/workshop.html >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/dev-server.log"
+          exit 1
+      - name: Library backup/restore (real UI writes, atomic failures)
+        run: node scripts/library-backup-qa.mjs --out-dir "$RUNNER_TEMP/qa/library-backup"
+      - name: Cross-tab concurrency and replace restore point
+        run: node scripts/library-concurrency-browser-qa.mjs >"$RUNNER_TEMP/qa/concurrency.log" 2>&1 || { cat "$RUNNER_TEMP/qa/concurrency.log"; exit 1; }
+      - name: Stop dev server
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/dev-server.pid" ]; then kill "$(cat "$RUNNER_TEMP/dev-server.pid")" 2>/dev/null || true; fi
+          cat "$RUNNER_TEMP/dev-server.log" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-qa-library
+          path: |
+            ${{ runner.temp }}/qa
+            ${{ runner.temp }}/dev-server.log
+          if-no-files-found: warn

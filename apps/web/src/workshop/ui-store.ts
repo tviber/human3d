@@ -17,7 +17,7 @@ export interface WorkshopUiState{
  setOpts:(patch:WorkshopOpts|((prev:WorkshopOpts)=>WorkshopOpts))=>void;
 }
 
-const initialOpts:WorkshopOpts={handles:true, trajectories:true, balance:true, onion:false, onionCount:2, onionMode:'keys', onionStep:.1};
+const initialOpts:WorkshopOpts={handles:true, trajectories:false, balance:false, onion:false, onionCount:2, onionMode:'keys', onionStep:.1};
 
 /** Workshop chrome that is not the document: selection, camera preset, display
  * options, and the "new motion" field. The document itself stays in MotionLibrary. */

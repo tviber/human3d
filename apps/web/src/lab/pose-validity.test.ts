@@ -1,9 +1,8 @@
 import {beforeAll,describe,expect,it} from 'vitest';
 import fs from 'node:fs';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
-import {Vector3} from 'three';
 import type {SkinnedMesh} from 'three';
-import {angleAt,attachRacket,blankDocument,DEG,frameAt,HumanRig,LIMITS,MOTION_FILES,mountRacket,solveEffectiveFrame} from '@human3d/motion-core';
+import {angleAt,blankDocument,frameAt,HumanRig,LIMITS,MOTION_FILES,solveEffectiveFrame} from '@human3d/motion-core';
 import type {WorkshopDoc} from '@human3d/motion-core';
 import {PoseValidityChecker} from './pose-validity';
 
@@ -90,7 +89,7 @@ describe('Lab pose validity on the production skinned rig',()=>{
   // frameAt → solveEffectiveFrame path and require both arms to stay below the
   // clamp, with no arm–torso surface crossing and every joint check passing.
   const racket=MOTION_FILES.filter(f=>f.kind==='workshop-motion'&&f.capabilities?.prop?.kind==='racket');
-  expect(racket.map(f=>f.id)).toEqual(expect.arrayContaining(['ready','forehand','novak-djokovic-forehand','ben-shelton-forehand']));
+  expect(racket.map(f=>f.id)).toEqual(expect.arrayContaining(['ready','forehand']));
   for(const file of racket){
    const doc=file.document!;
    const times=new Set(doc.keys.map(k=>k.time));
@@ -104,77 +103,6 @@ describe('Lab pose validity on the production skinned rig',()=>{
    }
   }
  },120000);
-
- it('swings every forehand through the hand-authored reference into a folded finish at the off shoulder',()=>{
-  // The player presets are rebuilt from the USER'S hand-authored workshop
-  // document (scripts/forehand-arm-reference.json): its 引拍1 / 引拍2 / 击球 racket
-  // and off arms are the reference, read back as torso-frame coefficients. This
-  // test pins what that reference actually contains, measured on the production
-  // sampler + solver + racket mount, so a future regeneration cannot quietly
-  // drift away from it. The thresholds are the authored pose ± a small band;
-  // the reference's own solved values are quoted in each comment.
-  //
-  // The bundled 49-key `forehand` is NOT part of this contract — the user's
-  // 2026-10-20 note judged its arms wrong, and it is tracked separately.
-  const origin=rig.rest.get('root')!;
-  const forehands=MOTION_FILES.filter(f=>f.kind==='workshop-motion'&&f.capabilities?.prop?.kind==='racket'
-   &&f.phases?.some(p=>p.label==='引拍')&&f.id!=='forehand');
-  expect(forehands.length).toBe(17);
-  const racket=attachRacket(rig);
-  const phaseTime=(file:typeof forehands[number],label:string)=>file.phases!.find(p=>p.label===label)!.time;
-  for(const file of forehands){
-   const doc=file.document!,dominant=doc.gripSide==='L'?'L':'R',off=dominant==='L'?'R':'L';
-   mountRacket(rig,racket,dominant);
-   const at=(t:number)=>{solveEffectiveFrame(rig,frameAt(doc,t,origin));rig.model.updateMatrixWorld(true);};
-   const racketAxis=()=>{const o=racket.localToWorld(new Vector3());return {origin:o,axis:racket.localToWorld(new Vector3(0,1,0)).sub(o).normalize()};};
-   const upperElevation=()=>{const s=rig.point(`upperarm01_${dominant}`),e=rig.point(`lowerarm01_${dominant}`);return Math.asin(Math.max(-1,Math.min(1,e.clone().sub(s).normalize().y)))/DEG;};
-   // 引拍: off arm from per-player video semantics (evidence/forehand-semantics.json).
-   // Video takeback is near-straight (inner elbow 136–179° ⇒ flexion ≈ 1–44°),
-   // pointing toward the oncoming ball at about shoulder height. The old
-   // authored Djokovic guard (flexion ≈ 113°) is the fallback only.
-   at(phaseTime(file,'引拍'));
-   const offShoulder=rig.point(`upperarm01_${off}`),offWrist=rig.point(`wrist_${off}`),racketShoulder=rig.point(`upperarm01_${dominant}`);
-   const front=offShoulder.clone().sub(racketShoulder).setY(0).normalize().cross(new Vector3(0,1,0)).multiplyScalar(dominant==='R'?1:-1);
-   expect(elbowFlexion(off),`${file.id} guard elbow`).toBeGreaterThan(5);
-   expect(elbowFlexion(off),`${file.id} guard elbow`).toBeLessThan(90); // near-straight video takeback
-   expect(offWrist.clone().sub(offShoulder).dot(front),`${file.id} guard hand forward of shoulder`).toBeGreaterThan(.05);
-   expect(offWrist.y-offShoulder.y,`${file.id} guard hand height`).toBeGreaterThan(-.45);
-   // 引拍 → 击球区: the shoulder takes the upper arm DOWN first (落拍, the
-   // authored 引拍2 is the bottom of the C) and then UP into the ball. Authored
-   // elevations: −19.9° (引拍1) → −42.9° (引拍2) → −23.2° (击球).
-   const tTake=phaseTime(file,'引拍'),tHit=phaseTime(file,'击球区');
-   at(tTake);const takebackElev=upperElevation();
-   let dropElev=Infinity;
-   for(let i=0;i<=20;i++){at(tTake+(tHit-tTake)*i/20);dropElev=Math.min(dropElev,upperElevation());}
-   expect(dropElev,`${file.id} upper arm drops below the takeback`).toBeLessThan(takebackElev-12);
-   // 击球 (= authored 击球): the racket is horizontal and points across the
-   // body; the authored elbow is 47.9°, the arm NOT straight. The old "<30° at
-   // contact" bound came from the previous generator and is retired here.
-   at(tHit);
-   expect(elbowFlexion(dominant),`${file.id} contact elbow`).toBeGreaterThan(20);
-   expect(elbowFlexion(dominant),`${file.id} contact elbow`).toBeLessThan(70);
-   const hitAxis=racketAxis().axis;
-   expect(Math.abs(hitAxis.y),`${file.id} contact racket axis horizontal`).toBeLessThan(.35);
-   // 随挥: elbow folded, racket near vertical with the head above the off
-   // shoulder, off hand on the throat (all designed around the reference).
-   at(phaseTime(file,'随挥'));
-   const {origin:grip,axis}=racketAxis();
-   const head=grip.clone().addScaledVector(axis,.445),throat=grip.clone().addScaledVector(axis,.2);
-   const finishShoulder=rig.point(`upperarm01_${off}`);
-   expect(elbowFlexion(dominant),`${file.id} finish elbow`).toBeGreaterThan(55);
-   expect(elbowFlexion(dominant),`${file.id} finish elbow`).toBeLessThan(110);
-   expect(axis.angleTo(new Vector3(0,1,0))/DEG,`${file.id} finish racket tilt`).toBeLessThan(35);
-   expect(head.y-finishShoulder.y,`${file.id} finish head above off shoulder`).toBeGreaterThan(.25);
-   expect(Math.hypot(head.x-finishShoulder.x,head.z-finishShoulder.z),`${file.id} finish head over off shoulder`).toBeLessThan(.35);
-   expect(rig.point(`wrist_${off}`).distanceTo(throat),`${file.id} off hand on the throat`).toBeLessThan(.12);
-   // Measured rise across the 17 presets is 29.5°–34.2° (the shortest-reach
-   // player sits at the bottom: a folded finish bends the elbow more, which
-   // lowers the finish elevation). The bound pins the rise as real without
-   // demanding a longer lever than a short player has.
-   expect(upperElevation(),`${file.id} upper arm rises from the drop to the finish`).toBeGreaterThan(dropElev+28);
-  }
-  racket.removeFromParent();
- },60000);
 
  it('reports a shoulder direction outside the diagnostic anatomical envelope',()=>{
   const report=solved(documentWithArms('Shoulder direction limit',

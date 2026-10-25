@@ -14,7 +14,7 @@
 
 ## 姿态有效性检查器（手臂—躯干）
 
-网球正手动作曾有右臂在部分姿态下穿入躯干的缺陷（2026-10-20 已修复，根因与数据见 [reports/forehand-video-retargeting.md](reports/forehand-video-retargeting.md)）。独立检查器 `apps/web/src/lab/pose-validity.ts` 在生产蒙皮网格上工作：读取 Three.js 变形后的实际表面，将明确分类的左右臂三角面与躯干三角面做三维相交检查，并读取已由 `frameAt → solveEffectiveFrame` 求出的肩臂方向、肩上抬和肘屈曲。它只用于诊断，不改变 IK、动作采样或服务契约。
+网球正手动作曾有右臂在部分姿态下穿入躯干的缺陷（2026-10-20 已修复；报告与 17 球员研究链已随 #21/#30 消融归档，git tag `archive/forehand-17` 可溯源）。独立检查器 `apps/web/src/lab/pose-validity.ts` 在生产蒙皮网格上工作：读取 Three.js 变形后的实际表面，将明确分类的左右臂三角面与躯干三角面做三维相交检查，并读取已由 `frameAt → solveEffectiveFrame` 求出的肩臂方向、肩上抬和肘屈曲。它只用于诊断，不改变 IK、动作采样或服务契约。
 
 判定有三种：
 
@@ -30,7 +30,7 @@
 npm test -- apps/web/src/lab/pose-validity.test.ts
 npm run dev
 npm run qa:pose-validity
-node scripts/pose-visual-qa.mjs --quick 正手挥拍 "Novak Djokovic"   # 按信封阶段标记做多方位纯渲染截图
+sh scripts/check-process-limit.sh && node scripts/pose-visual-qa.mjs --quick 正手挥拍 "Novak Djokovic"   # 按信封阶段标记做多方位纯渲染截图
 ```
 
 浏览器验收驱动真实 Lab 页面，生成三个夹具各自的 front/side/back WebGL 截图以及 `report.json`。若需要独立端口：
@@ -76,7 +76,7 @@ HUMAN3D_WEB_PORT=5174 npm run qa:pose-validity
 
 ## 浏览器检查
 
-`scripts/browser-qa.mjs` 检查并保存 evidence/browser-results.json。
+`scripts/browser-qa.mjs` 检查并保存 evidence/browser-results.json。默认跳过高 CPU 的 WebGL 录屏和两轮动作优化，并在结果的 `skipped` 字段记录；设置 `HUMAN3D_QA_HEAVY=1` 后运行完整重型验收。验证启动前会检查本仓库运行的 Node / ffmpeg 进程数（不含编辑器和其他项目的进程），超过 4 个即拒绝。
 
 | 检查 | 结果 |
 |---|---|
@@ -117,9 +117,8 @@ HUMAN3D_WEB_PORT=5174 npm run qa:pose-validity
 
 ### WP-C 追加的检查与证据（求解语义变更：切线限界 + 手部 SO(3) 三次）
 
-- **质量探针**：`packages/motion-core/src/quality-probe.ts` 是共享度量实现（vitest 与 CLI 同源），`npx tsx scripts/measure-quality-probe.mts [fps=240] [motion|all]` 走真实 `frameAt → solveEffectiveFrame → analyzePose` 路径以 240fps 采样；`evidence/quality-probe-*.json` 是 WP-C 后求解器的提交基线。`quality.test.ts` 既有结构断言也有硬质量门（kick 削减、atKey 步长、accelTop 等，实测值写进注释）。
-- **forehand-study 验收夹具**：`spec/examples/forehand-study.request.json` 是 2.0 s、5 键的正手研究文档，**全部由工作台真实 UI 写路径制作**（`scripts/forehand-study/drive.mjs` + `ops.json` 回放：面板滑块/时间字段 input 事件 + 画布双视角真实指针拖拽）；账本在 `spec/examples/forehand-study.md`，逐轮探针快照在 `evidence/forehand-study/rounds.jsonl`。`contract.test.ts` 钉结构与 200 契约，`quality.test.ts` 对其实测值加 ×1.25 上限 / ÷1.25 下限硬门（腕弯曲 0 截幅、IK 残差 ~0、触球键拍头速度 >3 m/s、tip kicks ≤170 回归门等）。
-- **`scripts/forehand-study/` 制作链**：保留 `drive.mjs`（工作台真实 UI 写路径回放器）+ `ops.json`（回放配方）作夹具重制入口；研究期的探针迭代/扫描脚本已随一次性校准退役，重测走共享探针 CLI。
+- **质量探针**：`packages/motion-core/src/quality-probe.ts` 是共享度量实现（vitest 与 CLI 同源），`sh scripts/check-process-limit.sh --npx && npx tsx scripts/measure-quality-probe.mts [fps=240] [motion|all]` 走真实 `frameAt → solveEffectiveFrame → analyzePose` 路径以 240fps 采样；`evidence/quality-probe-*.json` 是 WP-C 后求解器的提交基线。`quality.test.ts` 既有结构断言也有硬质量门（kick 削减、atKey 步长、accelTop 等，实测值写进注释）。
+- **forehand-study 验收夹具**：`spec/examples/forehand-study.request.json` 是 2.0 s、5 键的正手文档，**全部由工作台真实 UI 写路径制作**（制作链 `drive.mjs`/`ops.json` 与逐轮快照已随 #21/#30 消融移出仓库，归档于 tag `archive/forehand-17` 对应的仓外备份）；账本在 `spec/examples/forehand-study.md`。`contract.test.ts` 钉结构与 200 契约，`quality.test.ts` 对其实测值加 ×1.25 上限 / ÷1.25 下限硬门（腕弯曲 0 截幅、IK 残差 ~0、触球键拍头速度 >3 m/s、tip kicks ≤170 回归门等）。
 - 求解语义变更后全量浏览器复验：本记录对应一次 `QA_BROWSER_CHANNEL=chrome npm run qa` 全绿（errors/warnings 为空）与 `node scripts/dynamics-browser-qa.mjs` 29 项全过；`evidence/browser-results.json`、`dynamics-results.json` 与相关截图/录屏随运行刷新。
 
 ## 实测关键姿态
@@ -181,11 +180,10 @@ HUMAN3D_WEB_PORT=5174 npm run qa:pose-validity
 - debug.png / skeleton.png：人体表面叠加或关闭时的绑定骨架 / 关节 / 坐标轴 / IK 端点。
 - laptop.png / mobile.png / mobile-settings.png：不同视口。
 - production.png / production-results.json：生产静态构建与外部资源阻断检查。
-- forehand.webm / forehand.mp4：30 fps 实时挥拍录屏，H.264 转码已完整解码验证。
+- forehand.webm / forehand.mp4：重型验收（`HUMAN3D_QA_HEAVY=1`）生成的 30 fps 实时挥拍录屏，H.264 转码已完整解码验证。
 - video-1.3.png / video-2.55.png / video-3.35.png / video-4.6.png：录屏关键帧复查。
 - browser-results.json：浏览器检查与 480 个基础动作采样的结构化原始结果。
 - quality-probe-{idle,reach,squat,ready,forehand,default,summary}.json：240fps 质量探针基线（WP-C 后求解器）。
-- forehand-study/rounds.jsonl + doc-*.json：UI 制作验收夹具的逐轮探针快照与中间文档；定稿在 `spec/examples/`。
 
 ## 2026-10-17 投掷与直拳修复复验
 

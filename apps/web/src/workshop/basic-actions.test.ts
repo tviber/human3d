@@ -32,7 +32,7 @@ describe('basic action library',()=>{
   }
   expect(RACKET_PRESETS.length).toBeGreaterThan(0);
   expect(RACKET_PRESETS.every(p=>p.capabilities?.prop?.kind==='racket')).toBe(true);
-  expect(RACKET_PRESETS.some(p=>p.id==='roger-federer-forehand')).toBe(true);
+  expect(RACKET_PRESETS.some(p=>p.id==='forehand')).toBe(true);
   // `ready` declares the racket prop, so it sits with the racket group, not here.
   expect(OTHER_PRESETS.map(p=>p.id).sort()).toEqual(['idle','reach','squat']);
  });
@@ -40,7 +40,7 @@ describe('basic action library',()=>{
 
 describe('insertBasicAction',()=>{
  it('inserts a half squat at a sampled frame: starts from the state, ripples later keys, keeps the arms',()=>{
-  const doc=docOf('roger-federer-forehand');
+  const doc=docOf('forehand');
   const original=structuredClone(doc);
   const t=.37;
   const before=frameAt(original,t,origin());
@@ -79,7 +79,7 @@ describe('insertBasicAction',()=>{
  });
 
  it('reuses an existing key at the playhead instead of stacking a duplicate timestamp',()=>{
-  const doc=docOf('roger-federer-forehand');
+  const doc=docOf('forehand');
   const anchor=doc.keys[2];
   const pose=structuredClone(anchor.pose);
   const n=doc.keys.length;
@@ -107,7 +107,7 @@ describe('insertBasicAction',()=>{
  });
 
  it('lunge: the lead foot steps forward in the BODY frame, holds, and is released at the last key',()=>{
-  const doc=docOf('roger-federer-forehand');
+  const doc=docOf('forehand');
   const yaw=frameAt(doc,.5,origin()).pose.yaw;
   const rightBefore=frameAt(doc,.5,origin()).constraints.plantR;
   const ins=insertBasicAction(doc,basicOf('basic-lunge'),.5,origin())!;
@@ -200,7 +200,7 @@ describe('insertBasicAction',()=>{
  });
 
  it('carry-hands templates translate the hand target/pole and keep the wrist orientation',()=>{
-  const doc=docOf('roger-federer-forehand');
+  const doc=docOf('forehand');
   const t=.37;
   const before=frameAt(structuredClone(doc),t,origin());
   const ins=insertBasicAction(doc,basicOf('basic-arms-up'),t,origin(),{carryHands:true})!;
@@ -235,7 +235,7 @@ describe('insertBasicAction',()=>{
  });
 
  it('refuses without touching the document when the key or duration limit would be exceeded',()=>{
-  const full=docOf('roger-federer-forehand');
+  const full=docOf('forehand');
   const template=full.keys[0];
   for(let i=0;full.keys.length<WORKSHOP_LIMITS.maxKeys-1;i++){
    full.keys.push({...structuredClone(template),id:`fill-${i}`,time:.001+i*.0001,label:''});
@@ -246,7 +246,7 @@ describe('insertBasicAction',()=>{
   expect(insertBasicAction(full,basicOf('basic-half-squat'),1.7,origin())).toBeUndefined();
   expect(serializeDoc(full)).toBe(snapshot);
 
-  const long=docOf('roger-federer-forehand');
+  const long=docOf('forehand');
   long.duration=9.5;
   const longSnapshot=serializeDoc(long);
   expect(basicInsertRefusal(long,basicOf('basic-half-squat'),.5)).toMatch(/时长/);

@@ -7,23 +7,6 @@ import ready from '../../../assets/motions/ready.json';
 import forehand from '../../../assets/motions/forehand.json';
 import baseballThrow from '../../../assets/motions/baseball-throw.json';
 import punch from '../../../assets/motions/punch.json';
-import novakDjokovicForehand from '../../../assets/motions/novak-djokovic-forehand.json';
-import rogerFedererForehand from '../../../assets/motions/roger-federer-forehand.json';
-import carlosAlcarazForehand from '../../../assets/motions/carlos-alcaraz-forehand.json';
-import alexanderZverevForehand from '../../../assets/motions/alexander-zverev-forehand.json';
-import daniilMedvedevForehand from '../../../assets/motions/daniil-medvedev-forehand.json';
-import benSheltonForehand from '../../../assets/motions/ben-shelton-forehand.json';
-import alexanderBublikForehand from '../../../assets/motions/alexander-bublik-forehand.json';
-import francesTiafoeForehand from '../../../assets/motions/frances-tiafoe-forehand.json';
-import holgerRuneForehand from '../../../assets/motions/holger-rune-forehand.json';
-import alexDeMinaurForehand from '../../../assets/motions/alex-de-minaur-forehand.json';
-import alejandroDavidovichFokinaForehand from '../../../assets/motions/alejandro-davidovich-fokina-forehand.json';
-import flavioCobolliForehand from '../../../assets/motions/flavio-cobolli-forehand.json';
-import marinCilicForehand from '../../../assets/motions/marin-cilic-forehand.json';
-import karenKhachanovForehand from '../../../assets/motions/karen-khachanov-forehand.json';
-import jakubMensikForehand from '../../../assets/motions/jakub-mensik-forehand.json';
-import ignacioBuseForehand from '../../../assets/motions/ignacio-buse-forehand.json';
-import felixAugerAliassimeForehand from '../../../assets/motions/felix-auger-aliassime-forehand.json';
 import basicHalfSquat from '../../../assets/motions/basic-half-squat.json';
 import basicFullSquat from '../../../assets/motions/basic-full-squat.json';
 import basicLunge from '../../../assets/motions/basic-lunge.json';
@@ -38,11 +21,7 @@ import basicArmsUp from '../../../assets/motions/basic-arms-up.json';
  * and the scripts all read the same assets/motions/ files; dynamics-motion
  * envelopes normalize their display fields out of `dynamics.action`. */
 export const MOTION_FILES:MotionFile[]=[idle,walk,reach,squat,ready,forehand,baseballThrow,punch,
- novakDjokovicForehand,rogerFedererForehand,carlosAlcarazForehand,alexanderZverevForehand,
- daniilMedvedevForehand,benSheltonForehand,alexanderBublikForehand,francesTiafoeForehand,
- holgerRuneForehand,alexDeMinaurForehand,alejandroDavidovichFokinaForehand,flavioCobolliForehand,
- marinCilicForehand,karenKhachanovForehand,jakubMensikForehand,ignacioBuseForehand,
- felixAugerAliassimeForehand,basicHalfSquat,basicFullSquat,basicLunge,basicWeightShift,basicPushTurn,
+ basicHalfSquat,basicFullSquat,basicLunge,basicWeightShift,basicPushTurn,
  basicWideSquat,basicForwardFold,basicArmsUp]
  .map(f=>normalizeMotionFile(f))
  .sort((a,b)=>a.order-b.order);

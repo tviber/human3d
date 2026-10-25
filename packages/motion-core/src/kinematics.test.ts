@@ -55,12 +55,8 @@ describe('real authored asset and animation data',()=>{
   // and the two dynamics-motion envelopes replay MyoSim records rather than
   // writing the skin rig through the document path.
   expect(MOTION_FILES.map(f=>f.id).sort()).toEqual([
-   'alejandro-davidovich-fokina-forehand','alex-de-minaur-forehand','alexander-bublik-forehand','alexander-zverev-forehand',
    'baseball-throw','basic-arms-up','basic-forward-fold','basic-full-squat','basic-half-squat','basic-lunge','basic-push-turn','basic-weight-shift','basic-wide-squat',
-   'ben-shelton-forehand','carlos-alcaraz-forehand','daniil-medvedev-forehand','felix-auger-aliassime-forehand',
-   'flavio-cobolli-forehand','forehand','frances-tiafoe-forehand','holger-rune-forehand','idle','ignacio-buse-forehand',
-   'jakub-mensik-forehand','karen-khachanov-forehand','marin-cilic-forehand','novak-djokovic-forehand','punch','reach','ready',
-   'roger-federer-forehand','squat','walk',
+   'forehand','idle','punch','reach','ready','squat','walk',
   ]);
   for(const f of MOTION_FILES.filter(f=>f.kind!=='dynamics-motion')){
    expect(f.duration).toBeGreaterThan(1);

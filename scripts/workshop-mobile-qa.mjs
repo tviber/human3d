@@ -1,4 +1,5 @@
 import {chromium} from 'playwright';
+import {launchQaBrowser} from './lib/qa-browser.mjs';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {resolveOutputDir,assertTrackedWriteAllowed,atomicWriteFile,ensureOutputDir} from './lib/qa-output.mjs';
@@ -21,7 +22,7 @@ const identity=await verifyWebIdentity(repoRoot,webBase);
 assert(identity.ok,`dev server does not serve this checkout: ${identity.detail}`);
 const url=new URL('/workshop.html',webBase).href;
 // One context at a time, DPR 1: each context runs a full WebGL skin; stacking them exhausted a dev laptop.
-const browser=await chromium.launch({headless:true,args:['--renderer-process-limit=1'],...(process.env.QA_BROWSER_CHANNEL?{channel:process.env.QA_BROWSER_CHANNEL}:{})});
+const browser=await launchQaBrowser(chromium,{...(process.env.QA_BROWSER_CHANNEL?{channel:process.env.QA_BROWSER_CHANNEL}:{})});
 const checks={},errors=[];
 const watch=page=>{page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});};
 const ready=page=>page.waitForFunction(()=>window.__WS__?.ready,{timeout:60000});
@@ -86,8 +87,10 @@ try{
  await touch('touchStart',[kc]);for(let i=1;i<=6;i++)await touch('touchMove',[[kc[0]+i*6,kc[1]]]);await touch('touchEnd',[]);
  assert.equal((await read(page)).storage,before.storage,'review timeline drag retimed a key');
  checks.timelineTouch=true;
- await page.getByRole('button',{name:'洋葱皮',exact:true}).tap();
- assert.equal(await page.getByRole('button',{name:'洋葱皮',exact:true}).getAttribute('aria-pressed'),'true');
+ await page.getByTestId('display-menu').tap();
+ const onion=page.locator('.ws-optmenu .ws-check').filter({hasText:'洋葱皮'}).locator('input');
+ await onion.check();assert(await onion.isChecked());
+ await page.getByRole('button',{name:'关闭显示菜单'}).tap({position:{x:2,y:2}});
  assert.equal((await read(page)).storage,before.storage);
  checks.quickToggles=true;
  await page.screenshot({path:outputFile('phone-review.png')});
@@ -171,7 +174,6 @@ try{
  checks.undoRedoReload=true;
  // Clamp honesty: request +90° flexion, beyond the 145° limit.
  await page.getByTestId('mode-edit').tap();
- await page.getByTestId('sheet-right').tap();
  await page.getByTestId('semantic-part-elbow').tap();await page.getByTestId('semantic-side-R').tap();
  await page.getByRole('button',{name:'15°',exact:true}).tap();
  // +15° steps until the 145° flexion cap: the panel must report the clamp, not success.
@@ -181,6 +183,7 @@ try{
  sameDoc((await read(page)).doc,wristDoc.doc,'cancel did not restore the base');
  checks.clampReported=true;
  await page.screenshot({path:outputFile('phone-semantic.png')});
+ await page.locator('[data-fold=inspect] summary').tap();
  await page.getByTestId('note-issue').selectOption('手臂穿身');
  await page.getByTestId('note-text').fill('右肘贴进躯干');
  await page.getByTestId('note-add').tap();
@@ -204,8 +207,10 @@ try{
  /* ---------- desktop regression ---------- */
  const deskCtx=await browser.newContext({viewport:{width:1536,height:1024},deviceScaleFactor:1});const desk=await deskCtx.newPage();watch(desk);
  await desk.goto(url);await ready(desk);
- assert.equal(await desk.locator('.ws-shell').getAttribute('data-mode'),'edit');
+ assert.equal(await desk.locator('.ws-shell').getAttribute('data-mode'),'review');
+ await desk.getByTestId('sheet-left').click();await desk.locator('[data-fold=preset] summary').click();
  assert(await desk.getByRole('combobox',{name:'初始动作预设'}).isVisible());
+ await desk.getByTestId('mode-edit').click();
  await desk.getByTestId('adjustment-tab-semantic').click();
  assert(await desk.getByTestId('semantic-panel').isVisible());
  await desk.getByTestId('adjustment-tab-left').click();

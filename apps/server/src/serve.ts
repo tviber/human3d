@@ -9,7 +9,6 @@ import type {ErrorCode} from './errors';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../..');
 const assetDir=process.env.HUMAN3D_ASSETS??path.join(root,'public');
 const port=Number(process.env.HUMAN3D_PORT??8788);
-const ctx=await createService(assetDir);
 
 /** Host must name the loopback interface. Binding to 127.0.0.1 alone does not
  * stop DNS rebinding: a page on another name can resolve to 127.0.0.1, and the
@@ -22,6 +21,8 @@ function originAllowed(origin:string|undefined,host:string){
  try{return new URL(origin).host===host;}catch{return false;}
 }
 
+export async function startMotionService(listenPort=port,assets=assetDir){
+const ctx=await createService(assets);
 const server=http.createServer((req,res)=>{
  const send=(status:number,body:unknown)=>{
   const data=JSON.stringify(body);
@@ -65,7 +66,15 @@ const server=http.createServer((req,res)=>{
   }catch(e){sendError(500,'internal',e instanceof Error?e.message:String(e));}
  });
 });
-server.listen(port,'127.0.0.1',()=>{
+await new Promise<void>((resolve,reject)=>{
+ server.once('error',reject);
+ server.listen(listenPort,'127.0.0.1',()=>{server.off('error',reject);resolve();});
+});
+return server;
+}
+
+if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+ await startMotionService();
  console.log(`human3d-motion v1 listening on http://127.0.0.1:${port}`);
  console.log(`GET /v1/capabilities · POST /v1/motions · assets: ${assetDir}`);
-});
+}

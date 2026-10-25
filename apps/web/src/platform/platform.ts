@@ -16,7 +16,9 @@
 
 export interface StorageLike{getItem(k:string):string|null;setItem(k:string,v:string):void;removeItem?(k:string):void;readonly length?:number;key?(index:number):string|null}
 
-export type StorageLock=(key:string,write:(snapshot?:StorageLike)=>void|Promise<void>)=>Promise<void>;
+/** `snapshotOnly` keys commit to the canonical snapshot store without a
+ * localStorage mirror, so large records cannot exhaust the mirror's quota. */
+export type StorageLock=(key:string,write:(snapshot?:StorageLike)=>void|Promise<void>,relatedKeys?:readonly string[],options?:{snapshotOnly?:readonly string[]})=>Promise<void>;
 export interface DraftOwner{id:string;ready:Promise<void>;active(id:string):Promise<boolean>}
 
 export interface AppPlatform{
@@ -28,6 +30,7 @@ export interface AppPlatform{
   storage:StorageLike|null;
   storageLock:StorageLock;
   readStorage(key:string):Promise<string|null>;
+  readStorages(keys:readonly string[]):Promise<(string|null)[]>;
   readonly draftOwner:DraftOwner|undefined;
   /** Hand a produced file to the user (web: anchor download). */
   download(name:string,blob:Blob):void;
@@ -57,7 +60,7 @@ function safeStorage():StorageLike|null{
 let draftOwner:DraftOwner|undefined;
 let storageDatabase:Promise<IDBDatabase>|undefined;
 
-async function storageSnapshot(key:string){
+async function storageSnapshots(keys:readonly string[]){
   storageDatabase??=new Promise<IDBDatabase>((resolve,reject)=>{
     const request=indexedDB.open('kinesis-workshop',1);
     request.onupgradeneeded=()=>{request.result.createObjectStore('snapshots');};
@@ -65,22 +68,32 @@ async function storageSnapshot(key:string){
     request.onsuccess=()=>{request.result.onversionchange=()=>{request.result.close();storageDatabase=undefined;};resolve(request.result);};
   });
   const db=await storageDatabase;
-  return new Promise<string|null|undefined>((resolve,reject)=>{
-    const transaction=db.transaction('snapshots','readonly'),request=transaction.objectStore('snapshots').get(key);
+  return new Promise<(string|null|undefined)[]>((resolve,reject)=>{
+    const transaction=db.transaction('snapshots','readonly');
+    const requests=keys.map(key=>transaction.objectStore('snapshots').get(key));
     transaction.oncomplete=()=>{
-      const value:unknown=request.result;
-      if(value!==undefined&&value!==null&&typeof value!=='string')reject(new Error('已保存动作快照格式错误'));
-      else resolve(value);
+      const values:unknown[]=requests.map(request=>request.result);
+      if(values.some(value=>value!==undefined&&value!==null&&typeof value!=='string'))reject(new Error('已保存快照格式错误'));
+      else resolve(values as (string|null|undefined)[]);
     };
-    transaction.onabort=()=>reject(transaction.error??new Error('读取已保存动作失败'));
+    transaction.onabort=()=>reject(transaction.error??new Error('读取已保存数据失败'));
   });
+}
+async function storageSnapshot(key:string){return (await storageSnapshots([key]))[0];}
+async function withStorageLocks<T>(keys:readonly string[],run:()=>Promise<T>):Promise<T>{
+  const locks=globalThis.navigator?.locks;
+  if(!locks)return run();
+  const ordered=[...new Set(keys)].sort();
+  const acquire=async(i:number):Promise<T>=>i===ordered.length?run():locks.request(ordered[i],()=>acquire(i+1));
+  return acquire(0);
 }
 
 export const webPlatform:AppPlatform={
   assetUrl:path=>path,
   fetchAsset:path=>fetch(path),
   get storage(){return safeStorage();},
-  async readStorage(key){const value=await storageSnapshot(key);return value===undefined?safeStorage()?.getItem(key)??null:value;},
+  async readStorage(key){return withStorageLocks([key],async()=>{const value=await storageSnapshot(key);return value===undefined?safeStorage()?.getItem(key)??null:value;});},
+  async readStorages(keys){return withStorageLocks(keys,async()=>{const values=await storageSnapshots(keys);return values.map((value,i)=>value===undefined?safeStorage()?.getItem(keys[i])??null:value);});},
   get draftOwner(){
     if(!globalThis.navigator?.locks)return undefined;
     if(!draftOwner){
@@ -92,22 +105,51 @@ export const webPlatform:AppPlatform={
     }
     return draftOwner;
   },
-  async storageLock(key,write){
+  async storageLock(key,write,relatedKeys=[],{snapshotOnly=[]}={}){
     if(!globalThis.navigator?.locks)throw new Error('浏览器不支持安全的跨页面保存，请导出 JSON 备份');
-    await navigator.locks.request(key,async()=>{
+    const keys=[...new Set([key,...relatedKeys])].sort();
+    const unmirrored=new Set(snapshotOnly);
+    const commit=async()=>{
       const native=safeStorage();if(!native)throw new Error('浏览器存储不可用，请导出 JSON 备份');
-      const committed=await storageSnapshot(key),db=await storageDatabase!;
-      let value=committed===undefined?native.getItem(key):committed,changed=false;
-      // localStorage caches can lag across renderers even under a Web Lock.
-      await write({getItem:k=>k===key?value:native.getItem(k),setItem:(k,text)=>{if(k!==key)throw new Error('不能写入未锁定的存储键');value=text;changed=true;}});
-      if(!changed)return;
-      await new Promise<void>((resolve,reject)=>{
-        const transaction=db.transaction('snapshots','readwrite');transaction.objectStore('snapshots').put(value,key);
-        transaction.oncomplete=()=>resolve();transaction.onabort=()=>reject(transaction.error??new Error('提交动作失败'));
+      const values=new Map<string,string|null>(),updates=new Map<string,string>(),uninitialized:string[]=[];
+      for(const k of keys){
+        const value=await storageSnapshot(k);
+        if(unmirrored.has(k)){values.set(k,value??null);continue;}
+        if(value===undefined)uninitialized.push(k);values.set(k,value===undefined?native.getItem(k):value);
+      }
+      await write({getItem:k=>values.has(k)?updates.get(k)??values.get(k)!:native.getItem(k),setItem:(k,text)=>{
+        if(!values.has(k))throw new Error('不能写入未锁定的存储键');updates.set(k,text);
+      }});
+      if(!updates.size)return;
+      const mirrored=[...updates].filter(([k])=>!unmirrored.has(k));
+      const previous=new Map(mirrored.map(([k])=>[k,native.getItem(k)]));
+      const db=await storageDatabase!;
+      // Freeze fallback values before touching mirrors. If the page dies
+      // during the later write transaction, reload still reads BOTH old keys,
+      // including an explicit null for a previously absent pose library.
+      if(uninitialized.length)await new Promise<void>((resolve,reject)=>{
+        const transaction=db.transaction('snapshots','readwrite');
+        for(const k of uninitialized)transaction.objectStore('snapshots').put(values.get(k),k);
+        transaction.oncomplete=()=>resolve();transaction.onabort=()=>reject(transaction.error??new Error('初始化保存快照失败'));
       });
-      try{if(value===null)native.removeItem?.(key);else native.setItem(key,value);}
-      catch(err){throw new Error(`动作主快照已提交，但本机 JSON 镜像更新失败；草稿仍保留：${err instanceof Error?err.message:String(err)}`);}
-    });
+      await new Promise<void>((resolve,reject)=>{
+        const transaction=db.transaction('snapshots','readwrite');
+        let failure:unknown;
+        transaction.oncomplete=()=>resolve();
+        transaction.onabort=()=>{
+          try{for(const [k,value] of previous){if(value===null)native.removeItem?.(k);else native.setItem(k,value);}}
+          catch(err){reject(new Error(`恢复未提交，本机缓存回滚失败；请刷新读取原快照：${String(err)}`));return;}
+          reject(failure??transaction.error??new Error('提交动作失败'));
+        };
+        try{
+          for(const [k,value] of updates)transaction.objectStore('snapshots').put(value,k);
+          // A quota error aborts the SAME transaction, before either canonical
+          // snapshot commits. Readers wait for this transaction to complete.
+          for(const [k,value] of mirrored)native.setItem(k,value);
+        }catch(err){failure=err;transaction.abort();}
+      });
+    };
+    await withStorageLocks(keys,commit);
   },
   download(name,blob){
     const a=document.createElement('a');

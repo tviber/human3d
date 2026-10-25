@@ -18,6 +18,7 @@ import type {LabHandoff} from './lab-handoff';
 import {combineMotions} from './combine-motions';
 import {basicInsertRefusal,insertBasicAction,type BasicInsertion} from './basic-actions';
 import {applyPoseAt,PoseLibrary,stampPoseIntoKey,type PoseApplyReport,type PoseStampReport,type UserPosePreset} from './pose-library';
+import {backupText,mergeBackup,parseBackup,replaceLibrary,type ParsedBackup} from './library-backup';
 import {HistoryBook,RecordGate} from './history';
 import {SemanticPanel,type SemanticHost} from './semantic-panel';
 import {copyKeyframe,keyframeInsertSlot,keyframeTimeProblem,moveKeyframe,removeKeyframe} from './keyframes';
@@ -177,6 +178,10 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
  const [exportFps,setExportFps]=useState(40);
  const [exporting,setExporting]=useState(false);
  const [pkgProblems,setPkgProblems]=useState<{doc:string;items:string[]}|null>(null);
+ // Whole-library backup/restore (issue #30 PR-C): the preview card holds a
+ // fully validated backup until the user picks merge or replace.
+ const [restorePreview,setRestorePreview]=useState<Extract<ParsedBackup,{ok:true}>|null>(null);
+ const backupRef=useRef<HTMLInputElement>(null);
  const [generationBusy,setGenerationBusy]=useState(false),[generationProgress,setGenerationProgress]=useState<GenerationProgress|null>(null);
  const [generationError,setGenerationError]=useState('');
  const [candidateSession,setCandidateSession]=useState<CandidateSession|null>(null);
@@ -385,6 +390,47 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
    if(L.lastError){setError(`保存失败：${L.lastError}。组合结果尚未写入动作库，请导出 JSON 备份。`);return;}
    setError('');setHint(`已${combineKind==='append'?'拼接':'混合'}并保存「${added.name}」，可在动作库播放；两份源动作已保留。`);
   }catch(err){setHint(err instanceof Error?err.message:String(err));}
+ };
+ // Whole-library backup / restore. Export snapshots the CURRENT in-memory
+ // state (never storage); restore validates and previews before anything is
+ // written, replace always downloads a snapshot of the present data first.
+ const exportBackup=()=>{
+  download(`h3d-backup-${new Date().toISOString().slice(0,10)}.json`,new Blob([backupText(L.docs,L.quarantine,L.activeId,poseLib.current!.presets)],{type:'application/json'}));
+  setHint(`已导出整库备份（${L.docs.length} 个动作 · ${poseLib.current!.presets.length} 个姿态 · ${L.quarantine.length} 条可恢复数据）。`);
+ };
+ const chooseRestore=async(f:File)=>{
+  try{
+   if(f.size>64*1024*1024){setError('备份文件过大（上限 64 MB），请确认选择了正确的备份。');return;}
+   const parsed=parseBackup(await f.text());
+   if(!parsed.ok){setError(`无法恢复备份：${parsed.error}`);return;}
+   if(!parsed.docs.length&&!parsed.poses.length&&!parsed.file.library.quarantine.length){setError('这份备份里没有可恢复的内容。');return;}
+   setError('');setRestorePreview(parsed);
+  }catch(err){setError(`无法读取备份：${err instanceof Error?err.message:String(err)}`);}
+ };
+ const finishRestore=(report:{docsAdded:number;posesAdded:number;conflicts:string[];invalidDocs:{name:string;reason:string}[]},mode:'merge'|'replace')=>{
+  const parts=[`${mode==='merge'?'已合并':'已替换'} ${report.docsAdded} 个动作、${report.posesAdded} 个自建姿态`];
+  if(report.conflicts.length)parts.push(`冲突处理：${report.conflicts.join('；')}`);
+  if(report.invalidDocs.length)parts.push(`${report.invalidDocs.length} 条无法识别的动作已隔离，可导出修复`);
+  setRestorePreview(null);bump(v=>v+1);
+  if(L.lastError){setError(`恢复已在当前页面生效，但保存失败：${L.lastError}。请立即导出 JSON 备份，刷新会丢失。`);return;}
+  if(poseLib.current!.lastError){setError(`动作已恢复，但姿态保存失败：${poseLib.current!.lastError}。`);return;}
+  setError('');setHint(`${parts.join('；')}。`);
+ };
+ const restoreMerge=()=>{
+  if(!restorePreview||generationLocked.current)return;
+  const report=mergeBackup(L,poseLib.current!.presets,restorePreview);
+  L.save();poseLib.current!.save();finishRestore(report,'merge');
+ };
+ const restoreReplace=()=>{
+  if(!restorePreview||generationLocked.current)return;
+  // Snapshot BEFORE the destructive confirm: the pre-replace library is
+  // downloadable no matter how the user answers.
+  download('h3d-library-before-replace.json',new Blob([backupText(L.docs,L.quarantine,L.activeId,poseLib.current!.presets)],{type:'application/json'}));
+  if(!webPlatform.confirm('替换将把动作库与自建姿态整体换成备份内容；当前数据刚已下载为快照，隔离数据始终保留。确定替换？'))return;
+  const report=replaceLibrary(L,poseLib.current!.presets,restorePreview);
+  L.save();poseLib.current!.save();gate.current.reset();wristEpoch.current++;
+  setSelected(sortedKeys(L.active())[0].id);engine.current?.seek(0);engine.current?.markDirty();
+  finishRestore(report,'replace');
  };
  // Handoff actions: dismissing only clears the offer and the URL parameter.
  // Creation — from the card button OR the regular 从预设开始 — goes through
@@ -852,6 +898,30 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
      </div>
      <LibraryList docs={L.docs} activeId={d.id} onSelect={selectDoc} onDuplicate={duplicateDoc} onRemove={removeDoc} onReorder={(active,over)=>{L.reorder(active,over);bump(v=>v+1);}}/>
      <div className="ws-row"><button type="button" data-testid="save-to-library" onClick={saveToLibrary}><Save size={13}/>保存到动作库</button></div>
+     <div className="ws-sub"><h3>导入 / 导出 / 备份</h3>
+      <div className="ws-row">
+       <button type="button" data-testid="motion-import" onClick={()=>importRef.current?.click()}><Upload size={13}/>导入动作</button>
+       <button type="button" data-testid="motion-export" onClick={()=>exportDoc()}><Download size={13}/>导出动作</button>
+       <input ref={importRef} type="file" accept=".json,application/json" hidden onChange={e=>{const f=e.target.files?.[0];if(f)void importDoc(f);e.target.value='';}}/>
+      </div>
+      <div className="ws-row">
+       <button type="button" data-testid="backup-download" onClick={exportBackup}><Package size={13}/>备份全部</button>
+       <button type="button" data-testid="backup-restore" onClick={()=>backupRef.current?.click()}><Upload size={13}/>从备份恢复</button>
+       <input ref={backupRef} type="file" accept=".json,application/json" hidden onChange={e=>{const f=e.target.files?.[0];e.target.value='';if(f)void chooseRestore(f);}}/>
+      </div>
+      <p className="ws-note">「导出动作」是单个可编辑 JSON；「备份全部」把动作、自建姿态和可恢复数据打包成一个文件，换设备时用它恢复。</p>
+      {restorePreview?<div className="ws-restore" data-testid="backup-preview">
+       <h4>恢复备份 <small>{new Date(restorePreview.file.exportedAt).toLocaleString()}</small></h4>
+       <p className="ws-note">{restorePreview.docs.length} 个动作 · {restorePreview.poses.length} 个姿态 · {restorePreview.file.library.quarantine.length} 条可恢复数据{restorePreview.invalidDocs.length?` · ${restorePreview.invalidDocs.length} 条无法识别（恢复时隔离）`:''}。</p>
+       <ul className="ws-restore-list">{restorePreview.docs.slice(0,6).map(doc=><li key={doc.id}>{doc.name}</li>)}{restorePreview.docs.length>6?<li>… 共 {restorePreview.docs.length} 个动作</li>:null}</ul>
+       <div className="ws-row">
+        <button type="button" data-testid="backup-merge" onClick={restoreMerge}>合并导入（保留现有）</button>
+        <button type="button" data-testid="backup-replace" onClick={restoreReplace}>替换全部</button>
+        <button type="button" data-testid="backup-cancel" onClick={()=>setRestorePreview(null)}>取消</button>
+       </div>
+       <p className="ws-note">「替换全部」会先自动下载当前数据的快照，再要求确认；无论哪种方式，隔离数据都不会丢。</p>
+      </div>:null}
+     </div>
      <div className="ws-row">
       <input className="ws-newname" aria-label="新动作名称" value={newName} placeholder="新动作名称（可选）…" onChange={e=>setNewName(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')createDoc();}}/>
       <button onClick={createDoc}><Plus size={13}/>新建</button>
@@ -998,33 +1068,25 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
      <label className="ws-field"><span>握拍侧</span><select value={d.gripSide??'R'} onChange={e=>edit(dd=>{dd.gripSide=e.target.value==='L'?'L':undefined;})}><option value="R">右手（默认）</option><option value="L">左手</option></select></label>
      <Row label="抬肩辅助" detail="手高于胸口时锁骨与肩部随动上抬" checked={d.clavicleLift===true} onChange={v=>edit(dd=>{dd.clavicleLift=v||undefined;})}/>
      <div className="ws-row">
-      <button onClick={()=>exportDoc()}><Download size={13}/>导出 JSON</button>
-      <button onClick={()=>importRef.current?.click()}><Upload size={13}/>导入</button>
-      <input ref={importRef} type="file" accept=".json,application/json" hidden onChange={e=>{const f=e.target.files?.[0];if(f)void importDoc(f);e.target.value='';}}/>
-     </div>
-     <div className="ws-row">
       {/* x=0 平面整档镜像：同一动作换边（右手正手→左手正手）。产出入库并选
           中，原文档保留；撤销一步回到镜像前的文档。 */}
       <button onClick={mirrorActiveDoc} title="生成当前动作的左右镜像副本（换握拍侧，几何 x→−x）"><FlipHorizontal2 size={13}/>镜像动作</button>
      </div>
-     <div className="ws-sub"><h3>姿态包 <small>本地求解 · 与服务同一条管线</small></h3>
+     {/* Single-motion JSON import/export lives in the library card's
+         导入/导出/备份 block — one entry point, not one per card. */}
+     <div className="ws-sub"><h3>高级导出 <small>本地求解 · 与服务同一条管线</small></h3>
       <label className="ws-field"><span>采样率 fps</span><input type="number" min={1} max={60} step={1} value={exportFps} disabled={!subtleOk||exporting} onChange={e=>setExportFps(Math.max(1,Math.min(60,Math.round(Number(e.target.value)||40))))}/></label>
       <div className="ws-row">
        {/* During model load a click still lands on solvePackage's own !e?.rig
            guard, which answers with a readable hint — no separate !info gate. */}
        <button onClick={()=>void exportPackage()} disabled={!subtleOk||exporting} title={subtleOk?'求解并校验当前文档，下载 .pose.json':'姿态包导出需 https 或 localhost 打开'}><Package size={13}/>{exporting?'求解中…':'导出姿态包'}</button>
        <button onClick={()=>void exportGlbFile()} disabled={!subtleOk||exporting} title={subtleOk?'同一求解结果烘焙成 glTF 动画，干净模型重新解析后导出':'GLB 导出需 https 或 localhost 打开'}><FileBox size={13}/>{exporting?'导出中…':'导出 GLB'}</button>
-      </div>
-      <p className="ws-note" style={subtleOk?undefined:{color:'var(--red)'}}>{subtleOk?'fps 进入制品 id：同一文档不同 fps 是不同包（1–60，服务端默认 40）。GLB 是派生品——可入 DCC/播放器预览，但制品身份仍以 .pose.json 为准。':'姿态包导出需 https 或 localhost 打开（crypto.subtle 不可用）。'}</p>
-      {pkgProblems&&pkgProblems.doc===d.id?<div className="ws-problems"><p className="ws-note" style={{color:'var(--red)'}}>上一次导出被语义校验拒绝，未生成文件：</p>
-       <ul>{pkgProblems.items.map((p,i)=><li key={i}>{p}</li>)}</ul></div>:null}
-     </div>
-     <div className="ws-sub"><h3>静帧渲染 <small>固定相机预设 · 固定出图尺寸</small></h3>
-      <div className="ws-row">
        <button onClick={()=>void exportStill()} disabled={exporting} title="以固定 45° 相机渲染当前时刻，640×720 PNG"><Camera size={13}/>渲染静帧</button>
        <button onClick={()=>void exportSheet()} disabled={exporting} title="每个关键帧时刻渲染一格拼成单张 PNG；超过 12 帧时均匀抽 12 格"><LayoutGrid size={13}/>关键帧拼图</button>
       </div>
-      <p className="ws-note">固定相机预设与固定出图尺寸（640×720 PNG），导出图像不含编辑器手柄等叠加物；播放与视角在导出后原样恢复。</p>
+      <p className="ws-note" style={subtleOk?undefined:{color:'var(--red)'}}>{subtleOk?'fps 进入制品 id：同一文档不同 fps 是不同包（1–60，服务端默认 40）。GLB 是派生品，可入 DCC/播放器预览；静帧与拼图为固定相机 640×720 PNG，不含编辑器叠加物。':'姿态包导出需 https 或 localhost 打开（crypto.subtle 不可用）。'}</p>
+      {pkgProblems&&pkgProblems.doc===d.id?<div className="ws-problems"><p className="ws-note" style={{color:'var(--red)'}}>上一次导出被语义校验拒绝，未生成文件：</p>
+       <ul>{pkgProblems.items.map((p,i)=><li key={i}>{p}</li>)}</ul></div>:null}
      </div>
     </section>
     <section className="ws-card" inert={generationLockedUi}><h2>参考视频 <small>WHAM 自动估计待接入</small></h2>

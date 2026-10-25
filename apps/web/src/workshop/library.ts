@@ -252,9 +252,15 @@ export class MotionLibrary{
    this.docs.splice(to, 0, doc);
    this.save();
   }
-  /** Insert a parsed import; regenerates the id when it clashes. */
+  /** Insert a parsed import; regenerates the id when it clashes. The
+   * regenerated document rekeys its frames too — an import must not carry the
+   * source document's key ids under a new document id. */
   add(doc:WorkshopDoc){
-    if(docIdTaken(this.docs,doc.id))doc.id=newDocId(doc.name);
+    if(docIdTaken(this.docs,doc.id)){
+      doc.id=newDocId(doc.name);
+      while(docIdTaken(this.docs,doc.id))doc.id=newDocId(doc.name);
+      doc.keys.forEach((k,i)=>{k.id=`${doc.id}-k${i}`;});
+    }
     this.docs.push(doc);this.activeId=doc.id;this.save();return doc;
   }
 }

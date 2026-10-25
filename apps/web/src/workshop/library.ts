@@ -1,7 +1,8 @@
 import type {MotionSpec,WorkshopDoc} from '@human3d/motion-core';
 import {blankDocument,canonicalizeHands,defaultDocument,MOTION_FILES,newDocId,normalizeDoc,parseDoc,sortedKeys} from '@human3d/motion-core';
 import type {Vector3} from 'three';
-import type {StorageLock} from '../platform/platform';
+import type {StorageLike,StorageLock} from '../platform/platform';
+export type {StorageLike} from '../platform/platform';
 
 /** Motion library: the workshop's persistent store. Multiple named documents
  * live under one namespaced localStorage key; the injected StorageLike keeps
@@ -14,8 +15,8 @@ import type {StorageLock} from '../platform/platform';
 /** A stored document that could not be admitted. `raw` is the original JSON value. */
 export interface QuarantineEntry{id:string;name:string;reason:string;raw:unknown}
 export interface LibraryFile{schemaVersion:2;activeId:string;docs:WorkshopDoc[];quarantine:QuarantineEntry[]}
-export interface StorageLike{getItem(k:string):string|null;setItem(k:string,v:string):void;removeItem?(k:string):void}
 export const LIBRARY_KEY='kinesis-workshop-library';
+export const DRAFT_PREFIX=LIBRARY_KEY+':draft:';
 export const SAVED_MOTION_PREFIX='local:';
 /** Both pages play the saved document itself through the normal document source. */
 export function savedMotionSpec(doc:WorkshopDoc):MotionSpec{
@@ -50,7 +51,12 @@ export class MotionLibrary{
   private baselineQuarantine:QuarantineEntry[]=[];
   private rawText:string|null=null;
   saved:Promise<void>=Promise.resolve();
-  onSaved?:(merged:boolean)=>void;
+  onSaveState?:(merged:boolean)=>void;
+  private pending=0;
+  private draftKey='';
+  private draftText='';
+  private recoveredDrafts:string[]=[];
+  get saveState(){return this.lastError?'error':this.pending||this.draftKey?'saving':'saved';}
   constructor(private rest:ReadonlyMap<string,Vector3>,private store?:StorageLike|null,private lock?:StorageLock){}
   private remember(){
     this.baseline=new Map(this.docs.map(d=>[d.id,JSON.stringify(d)]));
@@ -122,13 +128,47 @@ export class MotionLibrary{
       this.quarantine=[{id:'library-file',name:'动作库文件',reason:corrupt?'动作库文件 JSON 无法解析':'无法识别的动作库格式（schemaVersion 不受支持）',raw:rawText}];
     }
     this.rawText=rawText;this.remember();
+    if(!readOnly){
+      try{
+        for(let i=0;i<(this.store?.length??0);i++){
+          const key=this.store!.key?.(i);if(!key?.startsWith(DRAFT_PREFIX))continue;
+          const text=this.store!.getItem(key);if(text===null)continue;
+          try{
+            const draft=JSON.parse(text) as LibraryFile;
+            if(draft.schemaVersion!==2||!Array.isArray(draft.docs)||!Array.isArray(draft.quarantine))throw new Error('无法识别的草稿格式');
+            const entries:QuarantineEntry[]=[...draft.docs.map(raw=>({id:idOf(raw),name:nameOf(raw),reason:'未完成保存的草稿：可恢复为副本或导出 JSON',raw})),...draft.quarantine];
+            for(const entry of entries){
+              if(!entry||typeof entry!=='object'||!('raw' in entry)||typeof entry.id!=='string'||typeof entry.name!=='string'||typeof entry.reason!=='string')throw new Error('无法识别的草稿条目');
+              if(!this.quarantine.some(q=>JSON.stringify(q.raw)===JSON.stringify(entry.raw)))this.quarantine.push(entry);
+            }
+          }catch(err){this.quarantine.push({id:'draft-file',name:'未完成的草稿文件',reason:err instanceof Error?err.message:String(err),raw:text});}
+          this.recoveredDrafts.push(key);
+        }
+      }catch(err){this.lastError=err instanceof Error?err.message:String(err);}
+    }
     if(!this.docs.length&&!readOnly){this.docs=[file?blankDocument(this.rest,'新动作',newDocId('新动作')):defaultDocument(this.rest)];this.activeId=this.docs[0].id;}
     // Reading valid storage must not publish hand-frame normalization as a user edit.
-    if(!readOnly&&!corrupt&&(rawText===null||file&&(!file.docs!.length||this.docs.length!==file.docs!.length)))this.save();
+    if(!readOnly&&!corrupt&&(this.recoveredDrafts.length||rawText===null||file&&(!file.docs!.length||this.docs.length!==file.docs!.length)))this.save();
     return this;
   }
+  /** Draft keys are immutable: another page can recover one without racing its next edit. */
+  checkpoint(){
+    try{
+      if(!this.store)throw new Error('浏览器存储不可用，请导出 JSON 备份');
+      const docs=this.docs.filter(d=>JSON.stringify(d)!==this.baseline.get(d.id));
+      const quarantine=this.quarantine.filter(q=>!this.baselineQuarantine.some(b=>JSON.stringify(b)===JSON.stringify(q)));
+      if(!docs.length&&!quarantine.length){if(this.draftKey)this.store.removeItem?.(this.draftKey);this.draftKey='';this.draftText='';return;}
+      const text=JSON.stringify({schemaVersion:2,activeId:this.activeId,docs,quarantine});
+      if(text===this.draftText)return;
+      const key=DRAFT_PREFIX+Array.from(crypto.getRandomValues(new Uint32Array(4)),n=>n.toString(16)).join('-');this.store.setItem(key,text);
+      const previous=this.draftKey;this.draftKey=key;this.draftText=text;
+      if(previous)this.store.removeItem?.(previous);
+    }catch(err){this.lastError=err instanceof Error?err.message:String(err);}
+  }
   save(){
-    if(!this.store)return this.saved;
+    this.checkpoint();
+    if(!this.store){this.onSaveState?.(false);return this.saved;}
+    this.pending++;this.onSaveState?.(false);
     const write=()=>{
       let merged=false;
       try{
@@ -136,10 +176,12 @@ export class MotionLibrary{
         const file:LibraryFile={schemaVersion:2,activeId:this.activeId,docs:this.docs,quarantine:this.quarantine};
         const text=JSON.stringify(file);this.store!.setItem(LIBRARY_KEY,text);
         this.rawText=text;this.remember();this.lastError='';
+        for(const key of [...this.recoveredDrafts,this.draftKey])if(key)this.store!.removeItem?.(key);
+        this.recoveredDrafts=[];this.draftKey='';this.draftText='';
       }catch(err){this.lastError=err instanceof Error?err.message:String(err);}
-      this.onSaved?.(merged);
+      this.pending--;this.onSaveState?.(merged);
     };
-    if(this.lock)this.saved=this.lock(LIBRARY_KEY,write).catch(err=>{this.lastError=err instanceof Error?err.message:String(err);this.onSaved?.(false);});
+    if(this.lock)this.saved=this.lock(LIBRARY_KEY,write).catch(err=>{this.pending--;this.lastError=err instanceof Error?err.message:String(err);this.onSaveState?.(false);});
     else write();
     return this.saved;
   }

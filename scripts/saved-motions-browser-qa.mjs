@@ -88,7 +88,7 @@ try{
  await lab.evaluate(()=>{for(const size of [65536,4096,256,16,1])for(let i=0;i<512;i++){try{localStorage.setItem(`qa-quota-${size}-${i}`,'x'.repeat(size));}catch{break;}}});
  const beforeFailure=await lab.evaluate(()=>localStorage.getItem('kinesis-workshop-library'));
  await lab.getByRole('textbox',{name:'关键帧名称',exact:true}).fill('存储已满时新增的手工编辑名称，必须明确报告保存失败而不覆盖已保存动作');
- await lab.getByTestId('save-to-library').click();await lab.getByText(/保存失败：/).waitFor();
+ await lab.getByTestId('save-to-library').click();await lab.getByTestId('save-state').filter({hasText:'保存失败：'}).waitFor();
  assert.equal(await lab.evaluate(()=>localStorage.getItem('kinesis-workshop-library')),beforeFailure);await lab.screenshot({path:out('quota-failure.png')});
  assert.deepEqual(errors,[]);console.log('Saved-motion QA passed: manual edit → save → append/blend/limits/undo/source preservation → lab playback/FK parity → reload → edit original → cancel/delete → multi-editor add/delete sync → last-item deletion → mobile → real quota failure.');console.log(`Screenshots: ${output.dir}`);
 }catch(err){for(const [i,p]of context.pages().entries()){await p.screenshot({path:out(`failure-${i}.png`)}).catch(()=>{});console.error(`Page ${i}: ${p.url()} | status: ${await p.getByRole('status').allTextContents()} | alerts: ${await p.getByRole('alert').allTextContents()}`);}throw err;}finally{await context.close();await browser.close();}

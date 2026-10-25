@@ -11,7 +11,7 @@ import {useWorkshopUi} from './ui-store';
 import {WorkshopEngine} from './engine';
 import type {WorkshopFrame} from './engine';
 import type {HandFrame,KeyInterpolation,WorkshopDoc,WorkshopKey,V3} from '@human3d/motion-core';
-import {blankDocument,contactStartKey,defaultDocument,ensureKey,isReleaseKey,keyAt,loopBlockers,mirrorDoc,mirrorKey,nearestKey,newDocId,normalizeDoc,retimeKeys,serializeDoc,sortedKeys} from '@human3d/motion-core';
+import {blankDocument,contactStartKey,defaultDocument,ensureKey,isReleaseKey,keyAt,loopBlockers,mirrorDoc,mirrorKey,nearestKey,newDocId,normalizeDoc,parseDoc,retimeKeys,serializeDoc,sortedKeys} from '@human3d/motion-core';
 import {BASIC_PRESETS,LIBRARY_KEY,MotionLibrary,OTHER_PRESETS,RACKET_PRESETS,WORKSHOP_PRESETS} from './library';
 import {clearLabHandoff,handoffConsumedByCreate,handoffHasCard,resolveLabHandoff} from './lab-handoff';
 import type {LabHandoff} from './lab-handoff';
@@ -150,6 +150,7 @@ export function WorkshopApp({info:rigInfo}:{info:RigInfo}){
  }
  if(!poseLib.current)poseLib.current=new PoseLibrary(webPlatform.storage).load();
  const [,bump]=useState(0);
+ const [leaving,setLeaving]=useState(false);
  const selected=useWorkshopUi(s=>s.selected),setSelected=useWorkshopUi(s=>s.setSelected);
  const newName=useWorkshopUi(s=>s.newName),setNewName=useWorkshopUi(s=>s.setNewName);
  // Lab handoff: the lab navigates here with ?from=<motion id> when the motion
@@ -210,7 +211,7 @@ export function WorkshopApp({info:rigInfo}:{info:RigInfo}){
    // Persist drags throttled while moving and unconditionally at drag end;
    // before this, a pose edit could be lost if the page closed before the
    // next explicit save.
-   e.onDocChanged=()=>{const now=performance.now();if(now-lastDragSave>500){lastDragSave=now;lib.current!.save();}bump(v=>v+1);};
+   e.onDocChanged=()=>{lib.current!.checkpoint();const now=performance.now();if(now-lastDragSave>500){lastDragSave=now;lib.current!.save();}bump(v=>v+1);};
    e.onEditEnd=()=>{lib.current!.save();bump(v=>v+1);};
    e.onBeginEdit=(time,prefer)=>{
     if(generationLocked.current)return null;
@@ -380,7 +381,7 @@ export function WorkshopApp({info:rigInfo}:{info:RigInfo}){
    const combined=combineMotions(source,target,combineKind==='append'?{kind:'append',transition:combineTransition}:{kind:'blend',weight:combineWeight/100},e.restRoot(),combineName);
    const added=L.add(combined);books.current.of(added.id).record(source);
    gate.current.reset();wristEpoch.current++;setCombineName('');selectDoc(added.id);await L.saved;
-   if(L.lastError){setError(`保存失败：${L.lastError}。组合结果仅存于内存，请导出 JSON 备份。`);return;}
+   if(L.lastError){setError(`保存失败：${L.lastError}。组合结果尚未写入动作库，请导出 JSON 备份。`);return;}
    setError('');setHint(`已${combineKind==='append'?'拼接':'混合'}并保存「${added.name}」，可在动作库播放；两份源动作已保留。`);
   }catch(err){setHint(err instanceof Error?err.message:String(err));}
  };
@@ -602,7 +603,7 @@ export function WorkshopApp({info:rigInfo}:{info:RigInfo}){
   generationPreview.current=null;setCandidateSession(null);setGenerationReport(null);setGenerationBusy(false);setGenerationProgress(null);setGenerationError('');
   unlockGeneration();setHint('已取消候选生成或预览；源动作仍保持原样。');
  };
- L.onSaved=merged=>{if(merged)syncLibrary.current(true);bump(v=>v+1);};
+ L.onSaveState=merged=>{if(merged)syncLibrary.current(true);bump(v=>v+1);};
  syncLibrary.current=(force=false)=>{
   const rest=new Map(rigInfo.bones.map(b=>[b.name,new Vector3().fromArray(b.head)]));
   try{if(!L.sync()&&!force)return;}catch(err){setError(err instanceof Error?err.message:String(err));return;}
@@ -614,8 +615,26 @@ export function WorkshopApp({info:rigInfo}:{info:RigInfo}){
  };
  useEffect(()=>{
   const sync=(event:StorageEvent)=>{if(event.key===LIBRARY_KEY||event.key===null)syncLibrary.current();};
-  window.addEventListener('storage',sync);return()=>window.removeEventListener('storage',sync);
+  const checkpoint=()=>{L.checkpoint();};
+  const unload=(event:BeforeUnloadEvent)=>{L.checkpoint();if(L.saveState!=='saved'){event.preventDefault();event.returnValue='';}};
+  const hidden=()=>{if(document.visibilityState==='hidden')checkpoint();};
+  window.addEventListener('storage',sync);window.addEventListener('beforeunload',unload);window.addEventListener('pagehide',checkpoint);document.addEventListener('visibilitychange',hidden);
+  return()=>{window.removeEventListener('storage',sync);window.removeEventListener('beforeunload',unload);window.removeEventListener('pagehide',checkpoint);document.removeEventListener('visibilitychange',hidden);L.onSaveState=undefined;};
  },[]);
+ const returnToLab=async()=>{
+  if(leaving)return;setLeaving(true);
+  await L.save();
+  let pending:Promise<void>;do{pending=L.saved;await pending;}while(pending!==L.saved);
+  if(L.saveState!=='saved'){setLeaving(false);return;}
+  webPlatform.navigate('/');
+ };
+ const recoverQuarantine=(index:number)=>{
+  try{
+   const copy=parseDoc(L.quarantineText(index));copy.id=newDocId(copy.name);copy.name+=' 恢复副本';
+   copy.keys.forEach((k,i)=>{k.id=`${copy.id}-k${i}`;});
+   const added=L.add(copy);selectDoc(added.id);setHint('已恢复为独立副本；原稿仍可导出。');
+  }catch(err){setError(`无法恢复，请导出后修复：${err instanceof Error?err.message:String(err)}`);}
+ };
  const failGeneration=(message:string)=>{
   const worker=generationWorker.current;
   if(worker){worker.onmessage=null;worker.onerror=null;worker.onmessageerror=null;worker.terminate();generationWorker.current=null;}
@@ -798,7 +817,8 @@ export function WorkshopApp({info:rigInfo}:{info:RigInfo}){
  return <div className={`ws-shell ${generationLockedUi?'ws-generation-locked':''} ${compact?'ws-compact':''} ${sheet?`ws-sheet-${sheet}`:''} ws-mode-${mode}`} data-mode={mode}>
   <header className="ws-header">
    <div className="brand"><Activity size={25} strokeWidth={2}/><span>KINESIS</span><i/><h1>动作工作台</h1><small>姿态优先 · 关键帧 + 约束</small></div>
-   <nav><a href="/" className="ws-back"><ArrowLeft size={14}/>返回实验室</a></nav>
+   <nav><a href="/" className="ws-back" aria-disabled={leaving} onClick={e=>{e.preventDefault();void returnToLab();}}><ArrowLeft size={14}/>返回实验室</a></nav>
+   <div className="ws-save-state" data-testid="save-state" data-state={L.saveState} role="status" aria-live="polite"><span>{L.saveState==='error'?`保存失败：${L.lastError}。请导出备份。`:L.saveState==='saving'?leaving?'保存中 · 完成后返回实验室…':'保存中…':'已保存到本机'}</span>{L.saveState!=='saved'?<button type="button" onClick={()=>exportDoc()}><Download size={12}/>导出当前动作 JSON</button>:null}</div>
   </header>
   <Group orientation="horizontal" className="ws-main" id="workshop-panes">
    <Panel id="ws-library" className="ws-library-panel" defaultSize={250} minSize={200} maxSize={420}><aside className="ws-left" aria-label="动作与关键帧">
@@ -835,9 +855,9 @@ export function WorkshopApp({info:rigInfo}:{info:RigInfo}){
       <button onClick={createDoc}><Plus size={13}/>新建</button>
      </div>
      <p className="ws-note">复制完整动作到手动工作台，再拖动调整；上方名称可选。仅列出可编辑的关键帧预设，外部动画与动力学动作暂不支持。</p>
-     <p className="ws-note" style={L.lastError?{color:'var(--red)'}:undefined}>{L.lastError?`保存失败（仅存于内存）：${L.lastError}`:'动作自动保存到本机浏览器；导出 JSON 可跨设备分享。'}</p>
-     {L.quarantine.length?<div className="ws-quarantine"><p className="ws-note" style={{color:'var(--red)'}}>{L.quarantine.length} 个动作未通过校验，已隔离保存，不参与播放。导出后可修复再导入。</p>
-      {L.quarantine.map((q,i)=><div key={`${q.id}-${i}`} className="ws-row"><small>{q.name||q.id||'未命名'}：{q.reason}</small><button onClick={()=>exportQuarantine(i)}><Download size={12}/>导出</button><button aria-label={`丢弃 ${q.name||q.id}`} onClick={()=>{if(confirm('丢弃这个隔离动作？此操作不可撤销。'))L.discardQuarantine(i);bump(v=>v+1);}}><Trash2 size={12}/></button></div>)}
+     <p className="ws-note" style={L.lastError?{color:'var(--red)'}:undefined}>{L.lastError?`保存未完成：${L.lastError}`:'动作自动保存到本机浏览器；导出 JSON 可跨设备分享。'}</p>
+     {L.quarantine.length?<div className="ws-quarantine"><p className="ws-note" style={{color:'var(--red)'}}>{L.quarantine.length} 个恢复稿或隔离项，尚未参与播放。可恢复为副本或导出后修复。</p>
+      {L.quarantine.map((q,i)=><div key={`${q.id}-${i}`} className="ws-row"><small>{q.name||q.id||'未命名'}：{q.reason}</small><button onClick={()=>recoverQuarantine(i)}>恢复为副本</button><button onClick={()=>exportQuarantine(i)}><Download size={12}/>导出</button><button aria-label={`丢弃 ${q.name||q.id}`} onClick={()=>{if(confirm('丢弃这个隔离动作？此操作不可撤销。'))L.discardQuarantine(i);bump(v=>v+1);}}><Trash2 size={12}/></button></div>)}
      </div>:null}
     </section>
     <section className="ws-card" inert={generationLockedUi}><h2>组合动作 <small>保存为新动作</small></h2>

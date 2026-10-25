@@ -6,7 +6,7 @@ import {HumanRig} from '@human3d/motion-core';
 import {attachRacket,gripFrame,RACKET_HANDLE} from '@human3d/motion-core';
 import {angleAt,DEG} from '@human3d/motion-core';
 import {blankDocument,defaultDocument,ensureKey,flattenPose,frameAt,parseDoc,retimeKeys,samplePose,serializeDoc,setKeyTime,sortedKeys,TANGENT_SECANT_CAP,toV,unflattenPose,validateDocShape,type PoseParams,type WorkshopDoc,type WorkshopKey} from '@human3d/motion-core';
-import {LIBRARY_KEY,MotionLibrary,SAVED_MOTION_PREFIX,savedMotionSpec,WORKSHOP_PRESETS,type StorageLike} from './library';
+import {DRAFT_PREFIX,LIBRARY_KEY,MotionLibrary,SAVED_MOTION_PREFIX,savedMotionSpec,WORKSHOP_PRESETS,type StorageLike} from './library';
 import {DocHistory,HistoryBook,RecordGate} from './history';
 import {WORKSHOP_LIMITS} from '@human3d/motion-core';
 import {MOTION_FILES} from '@human3d/motion-core';
@@ -400,11 +400,67 @@ describe('undo and redo',()=>{
  });
 });
 describe('motion library',()=>{
- const memStorage=():StorageLike&{map:Map<string,string>}=>{const map=new Map<string,string>();return {map,getItem:k=>map.get(k)??null,setItem:(k,v)=>{map.set(k,v);}}};
+ const memStorage=():StorageLike&{map:Map<string,string>}=>{const map=new Map<string,string>();return {map,get length(){return map.size;},key:i=>[...map.keys()][i]??null,removeItem:k=>{map.delete(k);},getItem:k=>map.get(k)??null,setItem:(k,v)=>{map.set(k,v);}}};
  const lib=(s?:StorageLike)=>new MotionLibrary(rig.rest,s).load();
  it('seeds with the example forehand on first run',()=>{
   const l=lib(memStorage());
   expect(l.docs.length).toBe(1);expect(l.active().id).toBe('forehand-workshop');
+ });
+ it('checkpoints before waiting for the lock, recovers a closed page into quarantine, and cleans only committed drafts',async()=>{
+  const store=memStorage();lib(store);
+  const writes:(()=>void)[]=[],lock=(_key:string,write:()=>void)=>new Promise<void>(resolve=>writes.push(()=>{write();resolve();}));
+  const a=new MotionLibrary(rig.rest,store,lock).load();
+  a.active().keys[0].label='等待锁期间的修改';const pending=a.save();
+  expect(a.saveState).toBe('saving');expect(writes).toHaveLength(1);
+  const draft=[...store.map.keys()].find(k=>k.startsWith(DRAFT_PREFIX))!;
+  expect(JSON.parse(store.map.get(draft)!).docs[0].keys[0].label).toBe('等待锁期间的修改');
+  expect(new MotionLibrary(rig.rest,store).load({readOnly:true}).quarantine).toEqual([]);
+  const recovered=new MotionLibrary(rig.rest,store,lock).load();
+  const index=recovered.quarantine.findIndex(q=>q.reason.includes('草稿'));
+  expect(JSON.parse(recovered.quarantineText(index)).keys[0].label).toBe('等待锁期间的修改');
+  expect(store.map.has(draft)).toBe(true);
+  // Commit the recovering page; the original page is treated as terminated.
+  writes[1]();await recovered.saved;
+  expect(store.map.has(draft)).toBe(false);
+  const restored=lib(store);expect(restored.quarantine.some(q=>q.reason.includes('草稿'))).toBe(true);
+  const copy=parseDoc(restored.quarantineText(0));restored.add(copy);
+  expect(lib(store).active().keys[0].label).toBe('等待锁期间的修改');
+  // A still-live original page may complete later without erasing recovery.
+  writes[0]();await pending;expect(a.saveState).toBe('saved');
+  expect(lib(store).quarantine.length).toBeGreaterThan(0);
+  expect([...store.map.keys()].filter(k=>k.startsWith(DRAFT_PREFIX))).toEqual([]);
+ });
+ it('replaces a draft only after the next immutable checkpoint is durable',()=>{
+  const store=memStorage();lib(store);
+  const a=new MotionLibrary(rig.rest,store,()=>new Promise<void>(()=>{})).load();
+  a.active().name='第一份草稿';a.save();const first=[...store.map.keys()].find(k=>k.startsWith(DRAFT_PREFIX))!,text=store.map.get(first);
+  a.active().name='第二份草稿';a.checkpoint();const second=[...store.map.keys()].find(k=>k.startsWith(DRAFT_PREFIX))!;
+  expect(second).not.toBe(first);expect(store.map.has(first)).toBe(false);
+  expect(JSON.parse(store.map.get(second)!).docs[0].name).toBe('第二份草稿');
+  store.setItem=()=>{throw new Error('quota');};a.active().name='未写入的第三份';a.checkpoint();
+  expect(a.saveState).toBe('error');expect(a.lastError).toBe('quota');expect(store.map.has(second)).toBe(true);expect(text).toContain('第一份草稿');
+ });
+ it('does not recover an older edit after it was reverted before the lock was granted',()=>{
+  const store=memStorage();lib(store);const a=new MotionLibrary(rig.rest,store,()=>new Promise<void>(()=>{})).load(),before=a.active().name;
+  a.rename(a.activeId,'撤销前');expect([...store.map.keys()].some(k=>k.startsWith(DRAFT_PREFIX))).toBe(true);
+  a.rename(a.activeId,before);expect([...store.map.keys()].filter(k=>k.startsWith(DRAFT_PREFIX))).toEqual([]);
+  expect(lib(store).quarantine).toEqual([]);
+ });
+ it('retains drafts on lock failure and reports all queued saves until completion',async()=>{
+  const store=memStorage();lib(store);
+  const a=new MotionLibrary(rig.rest,store,async()=>{throw new Error('no Web Locks');}).load();
+  a.active().name='不支持锁仍可恢复';await a.save();expect(a.saveState).toBe('error');
+  expect(lib(store).quarantine.some(q=>q.name==='不支持锁仍可恢复')).toBe(true);
+  const writes:(()=>void)[]=[],b=new MotionLibrary(rig.rest,store,(_key,write)=>new Promise<void>(resolve=>writes.push(()=>{write();resolve();}))).load();
+  b.rename(b.activeId,'连续编辑1');b.rename(b.activeId,'连续编辑2');
+  writes[0]();expect(b.saveState).toBe('saving');writes[1]();await b.saved;expect(b.saveState).toBe('saved');
+  expect(lib(store).active().name).toBe('连续编辑2');
+ });
+ it('preserves an unreadable draft verbatim and never claims unavailable storage was saved',()=>{
+  const store=memStorage();lib(store);store.map.set(DRAFT_PREFIX+'broken','{broken');
+  const restored=lib(store);expect(restored.quarantineText(0)).toBe('{broken');expect(store.map.has(DRAFT_PREFIX+'broken')).toBe(false);
+  expect(lib(store).quarantineText(0)).toBe('{broken');
+  const unavailable=new MotionLibrary(rig.rest,null).load();expect(unavailable.saveState).toBe('error');expect(unavailable.lastError).toContain('存储不可用');
  });
  it('merges stale independent edits and preserves additions without resurrecting deletions',()=>{
   const store=memStorage(),a=lib(store),second=a.create('第二段');

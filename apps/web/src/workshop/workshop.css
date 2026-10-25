@@ -1,6 +1,10 @@
 /* Motion Workshop layout — same design language as the lab viewer. */
-.ws-shell{height:100dvh;min-height:640px;display:grid;grid-template-rows:64px minmax(0,1fr) 132px;overflow:hidden}
-.ws-header{background:var(--card);display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid var(--line);z-index:2}
+.ws-shell{height:100dvh;min-height:640px;display:grid;grid-template-rows:auto minmax(0,1fr) 132px;overflow:hidden}
+.ws-header{background:var(--card);display:flex;flex-wrap:wrap;gap:4px 10px;min-height:64px;align-items:center;justify-content:space-between;padding:6px 28px;border-bottom:1px solid var(--line);z-index:2}
+.ws-save-state{flex:0 0 100%;display:flex;align-items:center;gap:8px;min-width:0;font-size:11px;color:var(--muted)}
+.ws-save-state span{overflow-wrap:anywhere}
+.ws-save-state[data-state=error]{color:var(--red)}
+.ws-save-state button{display:inline-flex;align-items:center;gap:4px;flex-shrink:0;min-height:28px;padding:2px 6px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg-2)}
 .ws-header .brand{display:flex;align-items:center;gap:11px}
 .ws-header .brand>svg{color:var(--blue)}
 .ws-header .brand>span{font-size:23px;font-weight:700;letter-spacing:-.7px}

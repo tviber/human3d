@@ -14,7 +14,7 @@
  * DOM overlay, DEV window globals.
  */
 
-export interface StorageLike{getItem(k:string):string|null;setItem(k:string,v:string):void;removeItem?(k:string):void}
+export interface StorageLike{getItem(k:string):string|null;setItem(k:string,v:string):void;removeItem?(k:string):void;readonly length?:number;key?(index:number):string|null}
 
 export type StorageLock=(key:string,write:()=>void)=>Promise<void>;
 

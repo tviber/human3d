@@ -63,6 +63,37 @@
 /* the in-sheet import error (compact library sheet) */
 .pkg-error{color:var(--red);font-size:11.5px;margin:4px 2px 0}
 
+/* ---- lab compact friction fixes (phone UX pass) --------------------------
+ * ① the sheet adjusting view options must not hide what it adjusts: lighter
+ *    scrim + a visible ✕ on both sheet headings (workshop sheets have one);
+ * ② viewport controls must not sit on the model: camera toolbar / hand view
+ *    move to the top corners, clear of the subject;
+ * ③ the playback timeline must be touch-operable: the ≤760 shrink-to-6px
+ *    phase labels and 4px scrubber get real hit areas, and the truncated
+ *    english name yields its space to the phase.
+ */
+.lab-sheetbar{display:none}
+.pkg-import{display:none}
+.sheet-close{display:none}
+@media(max-width:760px){
+ .lab-compact .lab-scrim{background:rgba(15,15,28,.12)}
+ .lab-compact .sheet-close{display:inline-flex;align-items:center;justify-content:center;
+   width:36px;height:36px;margin-left:8px;border-radius:50%;
+   background:var(--card);border:1px solid var(--line);color:var(--muted)}
+ .lab-compact .camera-toolbar{top:12px;right:12px}
+ .lab-compact .hand-view{top:50px;right:12px}
+ .lab-compact .timeline-meta{font-size:11px;letter-spacing:.02em}
+ .lab-compact .timeline-meta .time-code{font-size:12px;white-space:nowrap}
+ .lab-compact .timeline-meta .meta-english{display:none}
+ .lab-compact .timeline-meta > span:first-child i{display:none}
+ /* Two intrinsic rows reserve the full hit areas; dense phases scroll horizontally. */
+ .lab-compact .phase-markers{height:auto;margin-top:8px;display:grid;grid-template-rows:repeat(2,28px);
+   grid-auto-flow:column;grid-auto-columns:max-content;gap:4px 8px;overflow-x:auto;padding-bottom:4px}
+ .lab-compact .phase-markers button{position:static;transform:none;font-size:10px;padding:0 6px;height:28px;min-height:28px;color:var(--muted)}
+ .lab-compact .phase-markers button::before{display:none}
+ .lab-compact .timeline-area input[aria-label="动作进度"]{height:26px;padding:11px 0;
+   background-clip:content-box;border-radius:22px}
+}
 /* Keep saved-motion deletion separate from the playback button. */
 .motion-item{display:flex;align-items:center;gap:2px;min-width:0}
 .motion-item .motion-row{flex:1;min-width:0;width:0}

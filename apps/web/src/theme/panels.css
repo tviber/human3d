@@ -57,9 +57,9 @@
  .lab-scrim{position:fixed;inset:0;z-index:25;background:rgba(0,0,0,.28)}
  @media(prefers-reduced-motion:reduce){.lab-compact .workspace[data-group] .motion-panel,.lab-compact .workspace[data-group] .inspector{transition:none}}
 }
-/* desktop: the sheet bar and the in-sheet import button are compact-only */
+/* desktop: the sheet bar is compact-only; the pose-package import lives in
+ * the library heading on every layout (issue #30 PR-B: one entry point) */
 .lab-sheetbar{display:none}
-.pkg-import{display:none}
 /* the in-sheet import error (compact library sheet) */
 .pkg-error{color:var(--red);font-size:11.5px;margin:4px 2px 0}
 
@@ -73,8 +73,8 @@
  *    english name yields its space to the phase.
  */
 .lab-sheetbar{display:none}
-.pkg-import{display:none}
 .sheet-close{display:none}
+.pkg-import{display:inline-flex;align-items:center;height:28px;padding:0 10px;margin-right:auto;font-size:11.5px;color:var(--accent);background:var(--accent-soft);border:0;border-radius:999px;cursor:pointer}
 @media(max-width:760px){
  .lab-compact .lab-scrim{background:rgba(15,15,28,.12)}
  .lab-compact .sheet-close{display:inline-flex;align-items:center;justify-content:center;
@@ -99,3 +99,18 @@
 .motion-item .motion-row{flex:1;min-width:0;width:0}
 .motion-remove{display:flex;align-items:center;justify-content:center;flex:none;width:36px;min-height:44px;border-radius:6px;color:var(--muted)}
 .motion-remove:hover:not(:disabled){background:var(--pill);color:var(--red)}
+
+/* ---- issue #30 PR-B: collapsible lab panes on desktop --------------------
+ * The inspector (and the library, when wanted) collapse to a 0-width pane;
+ * slim edge tabs on the viewport bring them back. Compact layouts use the
+ * bottom sheets instead, so the tabs are desktop-only. */
+.pane-closed{overflow:hidden}
+.edge-toggle{display:none}
+@media(min-width:761px){
+ .workspace[data-group] .viewport{position:relative}
+ .edge-toggle{display:inline-flex;align-items:center;justify-content:center;position:absolute;top:50%;transform:translateY(-50%);z-index:6;width:24px;min-height:76px;padding:10px 0;border:1px solid var(--line);background:var(--panel);color:var(--fg-2);font-size:11px;letter-spacing:.18em;writing-mode:vertical-rl;cursor:pointer}
+ .edge-toggle.left{left:0;border-left:0;border-radius:0 8px 8px 0}
+ .edge-toggle.right{right:0;border-right:0;border-radius:8px 0 0 8px}
+ .edge-toggle:hover{color:var(--accent)}
+ .edge-toggle[aria-expanded="true"]{color:var(--accent)}
+}

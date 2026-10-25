@@ -195,6 +195,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
  // Session-only display toggles (never persisted) — same convention as the
  // engine's WorkshopOptions defaults.
  const [opts,setOpts]=useState({handles:true,trajectories:true,balance:true,onion:false,onionCount:2,onionMode:'keys' as 'keys'|'step',onionStep:.1});
+ const [optsOpen,setOptsOpen]=useState(false);
  // Issue #23: phone layout = viewport + bottom sheets; Review mode blocks every
  // viewport write. Same query as the CSS breakpoint in workshop.css.
  const compact=useMedia(COMPACT_QUERY);
@@ -864,7 +865,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
  const sheetHead=(title:string)=><div className="ws-sheet-head"><strong>{title}</strong><button type="button" aria-label="关闭面板" onClick={()=>setSheet(null)}><X size={18}/></button></div>;
  return <div className={`ws-shell ${generationLockedUi?'ws-generation-locked':''} ${compact?'ws-compact':''} ${sheet?`ws-sheet-${sheet}`:''} ws-mode-${mode}`} data-mode={mode}>
   <header className="ws-header">
-   <div className="brand"><Activity size={25} strokeWidth={2}/><span>KINESIS</span><i/><h1>动作工作台</h1><small>姿态优先 · 关键帧 + 约束</small></div>
+   <div className="brand"><Activity size={25} strokeWidth={2}/><span>KINESIS</span><i/><h1>动作工作台</h1><small>关键帧动作编辑器</small></div>
    <nav><a href="/" className="ws-back" aria-disabled={leaving} onClick={e=>{e.preventDefault();void returnToLab();}}><ArrowLeft size={14}/>返回实验室</a></nav>
    <div className="ws-save-state" data-testid="save-state" data-state={L.saveState} role="status" aria-live="polite"><span>{L.saveState==='error'?`保存失败：${L.lastError}`:L.saveState==='saving'?leaving?'保存中 · 完成后返回实验室…':'保存中…':'已保存到本机'}</span>{L.saveState!=='saved'?<button type="button" onClick={()=>exportDoc()}><Download size={12}/>导出当前动作 JSON</button>:null}</div>
   </header>
@@ -888,15 +889,11 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
      </>:null}
     </section>:null}
     <section className="ws-card" inert={generationLockedUi}><h2>动作库 <small>{L.docs.length} 个动作</small></h2>
-     <div className="ws-preset-entry">
-      <label className="ws-field"><span>动作预设</span><select aria-label="初始动作预设" value={presetId} onChange={e=>setPresetId(e.target.value)}>
-       <optgroup label="基础动作">{BASIC_PRESETS.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</optgroup>
-       <optgroup label="网球正手（球拍插件）">{RACKET_PRESETS.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</optgroup>
-       <optgroup label="其他预设">{OTHER_PRESETS.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</optgroup>
-      </select></label>
-      <button className="ws-preset-start" onClick={()=>createFromPreset()}><Plus size={14}/>从预设开始</button>
-     </div>
      <LibraryList docs={L.docs} activeId={d.id} onSelect={selectDoc} onDuplicate={duplicateDoc} onRemove={removeDoc} onReorder={(active,over)=>{L.reorder(active,over);bump(v=>v+1);}}/>
+     <div className="ws-row">
+      <input className="ws-newname" aria-label="新动作名称" value={newName} placeholder="新动作名称（可选）…" onChange={e=>setNewName(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')createDoc();}}/>
+      <button onClick={createDoc}><Plus size={13}/>新建</button>
+     </div>
      <div className="ws-row"><button type="button" data-testid="save-to-library" onClick={saveToLibrary}><Save size={13}/>保存到动作库</button></div>
      <div className="ws-sub"><h3>导入 / 导出 / 备份</h3>
       <div className="ws-row">
@@ -922,17 +919,54 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
        <p className="ws-note">「替换全部」会先自动下载当前数据的快照，再要求确认；无论哪种方式，隔离数据都不会丢。</p>
       </div>:null}
      </div>
-     <div className="ws-row">
-      <input className="ws-newname" aria-label="新动作名称" value={newName} placeholder="新动作名称（可选）…" onChange={e=>setNewName(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')createDoc();}}/>
-      <button onClick={createDoc}><Plus size={13}/>新建</button>
-     </div>
-     <p className="ws-note">复制完整动作到手动工作台，再拖动调整；上方名称可选。仅列出可编辑的关键帧预设，外部动画与动力学动作暂不支持。</p>
      <p className="ws-note" style={L.lastError?{color:'var(--red)'}:undefined}>{L.lastError?`保存未完成：${L.lastError}`:'动作自动保存到本机浏览器；导出 JSON 可跨设备分享。'}</p>
      {L.quarantine.length?<div className="ws-quarantine"><p className="ws-note" style={{color:'var(--red)'}}>{L.quarantine.length} 个恢复稿或隔离项，尚未参与播放。可恢复为副本或导出后修复。</p>
       {L.quarantine.map((q,i)=><div key={`${q.id}-${i}`} className="ws-row"><small>{q.name||q.id||'未命名'}：{q.reason}</small><button onClick={()=>recoverQuarantine(i)}>恢复为副本</button><button onClick={()=>exportQuarantine(i)}><Download size={12}/>导出</button><button aria-label={`丢弃 ${q.name||q.id}`} onClick={()=>{if(confirm('丢弃这个隔离动作？此操作不可撤销。'))L.discardQuarantine(i);bump(v=>v+1);}}><Trash2 size={12}/></button></div>)}
      </div>:null}
     </section>
-    <section className="ws-card" inert={generationLockedUi}><h2>组合动作 <small>保存为新动作</small></h2>
+    <section className="ws-card" inert={generationLockedUi} aria-label="快速插入"><h2>快速插入 <small>播放头一键</small></h2>
+     <div className="ws-quick-poses" role="group" aria-label="快速姿态（一键插入）">
+      <span className="ws-quick-label">姿态</span>
+      {BASIC_PRESETS.map(p=>{
+       const refusal=info&&p.document?basicInsertRefusal(d,p.document,frame.time):undefined;
+       return <button key={p.id} type="button" data-testid={`basic-insert-${p.id}`} disabled={!info||!p.document||!!refusal}
+        title={refusal??`在当前帧一键插入「${p.name}」：从播放头姿态开始变化，后续关键帧整体后移，可撤销`}
+        onClick={()=>insertBasicPreset(p)}>{p.name}</button>;
+      })}
+     </div>
+     <div className="ws-quick-poses" role="group" aria-label="球拍（一键持拍）">
+      <span className="ws-quick-label">球拍</span>
+      <button type="button" data-testid="racket-right" disabled={!info} title="所有关键帧改为右手握拍并显示球拍，可撤销" onClick={()=>setGrip('R')}>右手持拍</button>
+      <button type="button" data-testid="racket-left" disabled={!info} title="所有关键帧改为左手握拍并显示球拍，可撤销" onClick={()=>setGrip('L')}>左手持拍</button>
+      <button type="button" data-testid="racket-off" disabled={!info} title="所有关键帧不再握拍，可撤销" onClick={()=>setGrip(null)}>卸下球拍</button>
+     </div>
+     <div className="ws-quick-poses" role="group" aria-label="我的姿态（自建快速姿态）">
+      <span className="ws-quick-label">我的</span>
+      <button type="button" data-testid="pose-capture" disabled={!info||!sel} title="把选中关键帧的完整姿态（含手臂）存为可复用的快速姿态，保存到本机浏览器" onClick={capturePose}><Plus size={12}/>存当前姿态</button>
+      {poseLib.current!.presets.map(p=><span key={p.id} className="ws-pose-chip">
+       <button type="button" data-testid={`pose-apply-${p.id}`} title="把该姿态写到播放头：已有帧则替换姿态，无帧则插入新帧，可撤销" onClick={()=>applyUserPose(p)}>{p.name}</button>
+       <button type="button" className="ws-pose-delete" aria-label={`删除姿态 ${p.name}`} title="删除这个自建姿态" onClick={()=>removeUserPose(p.id)}><X size={10}/></button>
+      </span>)}
+     </div>
+    </section>
+    <details className="ws-fold" data-fold="preset" inert={generationLockedUi}>
+     <summary>从预设开始 <small>内置动作副本</small></summary>
+     <div className="ws-fold-body">
+      <div className="ws-preset-entry">
+       <label className="ws-field"><span>动作预设</span><select aria-label="初始动作预设" value={presetId} onChange={e=>setPresetId(e.target.value)}>
+        <optgroup label="基础动作">{BASIC_PRESETS.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</optgroup>
+        <optgroup label="持拍动作（球拍插件）">{RACKET_PRESETS.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</optgroup>
+        <optgroup label="其他预设">{OTHER_PRESETS.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</optgroup>
+       </select></label>
+       <button className="ws-preset-start" onClick={()=>createFromPreset()}><Plus size={14}/>从预设开始</button>
+      </div>
+      <p className="ws-note">复制完整预设为可编辑副本开始调整；预设本身不会被改动。外部动画与动力学动作暂不支持。</p>
+     </div>
+    </details>
+    <details className="ws-fold" data-fold="combine" inert={generationLockedUi}>
+     <summary>组合动作 <small>拼接 / 混合</small></summary>
+     <div className="ws-fold-body">
+     <section className="ws-card" inert={generationLockedUi}><h2>组合动作 <small>保存为新动作</small></h2>
      <p className="ws-note">当前「{d.name}」作为第一段，选择另一段动作进行拼接或混合。</p>
      <label className="ws-field"><span>另一段</span><select aria-label="组合目标动作" value={combineTarget} onChange={e=>setCombineTarget(e.target.value)}>
       <optgroup label="我的动作">{L.docs.map(doc=><option key={doc.id} value={`local:${doc.id}`}>{doc.name}</option>)}</optgroup>
@@ -946,8 +980,13 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
      <p className="ws-note">{combineKind==='append'?'当前动作 → 过渡 → 另一段动作，总时长不超过 10 秒。':'按开始 / 结束对齐进度，时长取较长动作；双足支撑取交集，持拍和触球取占比高的动作（50% 时取另一段）。'}</p>
      <label className="ws-field"><span>新名称</span><input aria-label="组合动作名称" placeholder="留空自动命名" value={combineName} onChange={e=>setCombineName(e.target.value)}/></label>
      <div className="ws-row"><button type="button" data-testid="save-combined-motion" disabled={!info} onClick={saveCombined}><Save size={13}/>{combineKind==='append'?'拼接并保存':'混合并保存'}</button></div>
-    </section>
-    <section className="ws-card ws-keyframes" inert={generationLockedUi} aria-label="关键帧管理">
+     </section>
+     </div>
+    </details>
+    <details className="ws-fold" data-fold="keys" inert={generationLockedUi}>
+     <summary>关键帧清单 <small>{orderedKeys.length} / {WORKSHOP_LIMITS.maxKeys} · 时间轴是主入口</small></summary>
+     <div className="ws-fold-body">
+     <section className="ws-card ws-keyframes" inert={generationLockedUi} aria-label="关键帧管理">
      <h2>关键帧 <small>{orderedKeys.length} / {WORKSHOP_LIMITS.maxKeys}</small></h2>
      <div className="ws-keyframe-list" role="group" aria-label="按时间排序的关键帧">
       {orderedKeys.map((key,index)=>{
@@ -964,41 +1003,18 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
       })}
      </div>
      <div className="ws-row ws-keyframe-actions">
-      <button type="button" data-testid="keyframe-copy-selected" disabled={!sel||insertTime===undefined||d.keys.length>=WORKSHOP_LIMITS.maxKeys} title={insertTime===undefined?'选中帧后没有可用时间':'完整复制选中帧到后方，副本可独立编辑'} onClick={()=>{if(sel)duplicateKey(sel.id);}}><Copy size={12}/>复制选中帧</button>
       <button type="button" data-testid="keyframe-add-current" disabled={!info||d.keys.length>=WORKSHOP_LIMITS.maxKeys} onClick={addKey}><Plus size={12}/>当前时刻添加</button>
       <button type="button" data-testid="keyframe-insert-after" disabled={!info||insertTime===undefined||d.keys.length>=WORKSHOP_LIMITS.maxKeys} title={insertTime===undefined?'选中帧后没有可用时间；可在前面的时间段添加':'在下一时间点前插入；末帧后可延长动作'} onClick={insertAfterKey}><Plus size={12}/>在选中帧后插入</button>
-      <button type="button" data-testid="pose-copy" disabled={!sel} title="复制选中关键帧的完整姿态（含手臂），会话内有效，可粘贴到其他帧或其他动作" onClick={copyPose}><ClipboardCopy size={12}/>复制姿态</button>
-      <button type="button" data-testid="pose-paste" disabled={!sel||!poseClipboard.current} title="把复制的姿态写到选中关键帧（约束不变），可撤销" onClick={pastePose}><Copy size={12}/>粘贴姿态</button>
-      <button type="button" data-testid="pose-mirror" disabled={!sel} title="当前帧姿态左右镜像：手脚与支撑互换、握拍侧换边，可撤销" onClick={mirrorSelectedPose}><FlipHorizontal2 size={12}/>镜像姿态</button>
      </div>
-     <div className="ws-quick-poses" role="group" aria-label="快速姿态（一键插入）">
-      <span className="ws-quick-label">快速姿态</span>
-      {BASIC_PRESETS.map(p=>{
-       const refusal=info&&p.document?basicInsertRefusal(d,p.document,frame.time):undefined;
-       return <button key={p.id} type="button" data-testid={`basic-insert-${p.id}`} disabled={!info||!p.document||!!refusal}
-        title={refusal??`在当前帧一键插入「${p.name}」：从播放头姿态开始变化，后续关键帧整体后移，可撤销`}
-        onClick={()=>insertBasicPreset(p)}>{p.name}</button>;
-      })}
-     </div>
-     <div className="ws-quick-poses" role="group" aria-label="球拍（一键持拍）">
-      <span className="ws-quick-label">球拍</span>
-      <button type="button" data-testid="racket-right" disabled={!info} title="所有关键帧改为右手握拍并显示球拍，可撤销" onClick={()=>setGrip('R')}>右手持拍</button>
-      <button type="button" data-testid="racket-left" disabled={!info} title="所有关键帧改为左手握拍并显示球拍，可撤销" onClick={()=>setGrip('L')}>左手持拍</button>
-      <button type="button" data-testid="racket-off" disabled={!info} title="所有关键帧不再握拍，可撤销" onClick={()=>setGrip(null)}>卸下球拍</button>
-     </div>
-     <div className="ws-quick-poses" role="group" aria-label="我的姿态（自建快速姿态）">
-      <span className="ws-quick-label">我的姿态</span>
-      <button type="button" data-testid="pose-capture" disabled={!info||!sel} title="把选中关键帧的完整姿态（含手臂）存为可复用的快速姿态，保存到本机浏览器" onClick={capturePose}><Plus size={12}/>存当前姿态</button>
-      {poseLib.current!.presets.map(p=><span key={p.id} className="ws-pose-chip">
-       <button type="button" data-testid={`pose-apply-${p.id}`} title="把该姿态写到播放头：已有帧则替换姿态，无帧则插入新帧，可撤销" onClick={()=>applyUserPose(p)}>{p.name}</button>
-       <button type="button" className="ws-pose-delete" aria-label={`删除姿态 ${p.name}`} title="删除这个自建姿态" onClick={()=>removeUserPose(p.id)}><X size={10}/></button>
-      </span>)}
-     </div>
-     <p className="ws-note">点击帧名，在右侧编辑名称、时间与姿态。上移 / 下移保留时间点，整帧换序。</p>
+     <p className="ws-note">点击帧名定位与编辑；上移 / 下移保留时间点，整帧换序。新增与复制在右侧「选中关键帧」或底部时间轴操作。</p>
      {d.keys.length>=WORKSHOP_LIMITS.maxKeys?<p className="ws-note">已达关键帧数量上限，请先删除不需要的帧。</p>:null}
-    </section>
-    <section className="ws-card ws-generator" data-testid="generator-panel">
-     <h2>约束轨迹生成 <small>实验功能 · 后台计算</small></h2>
+     </section>
+     </div>
+    </details>
+    <details className="ws-fold" data-fold="generator" inert={generationLockedUi}>
+     <summary>约束轨迹生成 <small>实验功能 · 后台计算</small></summary>
+     <div className="ws-fold-body">
+     <section className="ws-card ws-generator" data-testid="generator-panel">
      <p className="ws-note">生成器会尝试小幅调整关键帧时序与通道相位。候选只在当前页面预览；按“保留”后才写入动作库。</p>
      {!generationLockedUi?<>
       <div className="ws-sub"><h3>可调整方式</h3>
@@ -1054,9 +1070,13 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
       <button type="button" className="ws-mini" onClick={()=>setGenerationReport(null)}>清除结果</button>
      </div>:null}
      {generationError?<div className="ws-generation-error" role="alert"><p>{generationError}</p><button type="button" className="ws-mini" onClick={()=>setGenerationError('')}>关闭</button></div>:null}
-    </section>
-    <section className="ws-card ws-doc-card" inert={generationLockedUi}><h2>动作文档</h2>
-     <label className="ws-field"><span>名称</span><input value={d.name} onChange={e=>edit(dd=>{dd.name=e.target.value;})}/></label>
+     </section>
+     </div>
+    </details>
+    <details className="ws-fold" data-fold="doc" inert={generationLockedUi}>
+     <summary>动作属性 · 高级导出 <small>时长 / 循环 / 坐标系 / GLB</small></summary>
+     <div className="ws-fold-body">
+     <section className="ws-card ws-doc-card" inert={generationLockedUi}><h2>动作属性</h2>
      <label className="ws-field"><span>时长 s（{WORKSHOP_LIMITS.minDuration}–{WORKSHOP_LIMITS.maxDuration}）</span><input type="number" min={WORKSHOP_LIMITS.minDuration} max={WORKSHOP_LIMITS.maxDuration} step=".1" value={d.duration} onChange={e=>edit(dd=>retimeKeys(dd,clampDuration(Number(e.target.value))))}/></label>
      <p className="ws-note">{d.keys.length} 个关键帧 · {d.inbetweens?'Hermite 补间':'逐帧保持'}</p>
      <Row label="循环播放" detail={loopBlockers(d).join('；')||'首帧位于 0 s，末帧早于时长'} checked={d.loop} disabled={!d.loop&&loopBlockers(d).length>0} onChange={v=>edit(dd=>{if(v&&loopBlockers(dd).length)return;dd.loop=v;})}/>
@@ -1088,8 +1108,13 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
       {pkgProblems&&pkgProblems.doc===d.id?<div className="ws-problems"><p className="ws-note" style={{color:'var(--red)'}}>上一次导出被语义校验拒绝，未生成文件：</p>
        <ul>{pkgProblems.items.map((p,i)=><li key={i}>{p}</li>)}</ul></div>:null}
      </div>
-    </section>
-    <section className="ws-card" inert={generationLockedUi}><h2>参考视频 <small>WHAM 自动估计待接入</small></h2>
+     </section>
+     </div>
+    </details>
+    <details className="ws-fold" data-fold="video" inert={generationLockedUi}>
+     <summary>参考视频 <small>需要时打开</small></summary>
+     <div className="ws-fold-body">
+     <section className="ws-card" inert={generationLockedUi}><h2>参考视频 <small>WHAM 自动估计待接入</small></h2>
      {videoUrl?(compact?<p className="ws-note">参考视频以画中画显示在三维视图上，可切换大图并排对照。</p>:videoEl):
       <button className="ws-video-pick" onClick={()=>fileRef.current?.click()}><Video size={18}/>载入参考视频</button>}
      <input ref={fileRef} type="file" accept="video/*" hidden onChange={e=>{const f=e.target.files?.[0];if(f)loadVideo(f);e.target.value='';}}/>
@@ -1103,8 +1128,13 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
       <button className="ws-mini" onClick={stampVideo} disabled={!sel}>记录视频帧到当前关键帧</button>
       <div className="ws-vkeys">{d.keys.filter(k=>k.videoTime!==undefined).map(k=><button key={k.id} onClick={()=>{engine.current?.seek(k.time);if(video.current)video.current.currentTime=k.videoTime!;setSelected(k.id);}}><Film size={11}/>{k.label||fmt(k.time)}<small>{fmt(k.videoTime!)}</small></button>)}</div>
      </>:null}
-    </section>
-    <section className="ws-card ws-legend" inert={generationLockedUi}><h2>手柄</h2>
+     </section>
+     </div>
+    </details>
+    <details className="ws-fold" data-fold="legend" inert={generationLockedUi}>
+     <summary>手柄图例 <small>IK 末端与颜色</small></summary>
+     <div className="ws-fold-body">
+     <section className="ws-card ws-legend" inert={generationLockedUi}><h2>手柄</h2>
      <p><i style={{background:'#2469ee'}}/>髋部 / 根骨</p>
      <p><i style={{background:'#ec8c39'}}/>手腕（IK 末端）</p>
      <p><i style={{background:'#e2543a'}}/>脚踝（支撑贴地 · 离地可三维拖动）</p>
@@ -1112,7 +1142,9 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
      <p><i style={{background:'#4a9e6b'}}/>肘 / 膝极点</p>
      <p><i style={{background:'#d23c3c'}}/>拍头 · <em style={{color:'#f0b429'}}>触球点</em></p>
      <p className="ws-note">直接拖动末端，IK 自动解算整条链；在空白处拖动仍是旋转视角。</p>
-    </section>
+     </section>
+     </div>
+    </details>
    </aside></Panel>
    <Separator className="pane-resize"/>
    <Panel id="ws-stage" className="ws-stage" defaultSize="auto" minSize={320}><section className="ws-viewport">
@@ -1127,12 +1159,22 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
     <div className="ws-quickbar" role="toolbar" aria-label="快捷操作">
      <button type="button" data-testid="sheet-left" aria-expanded={sheet==='left'} onClick={()=>setSheet(v=>v==='left'?null:'left')}><ListVideo size={16}/>动作</button>
      <button type="button" data-testid="sheet-right" aria-expanded={sheet==='right'} onClick={()=>setSheet(v=>v==='right'?null:'right')}><SlidersHorizontal size={16}/>调整</button>
-     <button type="button" aria-pressed={opts.trajectories} onClick={()=>setOpt({trajectories:!opts.trajectories})}>轨迹</button>
-     <button type="button" aria-pressed={opts.onion} onClick={()=>setOpt({onion:!opts.onion})}>洋葱皮</button>
-     <button type="button" aria-pressed={opts.balance} onClick={()=>setOpt({balance:!opts.balance})}>重心</button>
-     {!review?<button type="button" aria-pressed={opts.handles} onClick={()=>setOpt({handles:!opts.handles})}>手柄</button>:null}
+     <button type="button" data-testid="display-menu" aria-expanded={optsOpen} onClick={()=>setOptsOpen(v=>!v)}><Eye size={15}/>显示</button>
      <button type="button" data-testid="fit-view" onClick={()=>{setSheet(null);setView('threeQuarter');engine.current?.setView('threeQuarter');}}>全视野</button>
-     {videoUrl?<button type="button" aria-pressed={refLarge} onClick={()=>setRefLarge(v=>!v)}><Video size={15}/>参考</button>:null}
+     {optsOpen?<><button type="button" className="ws-popscrim" aria-label="关闭显示菜单" onClick={()=>setOptsOpen(false)}/>
+      <div className="ws-optmenu" role="group" aria-label="显示选项">
+       <Row label="运动轨迹线" checked={opts.trajectories} onChange={v=>setOpt({trajectories:v})}/>
+       <Row label="重心 / 支撑" checked={opts.balance} onChange={v=>setOpt({balance:v})}/>
+       {!review?<Row label="编辑手柄" checked={opts.handles} onChange={v=>setOpt({handles:v})}/>:null}
+       <Row label="洋葱皮" detail="叠加前后姿态的幽灵骨架" checked={opts.onion} onChange={v=>setOpt({onion:v})}/>
+       {opts.onion?<>
+        <label className="ws-field"><span>数量</span><input type="number" min={1} max={3} step={1} value={opts.onionCount} onChange={e=>{const v=Math.max(1,Math.min(3,Math.round(Number(e.target.value)||1)));setOpts(o=>({...o,onionCount:v}));engine.current?.setOptions({onionCount:v});}}/></label>
+        <label className="ws-field"><span>模式</span><select value={opts.onionMode} onChange={e=>{const v=e.target.value as 'keys'|'step';setOpts(o=>({...o,onionMode:v}));engine.current?.setOptions({onionMode:v});}}><option value="keys">相邻关键帧</option><option value="step">固定步长</option></select></label>
+        {opts.onionMode==='step'?<label className="ws-field"><span>步长 s</span><input type="number" min={.02} max={1} step={.02} value={opts.onionStep} onChange={e=>{const v=Math.max(.02,Math.min(1,Number(e.target.value)||.1));setOpts(o=>({...o,onionStep:v}));engine.current?.setOptions({onionStep:v});}}/></label>:null}
+       </>:null}
+       <SkinSwitch disabled={!info} change={s=>engine.current!.setSkin(s)}/>
+       {videoUrl?<Row label="放大参考视频" checked={refLarge} onChange={v=>setRefLarge(v)}/>:null}
+      </div></>:null}
     </div>
     {compact&&videoEl?<div className={`ws-ref ${refLarge?'large':''}`} data-testid="reference-pip">{videoEl}<button type="button" aria-label={refLarge?'缩小参考视频':'放大参考视频并排对照'} onClick={()=>setRefLarge(v=>!v)}/></div>:null}
     {!info?<div className="ws-loading"><div className="loading-orbit"/><strong>{error?'加载失败':'正在读取人体模型'}</strong><p>{error}</p></div>:null}
@@ -1154,6 +1196,12 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
         {orderedKeys.map((key,index)=><option key={key.id} value={index}>第 {index+1} 帧 · {key.time.toFixed(3)}s</option>)}
        </select></label>
        {d.loop&&selectedKeyIndex===0?<p className="ws-note">循环首帧固定在 0s；可调整顺序来更换首帧。</p>:null}
+      <div className="ws-row ws-context-actions" role="group" aria-label="选中关键帧操作">
+       <button type="button" data-testid="keyframe-copy-selected" disabled={insertTime===undefined||d.keys.length>=WORKSHOP_LIMITS.maxKeys} title={insertTime===undefined?'选中帧后没有可用时间':'完整复制选中帧到后方，副本可独立编辑'} onClick={()=>{if(sel)duplicateKey(sel.id);}}><Copy size={12}/>复制帧</button>
+       <button type="button" data-testid="pose-copy" disabled={!sel} title="复制选中关键帧的完整姿态（含手臂），会话内有效，可粘贴到其他帧或其他动作" onClick={copyPose}><ClipboardCopy size={12}/>复制姿态</button>
+       <button type="button" data-testid="pose-paste" disabled={!sel||!poseClipboard.current} title="把复制的姿态写到选中关键帧（约束不变），可撤销" onClick={pastePose}><Copy size={12}/>粘贴姿态</button>
+       <button type="button" data-testid="pose-mirror" disabled={!sel} title="当前帧姿态左右镜像：手脚与支撑互换，可撤销" onClick={mirrorSelectedPose}><FlipHorizontal2 size={12}/>镜像姿态</button>
+      </div>
       </div>
       {Math.abs(frame.time-sel.time)>.001?<p className="ws-note">正在预览 {frame.time.toFixed(2)}s；修改时定位到选中帧 {sel.time.toFixed(2)}s。调整当前时刻请先添加关键帧。</p>:null}
       {adjustmentTab==='semantic'?<SemanticPanel key={`${d.id}:${sel.id}:${wristEpoch.current}`} host={semanticHost} defaultSide={d.gripSide??'R'} keyLabel={sel.label||`关键帧 ${selectedKeyIndex+1}`}/>:<>
@@ -1244,7 +1292,10 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
      </>:<p className="ws-note">时间轴上选择或新建关键帧。</p>}
      </div>
     </section>
-    <section className="ws-card"><h2>合理性检查 <small>运动学 · 非动力学</small></h2>
+    <details className="ws-fold" data-fold="inspect">
+     <summary>检查 · 反馈 · 显示 <small>按需展开</small></summary>
+     <div className="ws-fold-body">
+     <section className="ws-card"><h2>合理性检查 <small>运动学 · 非动力学</small></h2>
      {analysis?<div className="ws-checks">{analysis.items.map((it,i)=><div key={i} className={it.ok?'':'warn'}>{it.ok?<Check size={12}/>:<X size={12}/>}<span>{it.label}</span><small>{it.detail}</small></div>)}</div>:<p className="ws-note">求解后显示关节限位、支撑与重心。</p>}
      <p className="ws-note">限位使用工程关节范围；重心为分段质量近似，支撑多边形来自锁定脚位。</p>
     </section>
@@ -1273,7 +1324,9 @@ export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:Rig
       <label className="ws-field"><span>模式</span><select value={opts.onionMode} onChange={e=>{const v=e.target.value as 'keys'|'step';setOpts(o=>({...o,onionMode:v}));engine.current?.setOptions({onionMode:v});}}><option value="keys">相邻关键帧</option><option value="step">固定步长</option></select></label>
       {opts.onionMode==='step'?<label className="ws-field"><span>步长 s</span><input type="number" min={.02} max={1} step={.02} value={opts.onionStep} onChange={e=>{const v=Math.max(.02,Math.min(1,Number(e.target.value)||.1));setOpts(o=>({...o,onionStep:v}));engine.current?.setOptions({onionStep:v});}}/></label>:null}
      </>:null}
-    </section>
+     </section>
+     </div>
+    </details>
    </aside></Panel>
   </Group>
   {info&&(error||hint)?<div className={`ws-feedback${error?' ws-feedback-error':''}`} role={error?'alert':'status'}><span>{error||hint}</span><button type="button" aria-label="关闭提示" onClick={()=>{setError('');setHint('');}}><X size={16}/></button></div>:null}

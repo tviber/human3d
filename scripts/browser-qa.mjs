@@ -34,7 +34,14 @@ const page=await browser.newPage({viewport:{width:1536,height:1024},deviceScaleF
 const errors=[],warnings=[];page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());if(m.type()==='warning')warnings.push(m.text());});
 await page.goto(webUrl('/'));await page.waitForFunction(()=>window.__LAB__?.ready,{timeout:60000});await page.locator('.loading-state').waitFor({state:'hidden'});
 assert.match(await page.title(),/KINESIS/);const bundledMotionCount=await page.locator('.motion-row').count();assert(bundledMotionCount>=8,'expected the bundled motion library');assert.equal(await page.locator('vite-error-overlay').count(),0);
+// Issue #30 PR-B: the 观察面板 collapses by default on desktop — expand it
+// once; the debug/speed/seek checks below operate on its controls.
+await page.getByRole('button',{name:'展开观察面板'}).click();
+await page.getByRole('switch',{name:'人体表面'}).waitFor({state:'visible',timeout:5000});
 const names={idle:'自然站立',walk:'行走',reach:'抬手与转身',squat:'下蹲',ready:'持拍准备',forehand:'正手挥拍'};
+// Issue #30 PR-B: secondary workshop panels are collapsed <details> folds;
+// open them all (idempotent) after every workshop navigation or reload.
+const openWsFolds=()=>page.evaluate(()=>{document.querySelectorAll('[data-fold]').forEach(el=>{el.open=true;});});
 async function choose(id,t=0,view='front'){
  // .first(): an opened bundled package reuses the envelope name, so the
  // motion list can hold two identically labelled rows — the bundled one
@@ -73,7 +80,17 @@ result.samples=await page.evaluate(()=>{const e=window.__LAB__,out={};for(const 
 for(const [id,samples]of Object.entries(result.samples)){assert(samples.every(s=>s.knee<=135.1&&s.elbow<=145.1));if(id==='forehand')assert(samples.every(s=>s.gripError<1e-8));}
 result.checks.motionSamples=true;
 // Responsive surface, including controls that move below the main canvas.
-await page.setViewportSize({width:390,height:844});await choose('ready',0,'front');await page.screenshot({path:outputFile('mobile.png')});await page.locator('.inspector').scrollIntoViewIfNeeded();await page.screenshot({path:outputFile('mobile-settings.png')});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);result.checks.mobileOverflow=false;
+await page.setViewportSize({width:390,height:844});
+// Phone drawer layout (#23/#28): the library and inspector are bottom sheets —
+// raise each before touching its controls (the pre-drawer scrolling page is gone).
+await page.getByTestId('sheet-library').click();
+await choose('ready',0,'front'); // picking a motion closes the sheet again
+await page.screenshot({path:outputFile('mobile.png')});
+await page.getByTestId('sheet-inspector').click();
+await page.getByRole('switch',{name:'人体表面'}).waitFor({state:'visible',timeout:5000});
+await page.screenshot({path:outputFile('mobile-settings.png')});
+await page.locator('.lab-scrim').click({position:{x:20,y:20}}); // the raised sheet covers the footer triggers and the scrim center
+assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);result.checks.mobileOverflow=false;
 await page.setViewportSize({width:1366,height:900});await choose('idle',0,'front');await page.screenshot({path:outputFile('laptop.png')});
 await page.setViewportSize({width:1536,height:1024});await choose('forehand',0,'threeQuarter');
 await page.getByRole('switch',{name:'球拍运动轨迹',exact:true}).click();await page.evaluate(()=>{window.__LAB__.loop=false;window.__LAB__.speed=1;});
@@ -149,6 +166,10 @@ await choose('idle',0,'front'); // restore a bundled motion before the workshop 
 // --- Workshop E2E: real pointer drag → save → reload keeps the edited pose.
 await page.goto(webUrl('/workshop.html'));
 await page.waitForFunction(()=>window.__WS__?.ready,{timeout:60000});
+// Issue #30 PR-B: secondary panels (presets, keyframe list, combine, generator,
+// doc properties/advanced exports, video, legend) are collapsed folds — the QA
+// run exercises all of them, so open every fold up front.
+await openWsFolds();
 assert.equal(await page.locator('.ws-key').count(),5);
 assert.equal(await page.locator('canvas').count(),1);
 await page.locator('.ws-newname').fill('QA 测试动作');
@@ -163,10 +184,18 @@ const handScreen=await page.evaluate(()=>{
 const seedTarget=await page.evaluate(()=>JSON.parse(localStorage.getItem('kinesis-workshop-library')).docs.find(d=>d.name==='QA 测试动作').keys[0].pose.handR.target);
 await page.mouse.move(handScreen.x,handScreen.y);await page.mouse.down();
 await page.mouse.move(handScreen.x+60,handScreen.y-90,{steps:8});await page.mouse.up();
-const moved=await page.evaluate(()=>JSON.parse(localStorage.getItem('kinesis-workshop-library')).docs.find(d=>d.name==='QA 测试动作').keys[0].pose.handR.target);
+// Drag saves are throttled and the lock write is async: wait for the real
+// invariant — storage equals the live document — instead of racing the writer
+// and reading a mid-drag snapshot.
+await page.waitForFunction(name=>{
+ const stored=JSON.parse(localStorage.getItem('kinesis-workshop-library')).docs.find(d=>d.name===name)?.keys[0].pose.handR.target;
+ const live=window.__WS__.getDoc().keys[0].pose.handR.target;
+ return !!stored&&JSON.stringify(stored)===JSON.stringify(live);
+},'QA 测试动作',{timeout:15000});
+const moved=await page.evaluate(()=>window.__WS__.getDoc().keys[0].pose.handR.target);
 assert(Math.hypot(moved.x-seedTarget.x,moved.y-seedTarget.y,moved.z-seedTarget.z)>.005,'drag edit was not persisted to storage');
 const wristBefore=await page.evaluate(()=>{const e=window.__WS__;e.setPlaying(false);e.seek(0);return e.rig.point('wrist_R').toArray();});
-await page.reload();await page.waitForFunction(()=>window.__WS__?.ready,{timeout:60000});
+await page.reload();await page.waitForFunction(()=>window.__WS__?.ready,{timeout:60000});await openWsFolds();
 const libNames=await page.locator('.ws-lib-row .ws-lib-name span').allTextContents();
 assert(libNames.some(n=>n.includes('QA 测试动作')));
 // Reloading must restore the dragged wrist pose, not just the motion name:
@@ -176,7 +205,10 @@ const persisted=await page.evaluate(()=>JSON.parse(localStorage.getItem('kinesis
 assert.deepEqual(persisted,moved,'stored handR.target changed across reload — drag edit was not persisted');
 // The workshop auto-plays on load: pin the playhead to t=0 before reading the
 // wrist position, or a slow machine reads a frame after the compare pose.
-const live=await page.evaluate(()=>{const e=window.__WS__;e.setPlaying(false);e.seek(0);return {target:e.getDoc().keys[0].pose.handR.target,wrist:e.rig.point('wrist_R').toArray()};});
+// Solve explicitly before reading: `ready` can resolve a frame before the
+// first document solve lands on the GPU-lagged rig, and the stale rest pose
+// would read as a changed wrist.
+const live=await page.evaluate(()=>{const e=window.__WS__;e.setPlaying(false);e.seek(0);e.solveCurrent?.();return {target:e.getDoc().keys[0].pose.handR.target,wrist:e.rig.point('wrist_R').toArray()};});
 assert.deepEqual(live.target,moved,'live doc handR.target differs from the persisted edit');
 assert(live.wrist.every((v,i)=>Math.abs(v-wristBefore[i])<.01),'solved wrist position changed across reload');
 result.checks.workshopDragPersist=true;
@@ -253,7 +285,7 @@ svc?.kill();svc=undefined; // every service-dependent assertion is done
 // Back to the workshop for the remaining pinned edits — the library
 // persists the QA doc's active selection across the navigation.
 await page.goto(webUrl('/workshop.html'));
-await page.waitForFunction(()=>window.__WS__?.ready,{timeout:60000});
+await page.waitForFunction(()=>window.__WS__?.ready,{timeout:60000});await openWsFolds();
 assert((await page.evaluate(()=>window.__WS__.getDoc().name)).includes('QA 测试动作'),'QA doc lost the active selection across navigation');
 // --- Workshop GLB export: the derived binary download. Assert the container
 // (magic, version, one animation, channel count matching the package's
@@ -516,7 +548,8 @@ result.checks.workshopMirror=true;
 // Workshop's actual JSON import path, then assert cancellation is a byte-stable
 // no-op before running a full A/B → keep → export → undo/redo round trip.
 const forehandDoc=JSON.parse(fs.readFileSync('spec/examples/forehand-study.request.json','utf8')).action.parameters.document;
-await page.locator('input[type=file][accept=".json,application/json"]').setInputFiles({
+// nth(0): the library card hosts two JSON inputs — 导入动作 and 从备份恢复.
+await page.locator('input[type=file][accept=".json,application/json"]').first().setInputFiles({
  name:'forehand-study.workshop.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(forehandDoc)),
 });
 await page.waitForFunction(()=>window.__WS__?.getDoc().name==='正手击球 · 研究',{timeout:10000});
@@ -527,6 +560,7 @@ const lockProbeStorage=await page.evaluate(()=>localStorage.getItem('kinesis-wor
 const lockProbe=await page.evaluate(()=>window.__WS_GENERATOR__.source());
 const lockProbeInterior=lockProbe.keys.find((k,i)=>i>0&&i<lockProbe.keys.length-1&&!k.constraints.contact);
 assert(lockProbeInterior,'lock regression fixture has no adjustable interior key');
+await openWsFolds();
 await page.getByTestId(`generator-lock-${lockProbeInterior.id}`).check();
 await page.locator('.ws-track-labels button').last().click();
 await page.getByRole('button',{name:'删除此关键帧'}).click();
@@ -547,6 +581,7 @@ assert(!(await nowEndpointLock.isChecked()),'a formerly interior key could not b
 await page.evaluate(storage=>localStorage.setItem('kinesis-workshop-library',storage),lockProbeStorage);
 await page.reload();
 await page.waitForFunction(()=>window.__WS__?.rig&&window.__WS_GENERATOR__?.source().name==='正手击球 · 研究',{timeout:30000});
+await openWsFolds();
 result.checks.workshopGenerationEndpointLock=true;
 await page.evaluate(()=>{const e=window.__WS__;e.setPlaying(false);e.seek(.9);});
 await page.locator('.ws-cameras').getByRole('button',{name:'45°',exact:true}).click();
@@ -559,10 +594,29 @@ const cancelBefore=await page.evaluate(()=>({
  docs:JSON.parse(localStorage.getItem('kinesis-workshop-library')).docs.length,
 }));
 await page.locator('[data-testid="generator-start"]').click();
+// Fast runs can finish the whole search between polls — the progress bar is
+// unmounted on completion, so accept either live progress or a ready candidate.
+globalThis.__genErrState=undefined;
+page.evaluate(()=>{const m=new MutationObserver(()=>{const e=document.querySelector('.ws-generation-error');if(e)globalThis.__genErrState=e.textContent;});m.observe(document.body,{childList:true,subtree:true});});
 await page.waitForFunction(()=>{
  const p=document.querySelector('progress[data-testid="generator-progress"]');
- return !!p&&Number(p.value)>0;
-},{timeout:60000});
+ const err=document.querySelector('.ws-generation-error');
+ if(err)return 'error:'+err.textContent;
+ return (p&&Number(p.value)>0)||window.__WS_GENERATOR__.preview()!==null;
+},null,{timeout:60000}).catch(async e=>{
+ const dump=await page.evaluate(()=>({
+  foldOpen:document.querySelector('[data-fold="generator"]')?.open,
+  btn:[...document.querySelectorAll('[data-testid="generator-start"]')].map(b=>({disabled:b.disabled,visible:!!(b.offsetWidth||b.offsetHeight),rect:b.getBoundingClientRect().toJSON()})),
+  busy:!!document.querySelector('progress[data-testid="generator-progress"]'),
+  locked:window.__WS_GENERATOR__?.locked(),
+  preview:!!window.__WS_GENERATOR__?.preview(),
+  err:document.querySelector('.ws-generation-error')?.textContent??null,
+  hint:document.querySelector('.ws-feedback')?.textContent?.slice(0,120)??null,
+  worker:typeof Worker,
+ }));
+ throw new Error('generator wait: '+JSON.stringify(dump));
+});
+globalThis.__genErrState=undefined;
 // The viewport and camera controls remain usable while search runs in a
 // separate Worker. Change view, then cancel before the candidate is emitted.
 await page.locator('.ws-cameras').getByRole('button',{name:'侧面',exact:true}).click();

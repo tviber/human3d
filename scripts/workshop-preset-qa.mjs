@@ -69,11 +69,15 @@ try{
   const {MOTION_FILES}=await import(url);
   return MOTION_FILES.map(p=>({id:p.id,name:p.name,kind:p.kind,document:p.document}));
  },`/@fs/${path.resolve(repoRoot,'packages/motion-core/src/motion-files.ts')}`);
+ // Issue #30 PR-B: user motions lead the panel; the preset entry lives in a
+ // collapsed fold below it and opens on demand.
+ const presetFold=page.locator('[data-fold="preset"]');
+ await presetFold.evaluate(el=>{el.open=true;});
  const select=page.getByRole('combobox',{name:'初始动作预设'});
  const startButton=page.getByRole('button',{name:'从预设开始',exact:true});
  const presetBox=await startButton.boundingBox(),firstMotionBox=await page.locator('.ws-lib-row').first().boundingBox();
- assert(presetBox&&firstMotionBox&&presetBox.y<firstMotionBox.y&&presetBox.y<1024,
-  'preset start control must be visible above the existing motion list on the initial desktop view');
+ assert(presetBox&&firstMotionBox&&presetBox.y>firstMotionBox.y,
+  'preset start fold must sit below the user motion list (user data first)');
  assert.deepEqual(await select.locator('option').evaluateAll(opts=>opts.map(o=>o.value)),presets.filter(p=>p.kind==='workshop-motion').map(p=>p.id));
  const before=(await read()).doc;
  const preset=presets.find(p=>p.id==='forehand');

@@ -16,7 +16,8 @@
 
 export interface StorageLike{getItem(k:string):string|null;setItem(k:string,v:string):void;removeItem?(k:string):void;readonly length?:number;key?(index:number):string|null}
 
-export type StorageLock=(key:string,write:()=>void)=>Promise<void>;
+export type StorageLock=(key:string,write:()=>void|Promise<void>)=>Promise<void>;
+export interface DraftOwner{id:string;ready:Promise<void>;active(id:string):Promise<boolean>}
 
 export interface AppPlatform{
   /** Resolve an app asset path ("/models/rig.json") to a host-fetchable URL. */
@@ -26,6 +27,7 @@ export interface AppPlatform{
   /** Persistent key-value storage, or null when the host has none. */
   storage:StorageLike|null;
   storageLock:StorageLock;
+  readonly draftOwner:DraftOwner|undefined;
   /** Hand a produced file to the user (web: anchor download). */
   download(name:string,blob:Blob):void;
   /** Encode a canvas to a PNG blob (stills, contact sheets). */
@@ -51,11 +53,23 @@ export interface AppPlatform{
 function safeStorage():StorageLike|null{
   try{return globalThis.localStorage??null;}catch{return null;}
 }
+let draftOwner:DraftOwner|undefined;
 
 export const webPlatform:AppPlatform={
   assetUrl:path=>path,
   fetchAsset:path=>fetch(path),
   get storage(){return safeStorage();},
+  get draftOwner(){
+    if(!globalThis.navigator?.locks)return undefined;
+    if(!draftOwner){
+      const id='kinesis-workshop-owner:'+crypto.randomUUID();
+      // The browser releases this lease even when the page closes without an unload event.
+      const ready=new Promise<void>((resolve,reject)=>{void navigator.locks.request(id,()=>{resolve();return new Promise<void>(()=>{});}).catch(reject);});
+      void ready.catch(()=>{});
+      draftOwner={id,ready,async active(owner){const state=await navigator.locks.query();return [...state.held??[],...state.pending??[]].some(lock=>lock.name===owner);}};
+    }
+    return draftOwner;
+  },
   async storageLock(key,write){
     if(!globalThis.navigator?.locks)throw new Error('浏览器不支持安全的跨页面保存，请导出 JSON 备份');
     await navigator.locks.request(key,write);

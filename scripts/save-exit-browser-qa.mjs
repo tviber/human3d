@@ -22,6 +22,16 @@ const draftLabels=p=>p.evaluate(()=>Object.keys(localStorage).filter(k=>k.starts
 try{
  const holder=await open(context,'/'),clean=await open(context,'/workshop.html');await saved(clean);
  await hold(holder);await clean.getByRole('link',{name:'返回实验室'}).click();await clean.waitForURL(base.href);await ready(clean);await holder.evaluate(()=>window.__qaRelease());
+ const active=await open(context,'/workshop.html');await saved(active);await hold(holder);await edit(active,'活跃页面等待保存');
+ // Retain an earlier real checkpoint so only owner liveness (not matching main bytes) can exclude it.
+ const owner=await holder.evaluate(()=>{const key=Object.keys(localStorage).find(k=>k.startsWith('kinesis-workshop-library:draft:')),text=localStorage.getItem(key);localStorage.setItem('kinesis-workshop-library:draft:qa-active',text);return JSON.parse(text).owner;});
+ assert.equal(typeof owner,'string');assert(await holder.evaluate(async owner=>(await navigator.locks.query()).held.some(lock=>lock.name===owner),owner));
+ const newcomer=await open(context,'/workshop.html');assert.equal(await newcomer.locator('.ws-quarantine').count(),0);
+ await edit(active,'活跃页面继续编辑');await holder.evaluate(()=>window.__qaRelease());await saved(active);await saved(newcomer);
+ assert.equal(await newcomer.locator('.ws-quarantine').count(),0);assert.deepEqual((await file(holder)).quarantine,[]);assert.equal(await holder.evaluate(()=>localStorage.getItem('kinesis-workshop-library:draft:qa-active')!==null),true);
+ await holder.evaluate(()=>localStorage.removeItem('kinesis-workshop-library:draft:qa-active'));assert.deepEqual(await draftLabels(holder),[]);
+ await newcomer.reload();await ready(newcomer);assert.equal(await newcomer.locator('.ws-quarantine').count(),0);
+ const liveDoc=await active.evaluate(()=>window.__WS__.getDoc().id);assert.equal((await file(holder)).docs.find(d=>d.id===liveDoc).keys[0].label,'活跃页面继续编辑');await active.close();await newcomer.close();assert.equal(await holder.evaluate(async owner=>(await navigator.locks.query()).held.some(lock=>lock.name===owner),owner),false);
  const workshop=await open(context,'/workshop.html');await saved(workshop);
  const id=await workshop.evaluate(()=>window.__WS__.getDoc().id);
  await hold(holder);await edit(workshop,'等待后返回');assert((await draftLabels(holder)).includes('等待后返回'));
@@ -37,12 +47,13 @@ try{
  const dialog=await dialogEvent;assert.equal(dialog.type(),'beforeunload');await dialog.dismiss();await reload;
  assert.equal(await pending.getByRole('textbox',{name:'关键帧名称',exact:true}).inputValue(),'强制关页仍可恢复');
  await pending.close({runBeforeUnload:false});assert((await draftLabels(holder)).includes('强制关页仍可恢复'));
- const recovered=await open(context,'/workshop.html'),entry=recovered.locator('.ws-quarantine .ws-row').filter({hasText:'未完成保存的草稿'}).first();await entry.waitFor();
+ const recovered=await open(context,'/workshop.html'),entry=recovered.locator('.ws-quarantine .ws-row').filter({hasText:'未完成保存的草稿'}).first();
+ assert.equal(await entry.count(),0);await holder.evaluate(()=>window.__qaRelease());await saved(recovered);await entry.waitFor();
  const [download]=await Promise.all([recovered.waitForEvent('download'),entry.getByRole('button',{name:'导出',exact:true}).click()]);
  assert.equal(JSON.parse(await fs.readFile(await download.path(),'utf8')).keys[0].label,'强制关页仍可恢复');
  await entry.getByRole('button',{name:'恢复为副本'}).click();assert.equal(await recovered.evaluate(()=>window.__WS__.getDoc().keys[0].label),'强制关页仍可恢复');
  const copy=await recovered.evaluate(()=>window.__WS__.getDoc().id);assert.notEqual(copy,id);
- await holder.evaluate(()=>window.__qaRelease());await saved(recovered);
+ await saved(recovered);
  assert.equal((await file(holder)).docs.find(d=>d.id===copy).keys[0].label,'强制关页仍可恢复');assert.deepEqual(await draftLabels(holder),[]);
  await recovered.reload();await ready(recovered);assert.equal(await recovered.evaluate(()=>window.__WS__.getDoc().keys[0].label),'强制关页仍可恢复');await recovered.screenshot({path:out('recovered-draft.png')});
  // Real capability absence, rather than a replacement save implementation.
@@ -59,5 +70,5 @@ try{
  const [backup]=await Promise.all([mobile.waitForEvent('download'),mobile.getByRole('button',{name:'导出当前动作 JSON'}).click()]);assert(JSON.parse(await fs.readFile(await backup.path(),'utf8')).keys.length>0);
  await mobile.getByRole('link',{name:'返回实验室'}).click();await mobile.getByTestId('save-state').filter({hasText:'保存失败'}).waitFor();assert.equal(new URL(mobile.url()).pathname,'/workshop.html');
  await mobile.locator('#ws-inspector').waitFor({state:'hidden'});await mobile.screenshot({path:out('mobile-save-failure.png')});await unsupported.close();
- assert.deepEqual(errors,[]);console.log(`Save/exit QA passed: clean navigation bypasses busy lock, lock-blocked navigation with continued editing, native unload warning, forced close and durable recovery/export/copy/reload, unsupported Web Locks visible on phone with JSON backup and blocked navigation. Screenshots: ${output.dir}`);
+ assert.deepEqual(errors,[]);console.log(`Save/exit QA passed: active queued editor is not recovered by a newly opened page; clean navigation bypasses busy lock, lock-blocked navigation with continued editing, native unload warning, forced close and durable recovery/export/copy/reload, unsupported Web Locks visible on phone with JSON backup and blocked navigation. Screenshots: ${output.dir}`);
 }catch(err){for(const [i,p]of browser.contexts().flatMap(c=>c.pages()).entries())await p.screenshot({path:out(`failure-${i}.png`)}).catch(()=>{});throw err;}finally{await context.close();await browser.close();}

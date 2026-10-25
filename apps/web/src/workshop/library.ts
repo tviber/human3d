@@ -1,7 +1,7 @@
 import type {MotionSpec,WorkshopDoc} from '@human3d/motion-core';
 import {blankDocument,canonicalizeHands,defaultDocument,MOTION_FILES,newDocId,normalizeDoc,parseDoc,sortedKeys} from '@human3d/motion-core';
 import type {Vector3} from 'three';
-import type {StorageLike,StorageLock} from '../platform/platform';
+import type {DraftOwner,StorageLike,StorageLock} from '../platform/platform';
 export type {StorageLike} from '../platform/platform';
 
 /** Motion library: the workshop's persistent store. Multiple named documents
@@ -57,7 +57,7 @@ export class MotionLibrary{
   private draftText='';
   private recoveredDrafts:string[]=[];
   get saveState(){return this.lastError?'error':this.pending||this.draftKey?'saving':'saved';}
-  constructor(private rest:ReadonlyMap<string,Vector3>,private store?:StorageLike|null,private lock?:StorageLock){}
+  constructor(private rest:ReadonlyMap<string,Vector3>,private store?:StorageLike|null,private lock?:StorageLock,private owner?:DraftOwner){}
   private remember(){
     this.baseline=new Map(this.docs.map(d=>[d.id,JSON.stringify(d)]));
     this.baselineOrder=this.docs.map(d=>d.id);
@@ -129,22 +129,8 @@ export class MotionLibrary{
     }
     this.rawText=rawText;this.remember();
     if(!readOnly){
-      try{
-        for(let i=0;i<(this.store?.length??0);i++){
-          const key=this.store!.key?.(i);if(!key?.startsWith(DRAFT_PREFIX))continue;
-          const text=this.store!.getItem(key);if(text===null)continue;
-          try{
-            const draft=JSON.parse(text) as LibraryFile;
-            if(draft.schemaVersion!==2||!Array.isArray(draft.docs)||!Array.isArray(draft.quarantine))throw new Error('无法识别的草稿格式');
-            const entries:QuarantineEntry[]=[...draft.docs.map(raw=>({id:idOf(raw),name:nameOf(raw),reason:'未完成保存的草稿：可恢复为副本或导出 JSON',raw})),...draft.quarantine];
-            for(const entry of entries){
-              if(!entry||typeof entry!=='object'||!('raw' in entry)||typeof entry.id!=='string'||typeof entry.name!=='string'||typeof entry.reason!=='string')throw new Error('无法识别的草稿条目');
-              if(!this.quarantine.some(q=>JSON.stringify(q.raw)===JSON.stringify(entry.raw)))this.quarantine.push(entry);
-            }
-          }catch(err){this.quarantine.push({id:'draft-file',name:'未完成的草稿文件',reason:err instanceof Error?err.message:String(err),raw:text});}
-          this.recoveredDrafts.push(key);
-        }
-      }catch(err){this.lastError=err instanceof Error?err.message:String(err);}
+      try{for(let i=0;i<(this.store?.length??0);i++){const key=this.store!.key?.(i);if(key?.startsWith(DRAFT_PREFIX))this.recoveredDrafts.push(key);}}
+      catch(err){this.lastError=err instanceof Error?err.message:String(err);}
     }
     if(!this.docs.length&&!readOnly){this.docs=[file?blankDocument(this.rest,'新动作',newDocId('新动作')):defaultDocument(this.rest)];this.activeId=this.docs[0].id;}
     // Reading valid storage must not publish hand-frame normalization as a user edit.
@@ -158,7 +144,7 @@ export class MotionLibrary{
       const docs=this.docs.filter(d=>JSON.stringify(d)!==this.baseline.get(d.id));
       const quarantine=this.quarantine.filter(q=>!this.baselineQuarantine.some(b=>JSON.stringify(b)===JSON.stringify(q)));
       if(!docs.length&&!quarantine.length){if(this.draftKey)this.store.removeItem?.(this.draftKey);this.draftKey='';this.draftText='';return;}
-      const text=JSON.stringify({schemaVersion:2,activeId:this.activeId,docs,quarantine});
+      const text=JSON.stringify({schemaVersion:2,owner:this.owner?.id,activeId:this.activeId,docs,quarantine});
       if(text===this.draftText)return;
       const key=DRAFT_PREFIX+Array.from(crypto.getRandomValues(new Uint32Array(4)),n=>n.toString(16)).join('-');this.store.setItem(key,text);
       const previous=this.draftKey;this.draftKey=key;this.draftText=text;
@@ -173,6 +159,21 @@ export class MotionLibrary{
       let merged=false;
       try{
         if(this.store!.getItem(LIBRARY_KEY)!==this.rawText)merged=this.sync();
+        const stored=this.storedDocs();
+        // Recheck inside the save lock: a queued editor may have saved and removed its draft.
+        for(const key of this.recoveredDrafts){
+          const text=this.store!.getItem(key);if(text===null)continue;
+          try{
+            const draft=JSON.parse(text) as LibraryFile;
+            if(draft.schemaVersion!==2||!Array.isArray(draft.docs)||!Array.isArray(draft.quarantine))throw new Error('无法识别的草稿格式');
+            const entries:QuarantineEntry[]=[...draft.docs.map(raw=>({id:idOf(raw),name:nameOf(raw),reason:'未完成保存的草稿：可恢复为副本或导出 JSON',raw})),...draft.quarantine];
+            for(const entry of entries){
+              if(!entry||typeof entry!=='object'||!('raw' in entry)||typeof entry.id!=='string'||typeof entry.name!=='string'||typeof entry.reason!=='string')throw new Error('无法识别的草稿条目');
+              if(stored.get(entry.id)===JSON.stringify(entry.raw))continue;
+              if(!this.quarantine.some(q=>JSON.stringify(q.raw)===JSON.stringify(entry.raw)))this.quarantine.push(entry);
+            }
+          }catch(err){this.quarantine.push({id:'draft-file',name:'未完成的草稿文件',reason:err instanceof Error?err.message:String(err),raw:text});}
+        }
         const file:LibraryFile={schemaVersion:2,activeId:this.activeId,docs:this.docs,quarantine:this.quarantine};
         const text=JSON.stringify(file);this.store!.setItem(LIBRARY_KEY,text);
         this.rawText=text;this.remember();this.lastError='';
@@ -181,7 +182,19 @@ export class MotionLibrary{
       }catch(err){this.lastError=err instanceof Error?err.message:String(err);}
       this.pending--;this.onSaveState?.(merged);
     };
-    if(this.lock)this.saved=this.lock(LIBRARY_KEY,write).catch(err=>{this.pending--;this.lastError=err instanceof Error?err.message:String(err);this.onSaveState?.(false);});
+    if(this.lock){
+      const locked=()=>this.lock!(LIBRARY_KEY,this.owner?async()=>{
+        const inactive:string[]=[];
+        for(const key of this.recoveredDrafts){
+          const text=this.store!.getItem(key);let owner:unknown;
+          try{owner=JSON.parse(text??'null')?.owner;}catch{/* Invalid drafts still enter quarantine. */}
+          if(typeof owner==='string'&&await this.owner!.active(owner))continue;
+          inactive.push(key);
+        }
+        this.recoveredDrafts=inactive;write();
+      }:write);
+      this.saved=(this.owner?this.owner.ready.then(locked):locked()).catch(err=>{this.pending--;this.lastError=err instanceof Error?err.message:String(err);this.onSaveState?.(false);});
+    }
     else write();
     return this.saved;
   }

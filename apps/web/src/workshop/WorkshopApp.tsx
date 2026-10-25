@@ -144,7 +144,7 @@ export function WorkshopApp({info:rigInfo}:{info:RigInfo}){
  const poseLib=useRef<PoseLibrary|null>(null),poseClipboard=useRef<WorkshopDoc['keys'][number]['pose']|null>(null);
  const generationPreview=useRef<WorkshopDoc|null>(null),generationWorker=useRef<Worker|null>(null),generationLocked=useRef(false);
  if(!lib.current){
-  lib.current=new MotionLibrary(new Map(rigInfo.bones.map(b=>[b.name,new Vector3().fromArray(b.head)])),webPlatform.storage,webPlatform.storageLock).load();
+  lib.current=new MotionLibrary(new Map(rigInfo.bones.map(b=>[b.name,new Vector3().fromArray(b.head)])),webPlatform.storage,webPlatform.storageLock,webPlatform.draftOwner).load();
   const id=new URLSearchParams(globalThis.location?.search??'').get('doc');
   if(id&&lib.current.docs.some(d=>d.id===id))lib.current.select(id);
  }

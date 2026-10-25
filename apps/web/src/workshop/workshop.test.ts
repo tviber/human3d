@@ -416,11 +416,11 @@ describe('motion library',()=>{
   expect(JSON.parse(store.map.get(draft)!).docs[0].keys[0].label).toBe('等待锁期间的修改');
   expect(new MotionLibrary(rig.rest,store).load({readOnly:true}).quarantine).toEqual([]);
   const recovered=new MotionLibrary(rig.rest,store,lock).load();
-  const index=recovered.quarantine.findIndex(q=>q.reason.includes('草稿'));
-  expect(JSON.parse(recovered.quarantineText(index)).keys[0].label).toBe('等待锁期间的修改');
-  expect(store.map.has(draft)).toBe(true);
+  expect(recovered.quarantine).toEqual([]);expect(store.map.has(draft)).toBe(true);
   // Commit the recovering page; the original page is treated as terminated.
   writes[1]();await recovered.saved;
+  const index=recovered.quarantine.findIndex(q=>q.reason.includes('草稿'));
+  expect(JSON.parse(recovered.quarantineText(index)).keys[0].label).toBe('等待锁期间的修改');
   expect(store.map.has(draft)).toBe(false);
   const restored=lib(store);expect(restored.quarantine.some(q=>q.reason.includes('草稿'))).toBe(true);
   const copy=parseDoc(restored.quarantineText(0));restored.add(copy);
@@ -429,6 +429,39 @@ describe('motion library',()=>{
   writes[0]();await pending;expect(a.saveState).toBe('saved');
   expect(lib(store).quarantine.length).toBeGreaterThan(0);
   expect([...store.map.keys()].filter(k=>k.startsWith(DRAFT_PREFIX))).toEqual([]);
+ });
+ it('rechecks recovery under the lock after the active editor has saved',async()=>{
+  const store=memStorage();lib(store);
+  const writes:(()=>void)[]=[],lock=(_key:string,write:()=>void)=>new Promise<void>(resolve=>writes.push(()=>{write();resolve();}));
+  const a=new MotionLibrary(rig.rest,store,lock).load();a.rename(a.activeId,'尚在编辑');
+  const b=new MotionLibrary(rig.rest,store,lock).load();expect(b.quarantine).toEqual([]);
+  a.rename(a.activeId,'继续编辑后的最终版本');
+  writes[0]();writes[1]();writes[2]();await Promise.all([a.saved,b.saved]);
+  expect(b.quarantine).toEqual([]);const restored=lib(store);expect(restored.active().name).toBe('继续编辑后的最终版本');expect(restored.quarantine).toEqual([]);
+  expect([...store.map.keys()].filter(k=>k.startsWith(DRAFT_PREFIX))).toEqual([]);
+ });
+ it('skips an active owner even when its checkpoint has no queued save, then recovers after closure',async()=>{
+  const store=memStorage();lib(store);let active=true;
+  const writer={id:'writer',ready:Promise.resolve(),active:async(id:string)=>id==='writer'&&active};
+  const a=new MotionLibrary(rig.rest,store,async(_key,write)=>{await write();},writer).load();
+  a.active().name='仅有同步草稿';a.checkpoint();const key=[...store.map.keys()].find(k=>k.startsWith(DRAFT_PREFIX))!;
+  const reader={...writer,id:'reader'};
+  const b=new MotionLibrary(rig.rest,store,async(_key,write)=>{await write();},reader).load();await b.saved;
+  expect(b.quarantine).toEqual([]);expect(store.map.has(key)).toBe(true);
+  active=false;const recovered=new MotionLibrary(rig.rest,store,async(_key,write)=>{await write();},reader).load();await recovered.saved;
+  expect(recovered.quarantine[0].name).toBe('仅有同步草稿');expect(store.map.has(key)).toBe(false);
+ });
+ it('cleans an orphan snapshot already committed to the main library without duplicating it',()=>{
+  const store=memStorage();lib(store);const file=JSON.parse(store.map.get(LIBRARY_KEY)!);
+  store.map.set(DRAFT_PREFIX+'committed',JSON.stringify(file));
+  expect(lib(store).quarantine).toEqual([]);expect(store.map.has(DRAFT_PREFIX+'committed')).toBe(false);
+ });
+ it('retains the recovery source if the locked main-library write fails',()=>{
+  const store=memStorage();lib(store);const file=JSON.parse(store.map.get(LIBRARY_KEY)!);file.docs[0].name='尚未提交的恢复稿';
+  const key=DRAFT_PREFIX+'failed';store.map.set(key,JSON.stringify(file));const original=store.setItem;
+  store.setItem=(key,text)=>{if(key===LIBRARY_KEY)throw new Error('quota');original(key,text);};
+  const recovered=lib(store);expect(recovered.lastError).toBe('quota');expect(recovered.quarantine[0].name).toBe('尚未提交的恢复稿');expect(store.map.has(key)).toBe(true);
+  store.setItem=original;const restored=lib(store);expect(restored.quarantine[0].name).toBe('尚未提交的恢复稿');expect(store.map.has(key)).toBe(false);
  });
  it('replaces a draft only after the next immutable checkpoint is durable',()=>{
   const store=memStorage();lib(store);

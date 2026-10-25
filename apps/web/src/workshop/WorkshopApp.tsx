@@ -137,14 +137,15 @@ function Timeline({doc,time,selected,retime,onSelect,onSeek,onRetime,onBeginReti
   <div className="ws-track-labels">{sortedKeys(doc).map(k=><button key={k.id} className={k.id===selected?'sel':''} title={`${k.label||'关键帧'} · ${k.time.toFixed(3)}s`} style={{left:`${k.time/doc.duration*100}%`}} onClick={()=>{onSelect(k.id);onSeek(k.time);}}>{k.label||fmt(k.time)}</button>)}</div>
  </div>;
 }
-export function WorkshopApp({info:rigInfo}:{info:RigInfo}){
+export function WorkshopApp({info:rigInfo,initialLibrary,storageError}:{info:RigInfo;initialLibrary?:string|null;storageError?:string}){
  const mount=useRef<HTMLDivElement>(null),engine=useRef<WorkshopEngine|null>(null),video=useRef<HTMLVideoElement>(null),fileRef=useRef<HTMLInputElement>(null),importRef=useRef<HTMLInputElement>(null);
  const lib=useRef<MotionLibrary|null>(null);
  const syncLibrary=useRef<(force?:boolean)=>void>(()=>{});
  const poseLib=useRef<PoseLibrary|null>(null),poseClipboard=useRef<WorkshopDoc['keys'][number]['pose']|null>(null);
  const generationPreview=useRef<WorkshopDoc|null>(null),generationWorker=useRef<Worker|null>(null),generationLocked=useRef(false);
  if(!lib.current){
-  lib.current=new MotionLibrary(new Map(rigInfo.bones.map(b=>[b.name,new Vector3().fromArray(b.head)])),webPlatform.storage,webPlatform.storageLock,webPlatform.draftOwner).load();
+  lib.current=new MotionLibrary(new Map(rigInfo.bones.map(b=>[b.name,new Vector3().fromArray(b.head)])),webPlatform.storage,webPlatform.storageLock,webPlatform.draftOwner).load({snapshotText:initialLibrary});
+  if(storageError)lib.current.lastError=storageError;
   const id=new URLSearchParams(globalThis.location?.search??'').get('doc');
   if(id&&lib.current.docs.some(d=>d.id===id))lib.current.select(id);
  }
@@ -604,9 +605,9 @@ export function WorkshopApp({info:rigInfo}:{info:RigInfo}){
   unlockGeneration();setHint('已取消候选生成或预览；源动作仍保持原样。');
  };
  L.onSaveState=merged=>{if(merged)syncLibrary.current(true);bump(v=>v+1);};
- syncLibrary.current=(force=false)=>{
+ syncLibrary.current=async(force=false)=>{
   const rest=new Map(rigInfo.bones.map(b=>[b.name,new Vector3().fromArray(b.head)]));
-  try{if(!L.sync()&&!force)return;}catch(err){setError(err instanceof Error?err.message:String(err));return;}
+  try{if(!force){const snapshotText=await webPlatform.readStorage(LIBRARY_KEY);if(!L.sync(new MotionLibrary(rest,webPlatform.storage).load({readOnly:true,snapshotText})))return;}}catch(err){setError(err instanceof Error?err.message:String(err));return;}
   if(generationLocked.current)stopGeneration();
   if(!L.docs.length){L.docs=[blankDocument(rest,'新动作',newDocId('新动作'))];L.activeId=L.docs[0].id;}
   gate.current.reset();wristEpoch.current++;setSelected(sortedKeys(L.active())[0].id);

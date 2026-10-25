@@ -32,6 +32,10 @@ try{
  await holder.evaluate(()=>localStorage.removeItem('kinesis-workshop-library:draft:qa-active'));assert.deepEqual(await draftLabels(holder),[]);
  await newcomer.reload();await ready(newcomer);assert.equal(await newcomer.locator('.ws-quarantine').count(),0);
  const liveDoc=await active.evaluate(()=>window.__WS__.getDoc().id);assert.equal((await file(holder)).docs.find(d=>d.id===liveDoc).keys[0].label,'活跃页面继续编辑');await active.close();await newcomer.close();assert.equal(await holder.evaluate(async owner=>(await navigator.locks.query()).held.some(lock=>lock.name===owner),owner),false);
+ // The same real host adapter must serialize committed values across renderer caches.
+ await holder.evaluate(()=>localStorage.setItem('qa-counter',JSON.stringify({a:0,b:0})));
+ await Promise.all([holder,clean].map((p,i)=>p.evaluate(async i=>{const {webPlatform}=await import('/src/platform/platform.ts');for(let n=0;n<100;n++)await webPlatform.storageLock('qa-counter',snapshot=>{const value=JSON.parse(snapshot.getItem('qa-counter'));value[i?'b':'a']++;snapshot.setItem('qa-counter',JSON.stringify(value));});},i)));
+ const counter=await holder.evaluate(async()=>{const {webPlatform}=await import('/src/platform/platform.ts');return JSON.parse(await webPlatform.readStorage('qa-counter'));});assert.deepEqual(counter,{a:100,b:100});
  const workshop=await open(context,'/workshop.html');await saved(workshop);
  const id=await workshop.evaluate(()=>window.__WS__.getDoc().id);
  await hold(holder);await edit(workshop,'等待后返回');assert((await draftLabels(holder)).includes('等待后返回'));
@@ -56,6 +60,13 @@ try{
  await saved(recovered);
  assert.equal((await file(holder)).docs.find(d=>d.id===copy).keys[0].label,'强制关页仍可恢复');assert.deepEqual(await draftLabels(holder),[]);
  await recovered.reload();await ready(recovered);assert.equal(await recovered.evaluate(()=>window.__WS__.getDoc().keys[0].label),'强制关页仍可恢复');await recovered.screenshot({path:out('recovered-draft.png')});
+ // Abort a real native transaction before commit; keep the previous main and recovery source.
+ const stable=await file(holder),primary=await holder.evaluate(async()=>{const {webPlatform}=await import('/src/platform/platform.ts');return webPlatform.readStorage('kinesis-workshop-library');});
+ await recovered.evaluate(()=>{const native=IDBDatabase.prototype.transaction;IDBDatabase.prototype.transaction=function(...args){const transaction=native.apply(this,args);if(this.name==='kinesis-workshop'&&args[1]==='readwrite')queueMicrotask(()=>transaction.abort());return transaction;};});
+ await edit(recovered,'事务中止后可恢复');await recovered.getByTestId('save-state').filter({hasText:'保存失败'}).waitFor();assert.deepEqual(await file(holder),stable);assert.equal(await holder.evaluate(async()=>{const {webPlatform}=await import('/src/platform/platform.ts');return webPlatform.readStorage('kinesis-workshop-library');}),primary);assert((await draftLabels(holder)).includes('事务中止后可恢复'));
+ await recovered.close({runBeforeUnload:false});const afterAbort=await open(context,'/workshop.html');await saved(afterAbort);
+ const aborted=afterAbort.locator('.ws-quarantine .ws-row').filter({hasText:'未完成保存的草稿'});assert(await aborted.count()>0);
+ const [abortBackup]=await Promise.all([afterAbort.waitForEvent('download'),aborted.last().getByRole('button',{name:'导出',exact:true}).click()]);assert(JSON.parse(await fs.readFile(await abortBackup.path(),'utf8')).keys.some(k=>k.label==='事务中止后可恢复'));
  // Real capability absence, rather than a replacement save implementation.
  const unsupported=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
  await unsupported.addInitScript(()=>Object.defineProperty(navigator,'locks',{configurable:true,value:undefined}));
@@ -70,5 +81,5 @@ try{
  const [backup]=await Promise.all([mobile.waitForEvent('download'),mobile.getByRole('button',{name:'导出当前动作 JSON'}).click()]);assert(JSON.parse(await fs.readFile(await backup.path(),'utf8')).keys.length>0);
  await mobile.getByRole('link',{name:'返回实验室'}).click();await mobile.getByTestId('save-state').filter({hasText:'保存失败'}).waitFor();assert.equal(new URL(mobile.url()).pathname,'/workshop.html');
  await mobile.locator('#ws-inspector').waitFor({state:'hidden'});await mobile.screenshot({path:out('mobile-save-failure.png')});await unsupported.close();
- assert.deepEqual(errors,[]);console.log(`Save/exit QA passed: active queued editor is not recovered by a newly opened page; clean navigation bypasses busy lock, lock-blocked navigation with continued editing, native unload warning, forced close and durable recovery/export/copy/reload, unsupported Web Locks visible on phone with JSON backup and blocked navigation. Screenshots: ${output.dir}`);
+ assert.deepEqual(errors,[]);console.log(`Save/exit QA passed: cross-renderer 100+100 atomic updates and native transaction-abort recovery; active queued editor is not recovered by a newly opened page; clean navigation bypasses busy lock, lock-blocked navigation with continued editing, native unload warning, forced close and durable recovery/export/copy/reload, unsupported Web Locks visible on phone with JSON backup and blocked navigation. Screenshots: ${output.dir}`);
 }catch(err){for(const [i,p]of browser.contexts().flatMap(c=>c.pages()).entries())await p.screenshot({path:out(`failure-${i}.png`)}).catch(()=>{});throw err;}finally{await context.close();await browser.close();}

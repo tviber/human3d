@@ -60,11 +60,14 @@ export function App(){
  const {id,setId,info,setInfo,error,setError,view,setView,frame,setFrame,debug,patchDebug,speed,setSpeed,loop,setLoop,dialog,setDialog,extras,setExtras}=useLabUi();
  const [savedMotions,setSavedMotions]=useState<MotionSpec[]>([]);
  const allMotions=[...savedMotions,...MOTIONS,...extras],spec=allMotions.find(m=>m.id===id)??MOTIONS[0],racket=!!spec.capabilities?.prop,physics=spec.source?.kind==='dynamics';
- const refreshSaved=useCallback(()=>{
+ const refreshSaved=useCallback(async()=>{
   const e=engine.current;if(!e?.ready||!e.rig)return;
-  const library=new MotionLibrary(e.rig.rest,webPlatform.storage,webPlatform.storageLock).load({readOnly:true});if(library.lastError){setError(`读取动作库失败：${library.lastError}`);return;}const saved=library.docs.map(savedMotionSpec);
+  try{
+  const snapshotText=await webPlatform.readStorage(LIBRARY_KEY);if(engine.current!==e)return;
+  const library=new MotionLibrary(e.rig.rest,webPlatform.storage,webPlatform.storageLock).load({readOnly:true,snapshotText});if(library.lastError){setError(`读取动作库失败：${library.lastError}`);return;}const saved=library.docs.map(savedMotionSpec);
   e.setSavedMotions(saved);setSavedMotions(saved);
   const current=useLabUi.getState().id;if(current.startsWith(SAVED_MOTION_PREFIX)&&!saved.some(m=>m.id===current))setId('idle');
+  }catch(err){setError(`读取动作库失败：${err instanceof Error?err.message:String(err)}`);}
  },[setId,setError]);
  const editability=workshopEditability(spec);
  const openPackage=async(file:File)=>{
@@ -91,11 +94,14 @@ export function App(){
  const removeSaved=async(motion:MotionSpec)=>{
   const e=engine.current;if(!e?.rig||motion.source?.kind!=='document')return;
   if(!webPlatform.confirm(`删除已保存动作「${motion.name}」？此操作不可撤销。`))return;
-  const library=new MotionLibrary(e.rig.rest,webPlatform.storage,webPlatform.storageLock).load({readOnly:true});
+  try{
+  const snapshotText=await webPlatform.readStorage(LIBRARY_KEY);if(engine.current!==e)return;
+  const library=new MotionLibrary(e.rig.rest,webPlatform.storage,webPlatform.storageLock).load({readOnly:true,snapshotText});
   if(library.lastError){setError(`无法删除动作：${library.lastError}`);return;}
   library.remove(motion.source.document.id,false);await library.saved;
   if(library.lastError){setError(`删除未保存：${library.lastError}`);return;}
   refreshSaved();
+  }catch(err){setError(`无法删除动作：${err instanceof Error?err.message:String(err)}`);}
  };
  const choose=(next:MotionId)=>{setId(next);setSheet(null);const nextSpec=allMotions.find(m=>m.id===next)??MOTIONS[0];if(nextSpec.oneShot){setLoop(false);if(engine.current)engine.current.loop=false;}engine.current?.setMotion(next);if(view==='hand'){setView('threeQuarter');engine.current?.setView('threeQuarter');}};
  const toggle=(key:keyof DebugOptions,value:boolean)=>{const patch={[key]:value} satisfies Partial<DebugOptions>;patchDebug(patch);engine.current?.setDebug(patch);};

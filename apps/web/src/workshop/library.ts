@@ -100,9 +100,9 @@ export class MotionLibrary{
     this.baselineQuarantine=structuredClone(incoming.quarantine);this.rawText=incoming.rawText;
     return before!==JSON.stringify([this.docs,this.quarantine]);
   }
-  load({readOnly=false}:{readOnly?:boolean}={}){
+  load({readOnly=false,snapshotText}:{readOnly?:boolean;snapshotText?:string|null}={}){
     let parsed:Partial<LibraryFile>|undefined,rawText:string|null=null,corrupt=false;
-    try{rawText=this.store?.getItem(LIBRARY_KEY)??null;if(rawText!=null)parsed=JSON.parse(rawText) as Partial<LibraryFile>;}catch(err){corrupt=true;if(rawText===null)this.lastError=err instanceof Error?err.message:String(err);}
+    try{rawText=snapshotText===undefined?this.store?.getItem(LIBRARY_KEY)??null:snapshotText;if(rawText!=null)parsed=JSON.parse(rawText) as Partial<LibraryFile>;}catch(err){corrupt=true;if(rawText===null)this.lastError=err instanceof Error?err.message:String(err);}
     const version=(parsed as {schemaVersion?:number}|undefined)?.schemaVersion;
     const file=(!corrupt&&version===2&&parsed&&Array.isArray(parsed.docs))?parsed:undefined;
     if(file){
@@ -128,6 +128,7 @@ export class MotionLibrary{
       this.quarantine=[{id:'library-file',name:'动作库文件',reason:corrupt?'动作库文件 JSON 无法解析':'无法识别的动作库格式（schemaVersion 不受支持）',raw:rawText}];
     }
     this.rawText=rawText;this.remember();
+    this.baselineQuarantine=structuredClone(Array.isArray(file?.quarantine)?file.quarantine.filter(q=>q&&typeof q==='object'):[]);
     if(!readOnly){
       try{for(let i=0;i<(this.store?.length??0);i++){const key=this.store!.key?.(i);if(key?.startsWith(DRAFT_PREFIX))this.recoveredDrafts.push(key);}}
       catch(err){this.lastError=err instanceof Error?err.message:String(err);}
@@ -155,35 +156,40 @@ export class MotionLibrary{
     this.checkpoint();
     if(!this.store){this.onSaveState?.(false);return this.saved;}
     this.pending++;this.onSaveState?.(false);
-    const write=()=>{
+    let finish:(()=>void)|undefined;
+    const failed=(err:unknown)=>{this.pending--;this.lastError=err instanceof Error?err.message:String(err);this.onSaveState?.(false);};
+    const write=(snapshot=this.store!)=>{
       let merged=false;
-      try{
-        if(this.store!.getItem(LIBRARY_KEY)!==this.rawText)merged=this.sync();
-        const stored=this.storedDocs();
-        // Recheck inside the save lock: a queued editor may have saved and removed its draft.
-        for(const key of this.recoveredDrafts){
-          const text=this.store!.getItem(key);if(text===null)continue;
-          try{
-            const draft=JSON.parse(text) as LibraryFile;
-            if(draft.schemaVersion!==2||!Array.isArray(draft.docs)||!Array.isArray(draft.quarantine))throw new Error('无法识别的草稿格式');
-            const entries:QuarantineEntry[]=[...draft.docs.map(raw=>({id:idOf(raw),name:nameOf(raw),reason:'未完成保存的草稿：可恢复为副本或导出 JSON',raw})),...draft.quarantine];
-            for(const entry of entries){
-              if(!entry||typeof entry!=='object'||!('raw' in entry)||typeof entry.id!=='string'||typeof entry.name!=='string'||typeof entry.reason!=='string')throw new Error('无法识别的草稿条目');
-              if(stored.get(entry.id)===JSON.stringify(entry.raw))continue;
-              if(!this.quarantine.some(q=>JSON.stringify(q.raw)===JSON.stringify(entry.raw)))this.quarantine.push(entry);
-            }
-          }catch(err){this.quarantine.push({id:'draft-file',name:'未完成的草稿文件',reason:err instanceof Error?err.message:String(err),raw:text});}
-        }
-        const file:LibraryFile={schemaVersion:2,activeId:this.activeId,docs:this.docs,quarantine:this.quarantine};
-        const text=JSON.stringify(file);this.store!.setItem(LIBRARY_KEY,text);
-        this.rawText=text;this.remember();this.lastError='';
-        for(const key of [...this.recoveredDrafts,this.draftKey])if(key)this.store!.removeItem?.(key);
-        this.recoveredDrafts=[];this.draftKey='';this.draftText='';
-      }catch(err){this.lastError=err instanceof Error?err.message:String(err);}
-      this.pending--;this.onSaveState?.(merged);
+      if(snapshot.getItem(LIBRARY_KEY)!==this.rawText)merged=this.sync(new MotionLibrary(this.rest,snapshot).load({readOnly:true}));
+      const stored=this.storedDocs();
+      // Recheck inside the save lock: a queued editor may have saved and removed its draft.
+      for(const key of this.recoveredDrafts){
+        const text=this.store!.getItem(key);if(text===null)continue;
+        try{
+          const draft=JSON.parse(text) as LibraryFile;
+          if(draft.schemaVersion!==2||!Array.isArray(draft.docs)||!Array.isArray(draft.quarantine))throw new Error('无法识别的草稿格式');
+          const entries:QuarantineEntry[]=[...draft.docs.map(raw=>({id:idOf(raw),name:nameOf(raw),reason:'未完成保存的草稿：可恢复为副本或导出 JSON',raw})),...draft.quarantine];
+          for(const entry of entries){
+            if(!entry||typeof entry!=='object'||!('raw' in entry)||typeof entry.id!=='string'||typeof entry.name!=='string'||typeof entry.reason!=='string')throw new Error('无法识别的草稿条目');
+            if(stored.get(entry.id)===JSON.stringify(entry.raw))continue;
+            if(!this.quarantine.some(q=>JSON.stringify(q.raw)===JSON.stringify(entry.raw)))this.quarantine.push(entry);
+          }
+        }catch(err){this.quarantine.push({id:'draft-file',name:'未完成的草稿文件',reason:err instanceof Error?err.message:String(err),raw:text});}
+      }
+      const file:LibraryFile={schemaVersion:2,activeId:this.activeId,docs:this.docs,quarantine:this.quarantine};
+      const text=JSON.stringify(file);snapshot.setItem(LIBRARY_KEY,text);
+      const baseline=new Map(this.docs.map(d=>[d.id,JSON.stringify(d)])),order=this.docs.map(d=>d.id),quarantine=structuredClone(this.quarantine);
+      const sources=[...this.recoveredDrafts],draft=this.draftKey;
+      finish=()=>{
+        this.rawText=text;this.baseline=baseline;this.baselineOrder=order;this.baselineQuarantine=quarantine;
+        for(const key of [...sources,draft])if(key)this.store!.removeItem?.(key);
+        this.recoveredDrafts=this.recoveredDrafts.filter(key=>!sources.includes(key));
+        if(this.draftKey===draft){this.draftKey='';this.draftText='';}
+        this.lastError='';this.pending--;this.onSaveState?.(merged);
+      };
     };
     if(this.lock){
-      const locked=()=>this.lock!(LIBRARY_KEY,this.owner?async()=>{
+      const locked=()=>this.lock!(LIBRARY_KEY,this.owner?async snapshot=>{
         const inactive:string[]=[];
         for(const key of this.recoveredDrafts){
           const text=this.store!.getItem(key);let owner:unknown;
@@ -191,11 +197,11 @@ export class MotionLibrary{
           if(typeof owner==='string'&&await this.owner!.active(owner))continue;
           inactive.push(key);
         }
-        this.recoveredDrafts=inactive;write();
+        this.recoveredDrafts=inactive;write(snapshot);
       }:write);
-      this.saved=(this.owner?this.owner.ready.then(locked):locked()).catch(err=>{this.pending--;this.lastError=err instanceof Error?err.message:String(err);this.onSaveState?.(false);});
+      this.saved=(this.owner?this.owner.ready.then(locked):locked()).then(()=>finish?.()).catch(failed);
     }
-    else write();
+    else{try{write();finish?.();}catch(err){failed(err);}}
     return this.saved;
   }
   /** Export one quarantined document as JSON text, so it can be repaired by hand or re-imported. */

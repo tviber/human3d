@@ -463,6 +463,36 @@ describe('motion library',()=>{
   const recovered=lib(store);expect(recovered.lastError).toBe('quota');expect(recovered.quarantine[0].name).toBe('尚未提交的恢复稿');expect(store.map.has(key)).toBe(true);
   store.setItem=original;const restored=lib(store);expect(restored.quarantine[0].name).toBe('尚未提交的恢复稿');expect(store.map.has(key)).toBe(false);
  });
+ it('keeps the committed baseline and cleans only the captured draft when editing continues during commit',async()=>{
+  const store=memStorage();lib(store);const commits:(()=>void)[]=[];
+  const lock=async(key:string,write:(snapshot?:StorageLike)=>void|Promise<void>)=>{
+   let value=store.getItem(key);await write({getItem:()=>value,setItem:(_key,text)=>{value=text;}});
+   await new Promise<void>(resolve=>commits.push(()=>{store.setItem(key,value!);resolve();}));
+  };
+  const a=new MotionLibrary(rig.rest,store,lock).load();a.active().name='提交中 A1';const first=a.save();await Promise.resolve();
+  a.active().name='继续编辑 A2';a.checkpoint();const newer=[...store.map.keys()].find(k=>k.startsWith(DRAFT_PREFIX))!;
+  expect(a.saveState).toBe('saving');commits[0]();await first;
+  expect(store.map.has(newer)).toBe(true);expect(a.saveState).toBe('saving');
+  const b=new MotionLibrary(rig.rest,store).load({readOnly:true});b.rename(b.activeId,'远端 B');a.sync();
+  expect(a.active().name).toBe('继续编辑 A2');expect(a.quarantine.some(q=>q.name==='远端 B')).toBe(true);
+  const second=a.save();await Promise.resolve();commits[1]();await second;
+  expect(a.saveState).toBe('saved');expect(new MotionLibrary(rig.rest,store).load({readOnly:true}).active().name).toBe('继续编辑 A2');
+  expect([...store.map.keys()].filter(k=>k.startsWith(DRAFT_PREFIX))).toEqual([]);
+ });
+ it('does not publish a new baseline or remove its draft when the storage transaction rejects',async()=>{
+  const store=memStorage();lib(store);const before=store.map.get(LIBRARY_KEY);
+  const a=new MotionLibrary(rig.rest,store,async(_key,write)=>{let value:string|null=null;await write({getItem:key=>store.getItem(key),setItem:(_key,text)=>{value=text;}});expect(value).toContain('事务失败的修改');throw new Error('transaction aborted');}).load();
+  a.active().name='事务失败的修改';await a.save();expect(a.saveState).toBe('error');expect(store.map.get(LIBRARY_KEY)).toBe(before);
+  a.sync();expect(a.active().name).toBe('事务失败的修改');expect([...store.map.keys()].some(k=>k.startsWith(DRAFT_PREFIX))).toBe(true);
+ });
+ it('hydrates an authoritative snapshot without reading a stale mirror, preserving generated quarantine on sync',()=>{
+  const store=memStorage(),a=lib(store),snapshot=store.map.get(LIBRARY_KEY)!;
+  store.map.set(LIBRARY_KEY,'{broken mirror');const damaged=lib(store);damaged.sync(new MotionLibrary(rig.rest,store).load({readOnly:true,snapshotText:snapshot}));
+  expect(damaged.quarantine.some(q=>q.raw==='{broken mirror')).toBe(true);
+  store.getItem=()=>{throw new Error('unavailable mirror');};
+  expect(new MotionLibrary(rig.rest,store).load({readOnly:true,snapshotText:snapshot}).active().id).toBe(a.activeId);
+  expect(new MotionLibrary(rig.rest,store).load({readOnly:true,snapshotText:null}).docs).toEqual([]);
+ });
  it('replaces a draft only after the next immutable checkpoint is durable',()=>{
   const store=memStorage();lib(store);
   const a=new MotionLibrary(rig.rest,store,()=>new Promise<void>(()=>{})).load();

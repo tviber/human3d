@@ -262,6 +262,13 @@ try{
  await page.getByTestId('free-arms').check();
  assert.equal((await read()).doc.freeArms,true);
  await page.getByTestId('adjustment-tab-right').click();
+ // Library saves are async; anything that compares storage to memory must
+ // wait for the flush instead of racing it.
+ const awaitStoredDoc=()=>page.waitForFunction(()=>{
+  const stored=JSON.parse(localStorage.getItem('kinesis-workshop-library')??'null');
+  const doc=stored?.docs?.find(d=>d.id===window.__WS__.getDoc().id);
+  return !!doc&&JSON.stringify(doc)===JSON.stringify(window.__WS__.getDoc());
+ },{timeout:5000});
  for(const axis of ['flex','dev','twist']){
   const beforeWrist=await readArm(),beforeHand=(await read()).doc.keys[0].pose.handR;
   await page.getByTestId(`wrist-R-${axis}`).press('PageUp');
@@ -270,6 +277,7 @@ try{
   const dot=Math.abs(afterWrist.quaternion.reduce((sum,v,i)=>sum+v*beforeWrist.quaternion[i],0));
   assert(dot<.999,`${axis} wrist slider did not rotate the rendered wrist`);
   assert.equal(afterRead.time,afterRead.doc.keys[0].time,'editing must preview the key actually written');
+  await awaitStoredDoc();
   assert.deepEqual(afterRead.storage.docs.find(d=>d.id===afterRead.doc.id).keys[0].pose.handR,afterRead.doc.keys[0].pose.handR);
  }
  await page.waitForTimeout(600); // one arm rotation = one history transaction

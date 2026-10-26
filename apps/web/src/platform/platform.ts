@@ -122,6 +122,7 @@ export const webPlatform:AppPlatform={
       }});
       if(!updates.size)return;
       const mirrored=[...updates].filter(([k])=>!unmirrored.has(k));
+      const previous=new Map(mirrored.map(([k])=>[k,native.getItem(k)]));
       const db=await storageDatabase!;
       // Freeze fallback values before touching mirrors. If the page dies
       // during the later write transaction, reload still reads BOTH old keys,
@@ -132,18 +133,33 @@ export const webPlatform:AppPlatform={
         transaction.oncomplete=()=>resolve();transaction.onabort=()=>reject(transaction.error??new Error('初始化保存快照失败'));
       });
       // The localStorage mirror lands AFTER the canonical snapshot commits:
-      // boot reads prefer the snapshot store, so every crash window must leave
-      // it either old or new while the mirror lags. Writing the mirror first
-      // let a page death between the two writes commit the mirror but abort
-      // the snapshot — the next boot then read a snapshot one save behind the
-      // mirror and restored a stale active document. An abort therefore no
-      // longer rolls the mirror back: it was never touched.
+      // boot reads prefer the snapshot store, so a page death between the two
+      // writes leaves the snapshot new and the mirror old — the next boot
+      // reads the committed snapshot instead of one lagging behind the mirror
+      // (the mirror-first order restored a stale active document after a
+      // crash). A mirror failure (quota) is the one case where BOTH stores
+      // must stay unchanged: roll back the mirror keys already written and
+      // compensate the snapshot back to its pre-transaction values.
       await new Promise<void>((resolve,reject)=>{
         const transaction=db.transaction('snapshots','readwrite');
         let failure:unknown;
         transaction.oncomplete=()=>{
-          try{for(const [k,value] of mirrored)native.setItem(k,value);}
-          catch(err){reject(new Error(`快照已提交，本机镜像写入失败（下次启动以快照为准）：${String(err)}`));return;}
+          const written:string[]=[];
+          try{
+            for(const [k,value] of mirrored){native.setItem(k,value);written.push(k);}
+          }catch(err){
+            try{
+              for(const k of written){const v=previous.get(k);if(v===undefined||v===null)native.removeItem?.(k);else native.setItem(k,v);}
+              const rollback=db.transaction('snapshots','readwrite');
+              for(const [k] of mirrored){
+                if(uninitialized.includes(k))rollback.objectStore('snapshots').delete(k);
+                else rollback.objectStore('snapshots').put(values.get(k)??null,k);
+              }
+              rollback.oncomplete=()=>reject(err);
+              rollback.onabort=()=>reject(new Error(`恢复未提交，快照回滚失败：${String(err)}`));
+            }catch(rollErr){reject(new Error(`恢复未提交，本机回滚失败：${String(rollErr)}`));}
+            return;
+          }
           resolve();
         };
         transaction.onabort=()=>reject(failure??transaction.error??new Error('提交动作失败'));

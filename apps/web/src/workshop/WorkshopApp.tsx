@@ -92,8 +92,15 @@ function WristPanel({k,side,free,edit}:{k:WorkshopKey;side:Side;free:boolean;edi
  * (1). Relaxed is the absent canonical form, so the readout says so instead of
  * showing a written value that normalizeDoc would fold away again. The gripping
  * hand's wrap blends FROM this shape, so a fist still closes around the handle
- * and an open hand wraps from open. */
-function FingerShapePanel({k,side,edit}:{k:WorkshopKey;side:Side;edit:(fn:(key:WorkshopKey)=>void)=>void}){
+ * and an open hand wraps from open.
+ *
+ * `wrapped` is true when this hand is gripping at full amount: the wrap then
+ * owns every finger bone outright (blendGrip slerps to the grip quaternions at
+ * amount 1), so the authored shape is stored and interpolated but has no
+ * visible effect on this key. The value still writes — a later key with the
+ * grip released reads it back — but the panel says so instead of letting the
+ * slider look broken. */
+function FingerShapePanel({k,side,wrapped,edit}:{k:WorkshopKey;side:Side;wrapped:boolean;edit:(fn:(key:WorkshopKey)=>void)=>void}){
  const value=k.pose.handSpread?.[side]??RELAXED_SPREAD;
  const label=value<=.01?'握拳':value>=.99?'张开':Math.abs(value-RELAXED_SPREAD)<.01?'自然放松':'过渡中';
  return <div className="ws-sub"><h3>{side==='L'?'左':'右'}手指开合 <small>握拳 / 自然 / 张开</small></h3>
@@ -106,7 +113,9 @@ function FingerShapePanel({k,side,edit}:{k:WorkshopKey;side:Side;edit:(fn:(key:W
      if(key.pose.handSpread){delete key.pose.handSpread[side];if(key.pose.handSpread.L===undefined&&key.pose.handSpread.R===undefined)delete key.pose.handSpread;}
     }else{(key.pose.handSpread??={})[side]=next;}
    })}/>
-  <p className="ws-note">握拳时手指收拢到掌面；握拍手的手掌包裹从这个手型插值，所以握拳仍然握住拍柄。非握拍手直接采用该手型。</p>
+  {wrapped
+   ?<p className="ws-note" data-testid={`finger-spread-wrapped-${side}`} style={{color:'var(--amber, #a0641c)'}}>本帧该手握拍且握持量已满：手指由握柄包裹完全接管，改这个值不会改变本帧外观（值仍会保存，供不握拍的帧使用）。要看手型请先取消该帧握拍。</p>
+   :<p className="ws-note">握拳时手指收拢到掌面；握拍手的手掌包裹从这个手型插值，所以握拳仍然握住拍柄。非握拍手直接采用该手型。</p>}
  </div>;
 }
 function ArmJointPanel({side,joint,disabled,onTurn}:{side:Side;joint:'upper'|'forearm';disabled:boolean;onTurn:(kind:'lift'|'swing'|'twist',delta:number)=>void}){
@@ -1392,7 +1401,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
       {adjustmentTab!=='common'?<>
        {!d.freeArms?<p className="ws-note">当前启用人体参考限位。在“通用调整”启用“自由手臂”可使用全方向旋转。</p>:null}
        <WristPanel key={`${d.id}:${sel.id}:${adjustmentSide}:${wristEpoch.current}:${d.freeArms}`} side={adjustmentSide} free={d.freeArms===true} k={sel} edit={editSelected}/>
-       <FingerShapePanel key={`${d.id}:${sel.id}:${adjustmentSide}`} side={adjustmentSide} k={sel} edit={editSelected}/>
+       <FingerShapePanel key={`${d.id}:${sel.id}:${adjustmentSide}`} side={adjustmentSide} wrapped={d.gripSide===adjustmentSide&&sel.constraints.grip===true} k={sel} edit={editSelected}/>
        {(['upper','forearm'] as const).map(joint=><ArmJointPanel key={`${d.id}:${sel.id}:${adjustmentSide}:${joint}:${wristEpoch.current}`} side={adjustmentSide} joint={joint} disabled={!info} onTurn={(kind,delta)=>editSelected(k=>{const rig=engine.current?.rig;if(rig)rotateArmJoint(rig,k.pose,adjustmentSide,joint,kind,delta);})}/>)}
       </>:null}
       {(['L','R']as const).filter(side=>adjustmentTab==='left'?side==='L':adjustmentTab==='right'?side==='R':false).map(side=>{

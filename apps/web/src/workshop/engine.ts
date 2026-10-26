@@ -1,6 +1,6 @@
 import {webPlatform,type AppPlatform} from '../platform/platform';
-import {AmbientLight,BufferGeometry,CanvasTexture,Color,DirectionalLight,DoubleSide,Float32BufferAttribute,Group,HemisphereLight,Line,LineBasicMaterial,LineDashedMaterial,LineLoop,LineSegments,Mesh,MeshBasicMaterial,MeshStandardMaterial,PerspectiveCamera,Plane,PlaneGeometry,Raycaster,RingGeometry,Scene,SkinnedMesh,SphereGeometry,Sprite,SpriteMaterial,Vector2,Vector3,WebGLRenderer,PCFSoftShadowMap,SRGBColorSpace,ACESFilmicToneMapping,Clock,GridHelper} from 'three';
-import {RACKET_TIP_LOCAL,RACKET_BEVELS,bevelAnchor} from '@human3d/motion-core';
+import {AmbientLight,BufferGeometry,CanvasTexture,Color,DirectionalLight,DoubleSide,Float32BufferAttribute,Group,HemisphereLight,Line,LineBasicMaterial,LineDashedMaterial,LineLoop,LineSegments,Mesh,MeshBasicMaterial,MeshStandardMaterial,PerspectiveCamera,Plane,PlaneGeometry,Quaternion,Raycaster,RingGeometry,Scene,SkinnedMesh,SphereGeometry,Sprite,SpriteMaterial,Vector2,Vector3,WebGLRenderer,PCFSoftShadowMap,SRGBColorSpace,ACESFilmicToneMapping,Clock,GridHelper} from 'three';
+import {RACKET_TIP_LOCAL,RACKET_BEVELS,RACKET_BEVEL_DEFAULT,bevelAnchor} from '@human3d/motion-core';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {HumanRig,skeletonSegments} from '@human3d/motion-core';
@@ -16,6 +16,7 @@ import {applyHeroicShape} from '../theme/shape-preset';
 import {SkinSwap,type SkinId} from '../theme/skin-swap';
 import {loadAnatomyAtlas} from '../theme/anatomy-skin';
 import {AnatomySelection} from '../theme/anatomy-selection';
+import {bevelBadgeState,BEVEL_BADGE_SCALE} from './bevel-badges';
 
 export interface WorkshopFrame{time:number;duration:number;playing:boolean;label:string;analysis?:Analysis}
 export interface WorkshopOptions{handles:boolean;trajectories:boolean;balance:boolean;onion:boolean;onionCount:number;onionMode:'keys'|'step';onionStep:number;
@@ -284,15 +285,38 @@ export class WorkshopEngine{
    * number stays readable as the handle turns. The side is rebuilt on remount
    * because the left numbering is mirrored. */
   private makeBevelLabels(side:'L'|'R'){
-    for(const s of this.bevelLabels){s.parent?.remove(s);s.material.map?.dispose();s.material.dispose();}
+    for(const s of this.bevelLabels){s.parent?.remove(s);(s.material.map as CanvasTexture|null)?.dispose();s.material.dispose();}
     this.bevelLabels=[];this.bevelSide=side;
     if(!this.racket)return;
     for(let bevel=1;bevel<=RACKET_BEVELS;bevel++){
       const sprite=new Sprite(new SpriteMaterial({map:bevelTexture(bevel),depthTest:false,transparent:true}));
       sprite.position.copy(bevelAnchor(side,bevel));
-      sprite.scale.setScalar(.026);sprite.renderOrder=19; // below handles (20), above the prop
+      sprite.scale.setScalar(BEVEL_BADGE_SCALE);sprite.renderOrder=19; // below handles (20), above the prop
       sprite.visible=false;sprite.userData.bevel=bevel;
       this.racket.add(sprite);this.bevelLabels.push(sprite);
+    }
+  }
+  /** Show only the facets whose badge faces the camera. All eight at once
+   * overlap (a 26 mm badge on an octagon whose facet spacing is ~21 mm) and
+   * name facets the viewer cannot see, which defeats the point of numbering
+   * them. The selected bevel keeps its badge regardless — it is the one the
+   * author is picking — and is emphasised by scale so it reads at a glance. */
+  private updateBevelLabels(){
+    if(!this.bevelLabels.length||!this.racket)return;
+    const cam=this.camera.getWorldPosition(new Vector3());
+    const grip=this.racket.getWorldPosition(new Vector3());
+    const toCam=cam.sub(grip).normalize();
+    const rq=this.racket.getWorldQuaternion(new Quaternion());
+    const selected=this.racketBevel??RACKET_BEVEL_DEFAULT;
+    for(const s of this.bevelLabels){
+      const bevel=s.userData.bevel as number;
+      // The badge sits on its facet, so its own outward offset IS the facet
+      // normal once rotated into world space.
+      const outward=s.position.clone().setY(0).normalize().applyQuaternion(rq);
+      const state=bevelBadgeState(outward.dot(toCam),bevel===selected);
+      s.visible=state.visible;
+      s.scale.setScalar(state.scale);
+      (s.material as SpriteMaterial).opacity=state.opacity;
     }
   }
   /** Foot geometry from the loaded rig (sole offsets for lift and clearance). */
@@ -460,7 +484,8 @@ export class WorkshopEngine{
     // A number floating over the grip where no racket is mounted would name a
     // facet the user cannot see, so the labels follow the prop, not the option.
     const showBevels=this.options.bevels&&f.gripAmount>0&&!this.capturing;
-    for(const s of this.bevelLabels)s.visible=showBevels;
+    if(showBevels)this.updateBevelLabels();
+    else for(const s of this.bevelLabels)s.visible=false;
     this.updateHandles(f);
   }
   private updateHandles(f:EffectiveFrame){
@@ -776,6 +801,10 @@ export class WorkshopEngine{
   }
   dispose(){
     this.disposed=true;this.skinSwap?.dispose();this.anatomy?.dispose();this.unbindTheme?.();cancelAnimationFrame(this.raf);this.resizeObserver.disconnect();
+    // Bevel badges own CanvasTextures; material.dispose() below does NOT free
+    // a material's map, so these eight would leak GPU memory every remount.
+    for(const s of this.bevelLabels){(s.material.map as CanvasTexture|null)?.dispose();s.material.dispose();}
+    this.bevelLabels=[];
     const dom=this.renderer.domElement;
     dom.removeEventListener('pointerdown',this.onPointerDown);dom.removeEventListener('pointermove',this.onPointerMove);dom.removeEventListener('pointerup',this.onPointerUp);dom.removeEventListener('pointercancel',this.onPointerUp);
     // Everything in this scene was created by the workshop (handles, markers,

@@ -157,6 +157,20 @@ describe('gripSide — mirrored solve',()=>{
   const relaxedL=rig.point('finger1-3_L');
   expect(wrappedL.distanceTo(relaxedL)).toBeGreaterThan(.01);
  });
+ it('full grip fully owns finger rotations regardless of authored hand spread',()=>{
+  const doc=symmetricDoc();
+  const fingerNames=Array.from({length:5},(_,f)=>Array.from({length:3},(_,j)=>`finger${f+1}-${j+1}_R`)).flat();
+  const solveSpread=(spread:number)=>{
+   for(const key of doc.keys)key.pose.handSpread={...(key.pose.handSpread??{}),R:spread};
+   const frame=frameAt(doc,.5,rig.rest.get('root')!);
+   expect(frame.gripAmount).toBe(1);
+   solveEffectiveFrame(rig,frame);
+   return fingerNames.map(name=>rig.bone(name).quaternion.clone());
+  };
+  const fist=solveSpread(0),open=solveSpread(1);
+  const maxAngle=Math.max(...fist.map((q,i)=>q.angleTo(open[i])));
+  expect(maxAngle).toBeLessThan(1e-7);
+ });
 });
 
 describe('gripSide — racket mount',()=>{

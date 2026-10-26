@@ -114,7 +114,8 @@ HUMAN3D_WEB_PORT=5174 npm run qa:pose-validity
 | `workshopStillExport` | 「渲染静帧」真实点击下载：PNG magic + IHDR 钉死固定出图 640×720，文件名 `<docId>.t<秒>.png`，导出后 `__WS__` 播放态与时间原样恢复；「关键帧拼图」（播放中点击）下载 `<docId>.sheet.png`，3 键文档为 3 格单行（1920×748），体积大于单帧静帧；整张拼图在同一段外层捕获会话里完成（`capturing` 从入口持有到拼图 toBlob，逐格 `endCapture` 恢复点读到的是会话内暂停态），最后一次外层恢复才把播放态交回 true——tap `endCapture` 实测 3 次逐格暂停恢复 + 1 次外层 true 恢复 |
 | `workshopGripSide` | 「握拍侧」真实下拉选「左手」→ `doc.gripSide==='L'`、约束行重标为「左手握拍」、真实勾选两键握拍；求解后球拍 `parent===wrist_L` 且原点距左腕 <0.15 m、比右腕更近；随后真实指针拖动拍头手柄：写入 `handL.target`，`handR.target` 逐字节不变 |
 | `workshopMirror` | 「镜像动作」真实点击 → 新文档入库并选中（id 带 `.mirrored`、名称带「镜像」，库计数 +1 且原文档保留）；左握 QA 文档镜像后 `gripSide` 回右手、球拍重挂 `wrist_R`；t=.5 真实求解腕位左右互换（镜像 `wrist_L` ≈ 源 `wrist_R` 的 x 反射，容差 1e-5）；「撤销」一步回到源文档 id 且求解一致 |
-| `workshopRotationSync` | 播放头停在两键之间（`__WS__.seek` 到非关键帧时刻）→ 出现 `rotation-preview-offkey` 提示、大臂与肘滑块 `disabled`、键盘输入被拒且文档逐字节不变；点提示里的「跳到该关键帧」后提示消失、滑块恢复可用、`__WS__.time === 选中帧时间`（`scripts/workshop-preset-qa.mjs`，不进 CI） |
+| `workshopRotationSync` | 播放头停在两键之间 → 提示可见、大臂/肘/腕滑块均为 disabled；对大臂和腕滑块发 `press('PageUp')` 后输入值与文档不变；点「跳到该关键帧」后提示消失、滑块启用且播放头等于选中帧时间（`scripts/workshop-preset-qa.mjs`，CI `browser-qa / library`） |
+| `workshopMobileArmControls` | 手机 UI 在右侧编辑右腕 twist 与肘屈曲，滑块读数和求解角度变化、对应 hand frame 写入选中 key；切换左侧编辑左腕 twist，读数和 hand frame 同步变化（`scripts/workshop-mobile-qa.mjs`，CI `browser-qa / library`） |
 
 ### WP-C 追加的检查与证据（求解语义变更：切线限界 + 手部 SO(3) 三次）
 

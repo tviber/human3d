@@ -22,7 +22,7 @@ concurrency:
 jobs:
   library:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -42,6 +42,10 @@ jobs:
           done
           cat "$RUNNER_TEMP/dev-server.log"
           exit 1
+      - name: Preset editing and rotation binding (real UI)
+        run: node scripts/workshop-preset-qa.mjs --out-dir "$RUNNER_TEMP/qa/workshop-preset"
+      - name: Mobile workshop and rotation controls (real UI)
+        run: node scripts/workshop-mobile-qa.mjs --out-dir "$RUNNER_TEMP/qa/workshop-mobile"
       - name: Library backup/restore (real UI writes, atomic failures)
         run: node scripts/library-backup-qa.mjs --out-dir "$RUNNER_TEMP/qa/library-backup"
       - name: Cross-tab concurrency and replace restore point

@@ -256,10 +256,15 @@ try{
  await page.waitForTimeout(120);
  const offKeyNote=page.getByTestId('rotation-preview-offkey');
  assert(await offKeyNote.isVisible(),'off-key preview note should be visible while the playhead is between keys');
- assert(!(await swingSlider.isEnabled()),'upper-arm slider must be disabled while the playhead is off the selected key');
- assert(!(await flexion.isEnabled()),'elbow slider must be disabled while the playhead is off the selected key');
+ assert.equal(await swingSlider.isEnabled(),false,'upper-arm slider must be disabled while the playhead is off the selected key');
+ assert.equal(await flexion.isEnabled(),false,'elbow slider must be disabled while the playhead is off the selected key');
  const offKeyDoc=(await read()).doc;
- await assert.rejects(swingSlider.press('PageUp',{timeout:500}),'a disabled upper-arm slider accepted keyboard input');
+ const offKeyValue=await swingSlider.inputValue();
+ const offKeyWrist=page.getByTestId('wrist-R-twist'),offKeyWristValue=await offKeyWrist.inputValue();
+ await swingSlider.press('PageUp');
+ await offKeyWrist.press('PageUp');
+ assert.equal(await swingSlider.inputValue(),offKeyValue,'disabled upper-arm slider accepted keyboard input');
+ assert.equal(await offKeyWrist.inputValue(),offKeyWristValue,'disabled wrist slider accepted keyboard input');
  assert.deepEqual((await read()).doc,offKeyDoc,'a disabled rotation slider still wrote the document');
  await offKeyNote.getByRole('button',{name:'跳到该关键帧'}).click();
  await page.waitForTimeout(120);

@@ -116,7 +116,10 @@ try{
  edited.doc.keys.forEach((k,i)=>{if(i!==keyIndex)assert.deepEqual(k,base.doc.keys[i],`key ${i} changed`);});
  await page.getByTestId('adjustment-tab-right').tap();
  const forearmAfter=await rotationValues('joint-R-forearm-'),wristAfterElbow=await rotationValues('wrist-R-');
- assert.notDeepEqual(forearmAfter,forearmBefore,'semantic elbow edit was not reflected in parent-relative forearm sliders');
+ // The forearm panel is the elbow hinge only, so its single readout must
+ // equal the solved elbow angle — not merely "differ from before".
+ assert(Math.abs(forearmAfter[0]-angle1)<.3,`forearm slider read ${forearmAfter[0]}° but the solved elbow is ${angle1}°`);
+ assert.notDeepEqual(forearmAfter,forearmBefore,'semantic elbow edit was not reflected in the forearm slider');
  await page.getByTestId('adjustment-tab-semantic').tap();
  await page.getByTestId('semantic-part-wrist').tap();await page.getByTestId('semantic-side-R').tap();
  await page.getByTestId('semantic-motion-flexion').tap();await page.getByTestId('semantic-plus').tap();
@@ -127,6 +130,34 @@ try{
  await page.getByTestId('adjustment-tab-right').tap();
  const wristAfter=await rotationValues('wrist-R-');
  assert.notDeepEqual(wristAfter,wristAfterElbow,'semantic wrist edit was not reflected in parent-relative wrist sliders');
+ // Drag each upper-arm slider through the real control and require the SOLVED
+ // shoulder→upper-arm rotation to be the YXZ triple the three sliders show.
+ // Plain quaternion math in the page (no THREE import needed): the sliders must
+ // describe the bone, not a local component state.
+ for(const [channel,target]of [['lift',40],['swing',55],['twist',-45]]){
+  const slider=page.getByTestId(`joint-R-upper-${channel}`);
+  await slider.fill(String(target));
+  await page.waitForTimeout(120);
+  const shown=await page.locator('[data-testid^="joint-R-upper-"]').evaluateAll(inputs=>inputs.map(input=>Number(input.value)));
+  assert(Math.abs(Number(await slider.inputValue())-target)<.2,`${channel} slider did not hold ${target}°`);
+  const errorDeg=await page.evaluate(([lift,swing,twist])=>{
+   const r=window.__WS__.rig,q=()=>r.bone('upperarm01_R').quaternion.clone();
+   const shoulder=r.bone('shoulder01_R').getWorldQuaternion(q()),upper=r.bone('upperarm01_R').getWorldQuaternion(q());
+   // relative = inverse(shoulder) * upper
+   const [sx,sy,sz,sw]=[-shoulder.x,-shoulder.y,-shoulder.z,shoulder.w];
+   const [ax,ay,az,aw]=[upper.x,upper.y,upper.z,upper.w];
+   const rel=[sw*ax+sx*aw+sy*az-sz*ay,sw*ay-sx*az+sy*aw+sz*ax,sw*az+sx*ay-sy*ax+sz*aw,sw*aw-sx*ax-sy*ay-sz*az];
+   // YXZ: R = Ry(y)·Rx(x)·Rz(z)
+   const mul=([ax,ay,az,aw],[bx,by,bz,bw])=>[aw*bx+ax*bw+ay*bz-az*by,aw*by-ax*bz+ay*bw+az*bx,aw*bz+ax*by-ay*bx+az*bw,aw*bw-ax*bx-ay*by-az*bz];
+   const half=d=>d*Math.PI/360;
+   const [hx,hy,hz]=[half(lift),half(swing),half(twist)];
+   const want=mul(mul([0,Math.sin(hy),0,Math.cos(hy)],[Math.sin(hx),0,0,Math.cos(hx)]),[0,0,Math.sin(hz),Math.cos(hz)]);
+   const dot=Math.abs(want[0]*rel[0]+want[1]*rel[1]+want[2]*rel[2]+want[3]*rel[3]);
+   return 2*Math.acos(Math.min(1,dot))*180/Math.PI;
+  },shown);
+  assert(errorDeg<.3,`upper-arm sliders ${JSON.stringify(shown)} describe the bone with ${errorDeg.toFixed(2)}° error`);
+ }
+ checks.rotationRoundTrip=true;
  await page.getByTestId('adjustment-tab-semantic').tap();
  checks.semanticArmAndWrist=true;
  // Thigh forward on a planted key: only the hip moves — knee and ankle angles hold.

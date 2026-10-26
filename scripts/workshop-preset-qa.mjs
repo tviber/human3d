@@ -224,18 +224,27 @@ try{
  }
  await page.waitForTimeout(600); // one arm rotation = one history transaction
  const armBefore=await readArm(),docBeforeArm=(await read()).doc;
- await page.getByTestId('joint-R-upper-swing').press('End');
+ // Absolute control: pressing End requests swing = +180° and the solved bone
+ // must read back that value. The old assertion assumed delta semantics
+ // (mirroring the elbow vector), which this control no longer has.
+ const swingSlider=page.getByTestId('joint-R-upper-swing');
+ await swingSlider.press('End');
  const armAfter=await readArm(),docAfterArm=(await read()).doc;
- assert(Math.abs(armAfter.elbowBody[2]+armBefore.elbowBody[2])<2e-5,'upper arm did not cross the torso plane');
+ assert.equal(Number(await swingSlider.inputValue()),180,'upper-arm slider did not hold the requested 180°');
  assert(Math.hypot(...armAfter.wrist.map((v,i)=>v-armBefore.wrist[i]))>.01,'upper arm rotation must carry the wrist');
  await page.getByRole('button',{name:'撤销',exact:true}).click();
  assertSameDoc((await read()).doc,docBeforeArm,'undo of an arm-joint rotation');
  await page.getByRole('button',{name:'重做',exact:true}).click();
  assertSameDoc((await read()).doc,docAfterArm,'redo of an arm-joint rotation');
- await page.getByTestId('joint-R-forearm-lift').press('PageUp');
- const forearmAfter=await readArm();
- assert(Math.hypot(...forearmAfter.elbow.map((v,i)=>v-armAfter.elbow[i]))<2e-5,'forearm rotation moved the elbow pivot');
- assert(Math.hypot(...forearmAfter.wrist.map((v,i)=>v-armAfter.wrist[i]))>.01,'forearm rotation did not move the wrist');
+ // The forearm panel is the elbow hinge: its slider must equal the solved elbow
+ // angle, and changing it must leave the shoulder and elbow pivots in place.
+ const flexion=page.getByTestId('joint-R-forearm-flexion');
+ const elbowBefore=Number(await flexion.inputValue());
+ await flexion.press('PageUp');
+ const forearmAfter=await readArm(),elbowRead=Number(await flexion.inputValue());
+ assert(Math.hypot(...forearmAfter.elbow.map((v,i)=>v-armAfter.elbow[i]))<2e-5,'elbow rotation moved the elbow pivot');
+ assert(Math.hypot(...forearmAfter.wrist.map((v,i)=>v-armAfter.wrist[i]))>.001,'elbow rotation did not move the wrist');
+ assert(elbowRead>elbowBefore,`elbow flex slider did not increase (${elbowBefore} → ${elbowRead})`);
  const authored=(await read()).doc;
  await page.reload();await ready();
  assertRestoredDoc((await read()).doc,authored);

@@ -24,8 +24,10 @@ import {SemanticPanel,type SemanticHost} from './semantic-panel';
 import {copyKeyframe,keyframeInsertSlot,keyframeTimeProblem,moveKeyframe,removeKeyframe} from './keyframes';
 import {clampDuration,RACKET_BEVEL_DEFAULT,RACKET_BEVELS,RELAXED_SPREAD,WORKSHOP_LIMITS} from '@human3d/motion-core';
 import {ankleYForLift,footLift,type Side} from '@human3d/motion-core';
+import {LIMITS} from '@human3d/motion-core';
+import {WRIST_BEND_LIMIT_DEG} from '@human3d/motion-core';
 import type {HumanRig} from '@human3d/motion-core';
-import {readArmRotation,readWristRotation,setArmRotation,setWristRotation} from './rotation-controls';
+import {readElbowAngle,readUpperArmRotation,readWristRotation,setElbowAngle,setUpperArmRotation,setWristRotation,type ArmRotationChannel,type ArmRotationValues,type WristRotationValues} from './rotation-controls';
 import {unwrapMotionFile} from '@human3d/motion-core';
 import {buildManifestLocal,buildPosePackageLocal} from '@human3d/motion-core';
 import {exportGlb,posePackageToClip} from '@human3d/motion-core/glb';
@@ -76,16 +78,26 @@ function VectorSliders({title,value,testPrefix,min=-2,max=2,minY=-.5,maxY=2.5,on
  </div>;
 }
 /** Wrist controls read angles from the solved wrist/forearm pair and write the
- * requested absolute orientation back through the hand's forward/normal frame. */
+ * requested absolute orientation back through the hand's forward/normal frame.
+ * The previous readout is kept only to pick between equivalent Euler branches,
+ * so a drag across the ±90° singularity does not flip the other two sliders. */
 function WristPanel({rig,side,free,edit}:{rig:HumanRig|null;side:Side;free:boolean;edit:(fn:(key:WorkshopKey)=>void)=>void}){
- const v=readWristRotation(rig,side);
- const turn=(kind:'flex'|'dev'|'twist',next:number)=>edit(key=>{if(rig)setWristRotation(rig,key.pose,side,kind,next);});
+ const [reference,setReference]=useState<WristRotationValues|undefined>();
+ const v=readWristRotation(rig,side,reference);
+ const turn=(kind:'flex'|'dev'|'twist',next:number)=>{
+  setReference({...v,[kind]:next});
+  edit(key=>{if(rig)setWristRotation(rig,key.pose,side,kind,next,v);});
+ };
+ // The bounded solver clamps the combined bend (forward vs. forearm axis) to
+ // WRIST_BEND_LIMIT_DEG, not each Euler channel, so flex/dev can saturate
+ // before their slider ends; roll is unaffected.
  const flexMin=free?-180:Math.min(-60,v.flex),flexMax=free?180:Math.max(60,v.flex);
  const devMin=free?-180:Math.min(-60,v.dev),devMax=free?180:Math.max(60,v.dev);
  return <div className="ws-sub"><h3>{side==='L'?'左':'右'}手腕姿态 <small>屈伸 / 侧偏 / 旋转</small></h3>
   <Slider label="屈 / 伸" value={v.flex} min={flexMin} max={flexMax} step={.1} testId={`wrist-${side}-flex`} onChange={x=>turn('flex',x)}/>
   <Slider label="尺桡偏" value={v.dev} min={devMin} max={devMax} step={.1} testId={`wrist-${side}-dev`} onChange={x=>turn('dev',x)}/>
   <Slider label="旋前 / 旋后" value={v.twist} min={-180} max={180} step={.1} testId={`wrist-${side}-twist`} onChange={x=>turn('twist',x)}/>
+  {free?null:<p className="ws-note">未启用「自由手臂」：腕部弯曲受 {WRIST_BEND_LIMIT_DEG.toFixed(1)}° 限位约束，超出部分求解器会夹住；需要更大活动范围请在「通用」页勾选自由手臂。</p>}
  </div>;
 }
 /** Finger shape: one slider per hand, fist (0) → relaxed (0.5) → spread open
@@ -118,10 +130,36 @@ function FingerShapePanel({k,side,wrapped,edit}:{k:WorkshopKey;side:Side;wrapped
    :<p className="ws-note">握拳时手指收拢到掌面；握拍手的手掌包裹从这个手型插值，所以握拳仍然握住拍柄。非握拍手直接采用该手型。</p>}
  </div>;
 }
-function ArmJointPanel({rig,side,joint,disabled,onTurn}:{rig:HumanRig|null;side:Side;joint:'upper'|'forearm';disabled:boolean;onTurn:(kind:'lift'|'swing'|'twist',degrees:number)=>void}){
- const v=readArmRotation(rig,side,joint);
- return <div className="ws-sub"><h3>{side==='L'?'左':'右'}{joint==='upper'?'大臂':'前臂（小臂）'}关节旋转</h3>
-  {([['lift','前后摆动'],['swing','水平摆动'],['twist','轴向旋转']] as const).map(([kind,label])=><Slider key={kind} label={label} value={v[kind]} min={-180} max={180} step={.1} disabled={disabled} testId={`joint-${side}-${joint}-${kind}`} onChange={next=>onTurn(kind,next)}/>)}
+/** Upper arm: three absolute shoulder-relative angles. The shoulder is a ball
+ * joint and the production solver delivers all three, so every slider here
+ * round-trips to the value it shows.
+ *
+ * The forearm is different: `rig.limb` derives the lower arm from the wrist
+ * target and the bend pole, so the forearm's direction and bend plane are
+ * outputs, not inputs — only the elbow's hinge angle is an input an author can
+ * command and read back. Three absolute forearm Euler angles would therefore
+ * promise independent control that the solver cannot deliver (measured
+ * residuals of 20–40° with the other axes moving), so the forearm control is
+ * the one honest DOF. Wrist rotation lives in the wrist panel. */
+function ArmJointPanel({rig,side,joint,disabled,free,onUpper,onElbow}:{rig:HumanRig|null;side:Side;joint:'upper'|'forearm';disabled:boolean;free:boolean;
+ onUpper:(kind:ArmRotationChannel,degrees:number,reference:ArmRotationValues)=>void;onElbow:(degrees:number)=>void}){
+ if(joint==='forearm'){
+  const max=free?180:LIMITS.elbowFlexion[1];
+  const value=readElbowAngle(rig,side);
+  return <div className="ws-sub"><h3>{side==='L'?'左':'右'}前臂（小臂）关节旋转 <small>肘屈伸</small></h3>
+   <Slider label="肘屈曲" value={value} min={0} max={max} step={.1} disabled={disabled} testId={`joint-${side}-forearm-flexion`} onChange={onElbow}/>
+   <p className="ws-note">前臂朝向与弯曲平面由腕部目标和肘部引导点决定，所以这里只提供可精确控制的肘铰链角；要改前臂指向，请转动大臂或在「四肢姿态精调」里移动腕部目标。</p>
+  </div>;
+ }
+ return <ArmJointPanelUpper rig={rig} side={side} disabled={disabled} onTurn={onUpper}/>;
+}
+function ArmJointPanelUpper({rig,side,disabled,onTurn}:{rig:HumanRig|null;side:Side;disabled:boolean;
+ onTurn:(kind:ArmRotationChannel,degrees:number,reference:ArmRotationValues)=>void}){
+ const [reference,setReference]=useState<ArmRotationValues|undefined>();
+ const v=readUpperArmRotation(rig,side,reference);
+ const turn=(kind:ArmRotationChannel,next:number)=>{setReference({...v,[kind]:next});onTurn(kind,next,v);};
+ return <div className="ws-sub"><h3>{side==='L'?'左':'右'}大臂关节旋转</h3>
+  {([['lift','前后摆动'],['swing','水平摆动'],['twist','轴向旋转']] as const).map(([kind,label])=><Slider key={kind} label={label} value={v[kind]} min={-180} max={180} step={.1} disabled={disabled} testId={`joint-${side}-upper-${kind}`} onChange={next=>turn(kind,next)}/>)}
  </div>;
 }
 /** Commit complete numbers on blur/Enter, so typing 0.36 never writes the
@@ -1403,9 +1441,22 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
       </>:null}
       {adjustmentTab!=='common'?<>
        {!d.freeArms?<p className="ws-note">当前启用人体参考限位。在“通用调整”启用“自由手臂”可使用全方向旋转。</p>:null}
+       {/* These sliders read the solved rig at the playhead but write the
+        * SELECTED key (editAtKey re-seeks before writing). When the playhead is
+        * somewhere else the two poses differ, so the number on screen would not
+        * be the pose being edited — say so instead of letting the first drag
+        * appear to jump. */}
+       {Math.abs(frame.time-sel.time)>1e-6
+        ?<p className="ws-note" data-testid="rotation-preview-offkey" style={{color:'var(--amber, #a0641c)'}}>
+          预览停在 {fmt(frame.time)}，而滑块编辑的是 {fmt(sel.time)} 的关键帧：当前读数描述播放头姿态，拖动后会跳到该关键帧的姿态。
+          <button type="button" style={{marginLeft:6}} onClick={()=>{engine.current?.setPlaying(false);engine.current?.seek(sel.time);}}>跳到该关键帧</button>
+         </p>
+        :null}
        <WristPanel key={`${d.id}:${sel.id}:${adjustmentSide}:${wristEpoch.current}:${d.freeArms}`} rig={engine.current?.rig??null} side={adjustmentSide} free={d.freeArms===true} edit={editSelected}/>
        <FingerShapePanel key={`${d.id}:${sel.id}:${adjustmentSide}`} side={adjustmentSide} wrapped={d.gripSide===adjustmentSide&&sel.constraints.grip===true} k={sel} edit={editSelected}/>
-       {(['upper','forearm'] as const).map(joint=><ArmJointPanel key={`${d.id}:${sel.id}:${adjustmentSide}:${joint}:${wristEpoch.current}`} rig={engine.current?.rig??null} side={adjustmentSide} joint={joint} disabled={!info} onTurn={(kind,degrees)=>editSelected(k=>{const rig=engine.current?.rig;if(rig)setArmRotation(rig,k.pose,adjustmentSide,joint,kind,degrees);})}/>)}
+       {(['upper','forearm'] as const).map(joint=><ArmJointPanel key={`${d.id}:${sel.id}:${adjustmentSide}:${joint}:${wristEpoch.current}`} rig={engine.current?.rig??null} side={adjustmentSide} joint={joint} disabled={!info} free={d.freeArms===true}
+       onUpper={(kind,degrees,reference)=>editSelected(k=>{const rig=engine.current?.rig;if(rig)setUpperArmRotation(rig,k.pose,adjustmentSide,kind,degrees,reference);})}
+       onElbow={degrees=>editSelected(k=>{const rig=engine.current?.rig;if(rig)setElbowAngle(rig,k.pose,adjustmentSide,degrees,d.freeArms===true?180:LIMITS.elbowFlexion[1]);})}/>)}
       </>:null}
       {(['L','R']as const).filter(side=>adjustmentTab==='left'?side==='L':adjustmentTab==='right'?side==='R':false).map(side=>{
         const cn=side==='L'?'左':'右',handName=side==='L'?'handL':'handR',footName=side==='L'?'footL':'footR';

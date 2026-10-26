@@ -117,11 +117,15 @@ try{
   for(const key of keys)await page.keyboard.press(key);
   await page.waitForTimeout(120);
  };
+ /* Read the value off the key the panel edits: the selected key, which starts
+  * as the first key with the playhead at 0 s. `keys` is storage order, not
+  * necessarily time order, so match by time instead of indexing. */
  const leftQuat=()=>page.evaluate(()=>{
   const e=window.__WS__,out={};
   const doc=JSON.parse(JSON.stringify(e.getDoc()));
+  const key=doc.keys.find(k=>Math.abs(k.time-e.time)<1e-6)??doc.keys[0];
   for(const n of ['finger2-1_L','finger2-2_L','finger3-1_L','finger5-1_L'])out[n]=e.rig.bone(n).quaternion.toArray();
-  return {bones:out,stored:doc.keys[0].pose.handSpread?.L??null};
+  return {bones:out,stored:key.pose.handSpread?.L??null,keyTime:key.time};
  });
  await setSpread(leftSlider,['Home']);
  for(let i=0;i<50;i++)await page.keyboard.press('ArrowRight'); // step 1 → 50%
@@ -149,8 +153,9 @@ try{
  const rightState=()=>page.evaluate(()=>{
   const e=window.__WS__,out=[];
   const doc=JSON.parse(JSON.stringify(e.getDoc()));
+  const key=doc.keys.find(k=>Math.abs(k.time-e.time)<1e-6)??doc.keys[0];
   for(let f=1;f<=5;f++)for(let j=1;j<=3;j++)out.push(...e.rig.bone(`finger${f}-${j}_R`).quaternion.toArray());
-  return {bones:out,stored:doc.keys[0].pose.handSpread?.R??null};
+  return {bones:out,stored:key.pose.handSpread?.R??null,keyTime:key.time};
  });
  await setSpread(rightSlider,['Home']);
  const rightFist=await rightState(),fistValue=await rightSlider.inputValue();

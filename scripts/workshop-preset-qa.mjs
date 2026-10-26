@@ -272,12 +272,13 @@ try{
  for(const axis of ['flex','dev','twist']){
   const beforeWrist=await readArm(),beforeHand=(await read()).doc.keys[0].pose.handR;
   await page.getByTestId(`wrist-R-${axis}`).press('PageUp');
-  const afterWrist=await readArm(),afterRead=await read();
+  const afterWrist=await readArm();
+  await awaitStoredDoc();
+  const afterRead=await read();
   assert.notDeepEqual(afterRead.doc.keys[0].pose.handR,beforeHand,`${axis} wrist slider did not write after reload`);
   const dot=Math.abs(afterWrist.quaternion.reduce((sum,v,i)=>sum+v*beforeWrist.quaternion[i],0));
   assert(dot<.999,`${axis} wrist slider did not rotate the rendered wrist`);
   assert.equal(afterRead.time,afterRead.doc.keys[0].time,'editing must preview the key actually written');
-  await awaitStoredDoc();
   assert.deepEqual(afterRead.storage.docs.find(d=>d.id===afterRead.doc.id).keys[0].pose.handR,afterRead.doc.keys[0].pose.handR);
  }
  await page.waitForTimeout(600); // one arm rotation = one history transaction

@@ -1,6 +1,7 @@
 {
   "kind": "h3d-vision-check",
   "version": 1,
+  "challengeId": "issue-32-archived-fixed-seed",
   "verdict": "pass",
   "markers": [
     {

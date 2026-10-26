@@ -13,7 +13,7 @@ import {processImage,compareSideBySide,sheetFromManifest} from './lib/review-cro
 // side-by-side compares the SAME region of two same-framing images — it is a
 // visual aid, not a reprojection check.
 const args=process.argv.slice(2);
-const positional=args.filter((a,i)=>!a.startsWith('--')&&!['--region','--scale','--out','--cols','--point','--img','--sheet','--manifest'].includes(args[i-1]));
+const positional=args.filter((a,i)=>!a.startsWith('--')&&!['--region','--scale','--out','--cols','--point','--img','--sheet','--manifest','--grid'].includes(args[i-1]));
 let img='',sheet='',out='',region='',scale,schemaGrid=false,cols=4;
 const points=[];
 for(let i=0;i<args.length;i++){

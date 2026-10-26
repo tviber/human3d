@@ -79,7 +79,7 @@ export function decodePng(buffer){
 
 /** Crop a fractional or pixel region and nearest-neighbour upscale it. */
 export function cropRegion({width,height,rgba},region,scale=1){
- const toPx=(v,size)=>Number.isFinite(v)&&v>0&&v<1?Math.round(v*size):Math.round(v);
+ const toPx=(v,size)=>Number.isFinite(v)&&v>=0&&v<=1?Math.round(v*size):Math.round(v);
  let x=toPx(region.x,width),y=toPx(region.y,height);
  let w=toPx(region.w,width),h=toPx(region.h,height);
  if(x<0||y<0||w<=0||h<=0||x+w>width||y+h>height)throw new Error(`region ${JSON.stringify(region)} outside ${width}×${height}`);

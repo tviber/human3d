@@ -1,3 +1,4 @@
+import {randomBytes,randomUUID} from 'node:crypto';
 import {encodePng} from './png.mjs';
 
 /** Vision-coordinate sanity check for the agent motion-review loop (issue #32
@@ -6,9 +7,11 @@ import {encodePng} from './png.mjs';
  * truth is known exactly — separating "the model reads image coordinates
  * inaccurately" from "the solver computed something wrong".
  *
- * The fixture is generated from a FIXED seed, so `--check` recomputes the
- * truth instead of reading it from disk: nothing next to the PNG can leak the
- * answers. Scope is deliberately narrow: this calibrates image-plane
+ * The fixture is generated from a random seed created at emit time. `--check`
+ * receives that seed from the user's answers file and recomputes the truth
+ * instead of reading the ground truth from disk: no public fixed answer key
+ * can be reused across runs. Scope is deliberately narrow: this calibrates
+ * image-plane
  * localization ONLY. Passing says nothing about inferring 3D depth, pose or
  * camera geometry — those stay explicitly unverified.
  *
@@ -25,19 +28,22 @@ export const VISION_CHECK_MARKER_COUNT=10;
 export const VISION_PASS_PX=4;
 export const VISION_WARN_PX=10;
 
-const SEED=0x33a32;   // fixed: emitting twice must produce the identical image
+const DEFAULT_SEED=0x33a32;
+const normalizeSeed=seed=>Number.isInteger(seed)&&seed>=0&&seed<=0xffffffff?seed:undefined;
+const nextRandomSeed=()=>randomBytes(4).readUInt32LE(0);
 const rand=(state)=>{let s=state;s=(s*1664525+1013904223)>>>0;return [s>>>0,s];};
-const intBetween=(s,lo,hi)=>lo+Math.floor(s()*(hi-lo+1));
 
 /* 3×5 bitmap digits, rows top→bottom, for the marker id labels. */
 const DIGITS={
  '0':[7,5,5,5,7],'1':[2,6,2,2,7],'2':[7,1,7,4,7],'3':[7,1,3,1,7],'4':[5,5,7,1,1],
  '5':[7,4,7,1,7],'6':[7,4,7,5,7],'7':[7,1,1,2,2],'8':[7,5,7,5,7],'9':[7,5,7,1,7]};
 
-/** Deterministically generate the fixture image and its exact ground truth. */
-export function generateFixture(){
+/** Generate one seeded fixture image and its exact ground truth. */
+export function generateFixture({seed=DEFAULT_SEED}={}){
+ seed=normalizeSeed(seed);
+ if(seed===undefined)throw new Error('generateFixture: seed must be an unsigned 32-bit integer');
  const markers=[];
- let state=SEED;
+ let state=seed;
  for(let id=1;id<=VISION_CHECK_MARKER_COUNT;id++){
   // Rejection sampling keeps markers off the grid lines (multiples of 50) and
   // apart from each other, so passing needs real localization, not counting
@@ -80,10 +86,16 @@ export function generateFixture(){
     for(let sy=0;sy<2;sy++)for(let sx=0;sx<2;sx++)put(m.x+11+c*8+col*2+sx,m.y+4+row*2+sy,[20,20,20]);
   }
  }
- return {width:VISION_CHECK_WIDTH,height:VISION_CHECK_HEIGHT,rgba,truth:{markers,rect:{x:rx,y:ry,w:rw,h:rh}}};
+ return {seed,width:VISION_CHECK_WIDTH,height:VISION_CHECK_HEIGHT,rgba,truth:{markers,rect:{x:rx,y:ry,w:rw,h:rh}}};
 }
 
-export function fixturePng(){const f=generateFixture();return encodePng(f.width,f.height,f.rgba);}
+export function createBlindFixture(){
+ const seed=nextRandomSeed();
+ const fixture=generateFixture({seed});
+ return {...fixture,challengeId:randomUUID()};
+}
+
+export function fixturePng(seed=DEFAULT_SEED){const f=generateFixture({seed});return encodePng(f.width,f.height,f.rgba);}
 
 const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
 

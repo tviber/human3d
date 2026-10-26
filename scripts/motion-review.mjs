@@ -30,7 +30,8 @@ try{
   if(!file)throw new Error('用法: motion-review.mjs check <review.json>');
   const{review,result}=checkReviewFile(file);
   if(result.problems.length)for(const p of result.problems)console.error(`  ✗ ${p}`);
-  console.log(`round ${review.round}/${MAX_ROUNDS} · 判定: ${result.ok?'PASS':'FAIL（'+result.verdict+'）'}`);
+  const outcome=result.ok?'PASS':result.valid?'HANDOFF（仍有未解决发现）':'INVALID（记录不符合审阅契约）';
+  console.log(`round ${review.round}/${MAX_ROUNDS} · 判定: ${outcome}`);
   process.exit(result.ok?0:1);
  }else{
   console.error(`未知命令 ${cmd??''}。类别对照：${FAILURE_CATEGORIES.map(c=>`${c}=${CATEGORY_NOTES[c]}`).join(' · ')}`);

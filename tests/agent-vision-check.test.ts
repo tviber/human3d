@@ -1,5 +1,9 @@
 import {describe,it,expect} from 'vitest';
-import {generateFixture,gradeVision,fixturePng,VISION_PASS_PX,VISION_WARN_PX,SCOPE_NOTE} from '../scripts/lib/vision-check.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {spawnSync} from 'node:child_process';
+import {createBlindFixture,generateFixture,gradeVision,fixturePng,VISION_PASS_PX,VISION_WARN_PX,SCOPE_NOTE} from '../scripts/lib/vision-check.mjs';
 import {decodePng} from '../scripts/lib/png.mjs';
 
 const shiftX=(truth:{markers:{id:number;x:number;y:number}[];rect:{x:number;y:number;w:number;h:number}},d:number)=>({
@@ -7,11 +11,48 @@ const shiftX=(truth:{markers:{id:number;x:number;y:number}[];rect:{x:number;y:nu
  rect:{x:truth.rect.x+d,y:truth.rect.y,w:truth.rect.w,h:truth.rect.h},
 });
 
+describe('vision-check CLI',()=>{
+ it('uses a fresh private seed sidecar and binds answers to the challenge id',()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'human3d-vision-check-'));
+  const cli=path.resolve('scripts/agent-vision-check.mjs');
+  const emit=(outDir:string)=>spawnSync(process.execPath,[cli,'--emit','--out-dir',outDir],{encoding:'utf8'});
+  const firstDir=path.join(dir,'first'),secondDir=path.join(dir,'second');
+  const first=emit(firstDir),second=emit(secondDir);
+  expect(first.status).toBe(0);expect(second.status).toBe(0);
+  const template=JSON.parse(fs.readFileSync(path.join(firstDir,'answers.template.json'),'utf8'));
+  const sidecar=path.join(firstDir,`.vision-check-${template.challengeId}.json`);
+  expect(fs.existsSync(sidecar)).toBe(true);
+  expect(template).not.toHaveProperty('seed');
+  const secret=JSON.parse(fs.readFileSync(sidecar,'utf8'));
+  const truth=generateFixture({seed:secret.seed}).truth;
+  const answers={...template,markers:truth.markers,rect:truth.rect};
+  const answersPath=path.join(firstDir,'answers.json');
+  fs.writeFileSync(answersPath,JSON.stringify(answers));
+  const checked=spawnSync(process.execPath,[cli,'--check',answersPath],{encoding:'utf8'});
+  expect(checked.status).toBe(0);
+  const result=JSON.parse(fs.readFileSync(path.join(firstDir,'vision-check.result.json'),'utf8'));
+  expect(result.challengeId).toBe(template.challengeId);
+  const wrongChallenge=path.join(secondDir,'answers.json');
+  fs.writeFileSync(wrongChallenge,JSON.stringify(answers));
+  const rejected=spawnSync(process.execPath,[cli,'--check',wrongChallenge],{encoding:'utf8'});
+  expect(rejected.status).toBe(2);
+  expect(rejected.stderr).toContain('找不到本次视觉校准挑战');
+ });
+});
+
 describe('vision-check fixture',()=>{
- it('is deterministic across calls',()=>{
-  const a=generateFixture(),b=generateFixture();
+ it('is deterministic for an explicit seed',()=>{
+  const a=generateFixture({seed:0x33a32}),b=generateFixture({seed:0x33a32});
+  expect(a.seed).toBe(b.seed);
   expect([...a.rgba]).toEqual([...b.rgba]);
   expect(a.truth).toEqual(b.truth);
+ });
+ it('creates a fresh blind challenge whose truth can only be regenerated from its seed',()=>{
+  const a=createBlindFixture(),b=createBlindFixture();
+  expect(a.challengeId).not.toBe(b.challengeId);
+  expect(a.seed).not.toBe(b.seed);
+  expect(a.truth).toEqual(generateFixture({seed:a.seed}).truth);
+  expect(b.truth).toEqual(generateFixture({seed:b.seed}).truth);
  });
  it('keeps marker centres off the reference grid and mutually separated',()=>{
   const {truth}=generateFixture();

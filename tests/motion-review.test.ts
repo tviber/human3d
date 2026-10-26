@@ -2,6 +2,7 @@ import {describe,it,expect} from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {spawnSync} from 'node:child_process';
 import {initReview,checkReview,initFromManifestFile,MAX_ROUNDS} from '../scripts/lib/motion-review.mjs';
 import type {ReviewRecord,ReviewFinding} from '../scripts/lib/motion-review.mjs';
 
@@ -44,7 +45,9 @@ describe('initReview',()=>{
 describe('checkReview — the gate',()=>{
  it('refuses a record with unviewed shots: green numbers alone never pass',()=>{
   const r=checkReview(initReview(manifest()));
+  expect(r.valid).toBe(false);
   expect(r.ok).toBe(false);
+  expect(r.verdict).toBe('fail-with-handoff');
   expect(r.problems.join('')).toContain('3 张图未查看');
  });
  it('passes only when everything is viewed ok and no real findings remain',()=>{
@@ -52,7 +55,7 @@ describe('checkReview — the gate',()=>{
   viewAll(review);
   review.findings=[];   // the residual finding was addressed in a previous round
   const r=checkReview(review);
-  expect(r.ok).toBe(true);expect(r.verdict).toBe('pass');
+  expect(r.valid).toBe(true);expect(r.ok).toBe(true);expect(r.verdict).toBe('pass');
  });
  it('treats reference-unjudgeable as not blocking, but real findings force a handoff path',()=>{
   const review=initReview(manifest());
@@ -60,7 +63,10 @@ describe('checkReview — the gate',()=>{
   review.findings=[{id:'F1',time:.5,keyId:'k2',view:'front',part:'右腕',category:'reference-unjudgeable',evidence:'e',solveStatus:'numeric-valid',referenceStatus:'unverified',suggestion:'s',uncertainty:'u'}];
   expect(checkReview(review).verdict).toBe('pass');
   review.findings.push({id:'F2',time:.5,keyId:'k2',view:'side',part:'右肘',category:'ik-clamp',evidence:'e',solveStatus:'numeric-invalid',referenceStatus:'unverified',suggestion:'s',uncertainty:'u'});
-  expect(checkReview(review).verdict).toBe('fail-with-handoff');
+  const unresolved=checkReview(review);
+  expect(unresolved.valid).toBe(true);
+  expect(unresolved.verdict).toBe('fail-with-handoff');
+  expect(unresolved.ok).toBe(false);
  });
  it('rejects "deviates from reference" claims made while the reference is unverified',()=>{
   const review=initReview(manifest());
@@ -69,6 +75,16 @@ describe('checkReview — the gate',()=>{
   const r=checkReview(review);
   expect(r.ok).toBe(false);
   expect(r.problems.join('')).toContain('reference-unjudgeable');
+ });
+ it('rejects malformed shot and finding collections as an invalid record',()=>{
+  const review=initReview(manifest());
+  review.shots=[null as never];
+  review.findings=[null as never];
+  const r=checkReview(review);
+  expect(r.valid).toBe(false);
+  expect(r.ok).toBe(false);
+  expect(r.problems.join(' ')).toContain('shot 必须是对象');
+  expect(r.problems.join(' ')).toContain('finding 必须是对象');
  });
  it('requires a note on every suspect shot',()=>{
   const review=initReview(manifest());
@@ -94,12 +110,28 @@ describe('checkReview — the gate',()=>{
   expect(bare.ok).toBe(false);
   expect(bare.problems.join('')).toContain(`超过 ${MAX_ROUNDS} 轮`);
   review.handoff={reasons:['三轮后肘部仍穿身'],humanItems:['人工确认引拍肘高度']};
-  expect(checkReview(review).problems.join('')).not.toContain('超过');
-  expect(checkReview(review).verdict).toBe('fail-with-handoff');
+   const handedOff=checkReview(review);
+   expect(handedOff.problems.join('')).not.toContain('超过');
+   expect(handedOff.valid).toBe(true);
+   expect(handedOff.verdict).toBe('fail-with-handoff');
+   expect(handedOff.ok).toBe(false);
+
  });
 });
 
 describe('file round-trip',()=>{
+ it('exits non-zero for a valid fail-with-handoff review record',()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'human3d-motion-review-cli-'));
+  const review=initReview(manifest());
+  viewAll(review);
+  review.findings=[{id:'F1',time:.5,keyId:'k2',view:'front',part:'右腕',category:'ik-clamp',evidence:'残差 9 mm',solveStatus:'numeric-invalid',referenceStatus:'unverified',suggestion:'检查手腕目标',uncertainty:'当前数值只说明存在残差'}];
+  const file=path.join(dir,'review.json');
+  fs.writeFileSync(file,JSON.stringify(review));
+  const result=spawnSync(process.execPath,['scripts/motion-review.mjs','check',file],{cwd:process.cwd(),encoding:'utf8'});
+  expect(result.status).toBe(1);
+  expect(result.stdout).toContain('HANDOFF');
+  expect(result.stdout).not.toContain('PASS');
+ });
  it('init writes the skeleton beside the manifest and check reads it back',()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'human3d-motion-review-'));
   const manifestPath=path.join(dir,'manifest.json');

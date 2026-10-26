@@ -40,6 +40,13 @@ describe('issue-32 fixture document',()=>{
   for(const t of timesForBundle(doc)){
    const f=frameAt(doc,t,rig.rest.get('root')!);
    solveEffectiveFrame(rig,f);
+   const nearest=doc.keys.reduce((best,key)=>Math.abs(key.time-t)<Math.abs(best.time-t)?key:best,doc.keys[0]);
+   if(!doc.keys.some(key=>Math.abs(key.time-t)<1e-6)){
+    const target=f.pose.handR.target,keyTarget=nearest.pose.handR.target;
+    const delta=Math.hypot(target.x-keyTarget.x,target.y-keyTarget.y,target.z-keyTarget.z);
+    expect(delta,`t=${t} interpolated target must differ from nearest key target`).toBeGreaterThan(.05);
+    expect(rig.point('wrist_R').distanceTo(new Vector3(target.x,target.y,target.z)),`t=${t} interpolated wrist residual`).toBeLessThan(.005);
+   }
    const analysis=analyzePose(rig,f.pose,f.constraints,racket);
    const bad=analysis.items.filter(i=>!i.ok);
    expect(bad,`t=${t}: ${bad.map(b=>`${b.code} ${b.detail}`).join(', ')}`).toEqual([]);

@@ -62,8 +62,12 @@ export function checkReview(review){
  const fail=(m)=>problems.push(m);
  if(review?.kind!==REVIEW_KIND||review?.version!==REVIEW_VERSION)fail(`必须是 ${REVIEW_KIND} v${REVIEW_VERSION}`);
  if(!Array.isArray(review.shots)||review.shots.length===0)fail('没有 shots——先用 init 从 capture manifest 生成');
+ if(review.findings!==undefined&&!Array.isArray(review.findings))fail('findings 必须是数组');
+ const shots=Array.isArray(review.shots)?review.shots:[];
+ const findings=Array.isArray(review.findings)?review.findings:[];
  let unseen=0,unnoted=0;
- for(const s of review.shots){
+ for(const s of shots){
+  if(!s||typeof s!=='object'){fail('shot 必须是对象');continue;}
   if(s.visual===null){unseen++;continue;}
   if(!['ok','suspect'].includes(s.visual))fail(`${s.file}: visual 必须是 ok 或 suspect`);
   if(s.visual==='suspect'&&!String(s.note||'').trim())unnoted++;
@@ -71,7 +75,8 @@ export function checkReview(review){
  if(unseen)fail(`${unseen} 张图未查看（visual 为空）——必须逐张实际查看，不允许只凭数值全绿宣布正确`);
  if(unnoted)fail(`${unnoted} 张 suspect 的图缺少说明（note）`);
  const findingIds=new Set();
- if(Array.isArray(review.findings))for(const f of review.findings){
+ for(const f of findings){
+  if(!f||typeof f!=='object'){fail('finding 必须是对象');continue;}
   const at=`findings[${f.id??'?'}]`;
   findingIds.add(f.id);
   if(!FAILURE_CATEGORIES.includes(f.category))fail(`${at}: category 必须是 ${FAILURE_CATEGORIES.join(' | ')} 之一`);
@@ -85,8 +90,8 @@ export function checkReview(review){
  }
  const round=review.round;
  if(!Number.isInteger(round)||round<1)fail('round 必须是 ≥1 的整数');
- const realFindings=(review.findings??[]).filter(f=>f.category!=='reference-unjudgeable');
- const verdict=!problems.length&&!realFindings.length&&review.shots.every(s=>s.visual==='ok')?'pass':'fail-with-handoff';
+ const realFindings=findings.filter(f=>f&&typeof f==='object'&&f.category!=='reference-unjudgeable');
+ const verdict=!problems.length&&!realFindings.length&&shots.every(s=>s&&s.visual==='ok')?'pass':'fail-with-handoff';
  if(verdict==='fail-with-handoff'){
   const handoff=review.handoff;
   if(round>MAX_ROUNDS&&(!handoff||!Array.isArray(handoff.reasons)||!handoff.reasons.length||!Array.isArray(handoff.humanItems)||!handoff.humanItems.length))
@@ -94,7 +99,8 @@ export function checkReview(review){
   if(round<=MAX_ROUNDS&&!handoff&&realFindings.length&&round===MAX_ROUNDS)
    fail(`第 ${MAX_ROUNDS} 轮仍有 ${realFindings.length} 个未解决问题且没有 handoff——修复并开下一轮，或写 handoff 移交`);
  }
- return {ok:problems.length===0,verdict,problems};
+ const valid=problems.length===0;
+ return {valid,ok:valid&&verdict==='pass',verdict,problems};
 }
 
 /** init CLI: read manifest, write skeleton beside it. */

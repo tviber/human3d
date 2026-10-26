@@ -43,6 +43,11 @@ jobs:
         run: node scripts/library-backup-qa.mjs --out-dir "$RUNNER_TEMP/qa/library-backup"
       - name: Cross-tab concurrency and replace restore point
         run: node scripts/library-concurrency-browser-qa.mjs >"$RUNNER_TEMP/qa/concurrency.log" 2>&1 || { cat "$RUNNER_TEMP/qa/concurrency.log"; exit 1; }
+      - name: Capture and review the real issue-32 bundle
+        run: |
+          mkdir -p "$RUNNER_TEMP/qa/review-bundle"
+          node scripts/workshop-capture.mjs evidence/issue-32/ready-swing-contact.workshop.json --bundle --out-dir "$RUNNER_TEMP/qa/review-bundle/capture"
+          node scripts/review-bundle-browser-qa.mjs "$RUNNER_TEMP/qa/review-bundle/capture"
       - name: Stop dev server
         if: always()
         run: |

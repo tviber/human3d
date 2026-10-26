@@ -95,10 +95,7 @@ try{
     // will render; captureStill's own snapshot then restores to this same
     // time, so the read and the pixels describe one frame.
     e.seek(time);e.solveCurrent();
-    const blob=await e.captureStill(time,{view});
-    const bytes=new Uint8Array(await blob.arrayBuffer());
-    let binary='';
-    for(let k=0;k<bytes.length;k+=0x8000)binary+=String.fromCharCode(...bytes.subarray(k,k+0x8000));
+    const solvedFrame=e.latestFrame;
     // Read the solved frame the image was rendered from (same playhead time).
     const rig=e.rig;
     const vec=n=>rig.point(n).toArray().map(v=>Math.round(v*1e4)/1e4);
@@ -120,16 +117,23 @@ try{
       const elev=Math.asin(Math.max(-1,Math.min(1,u.y)))*180/Math.PI;
       const az=Math.atan2(u.dot(out),u.dot(front))*180/Math.PI;
       const hand=side==='R'?key.pose.handR:key.pose.handL;
-      const target=new V(hand.target.x,hand.target.y,hand.target.z);
+      const effectiveHand=side==='R'?solvedFrame.pose.handR:solvedFrame.pose.handL;
+      const target=new V(effectiveHand.target.x,effectiveHand.target.y,effectiveHand.target.z);
+      const keyTarget=new V(hand.target.x,hand.target.y,hand.target.z);
       const shoulderToWrist=S.distanceTo(W);
       return {elbow:+elbow.toFixed(1),upperElevation:+elev.toFixed(1),upperAzimuth:+az.toFixed(1),
-       wristResidualMm:Math.round(W.distanceTo(target)*1000),shoulderToWrist:+shoulderToWrist.toFixed(3),
+       wristResidualMm:Math.round(W.distanceTo(target)*1000),wristTarget:target.toArray().map(v=>+v.toFixed(4)),
+       nearestKeyTarget:keyTarget.toArray().map(v=>+v.toFixed(4)),shoulderToWrist:+shoulderToWrist.toFixed(3),
        wrist:vec(`wrist_${side}`),elbowPos:vec(`lowerarm01_${side}`)};
     };
     const tip=e.racket?e.racket.localToWorld(new e.racket.position.constructor(0,.61,0)):undefined;
-    return {png:btoa(binary),time,view,restoredTime:e.time,
-     solved:{right:read('R'),left:read('L'),
-      ...(tip?{tip:tip.toArray().map(v=>Math.round(v*1e4)/1e4)}:{})},
+    const solved={right:read('R'),left:read('L'),
+     ...(tip?{tip:tip.toArray().map(v=>Math.round(v*1e4)/1e4)}:{})};
+    const blob=await e.captureStill(time,{view});
+    const bytes=new Uint8Array(await blob.arrayBuffer());
+    let binary='';
+    for(let k=0;k<bytes.length;k+=0x8000)binary+=String.fromCharCode(...bytes.subarray(k,k+0x8000));
+    return {png:btoa(binary),time,view,restoredTime:e.time,solved,
      nearestKey:{id:key.id,label:key.label,time:key.time,delta:Math.round((time-key.time)*1e4)/1e4,constraints:key.constraints},
      gripSide:doc.gripSide??'R'};
    },{time,view});

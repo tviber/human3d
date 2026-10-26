@@ -1,6 +1,6 @@
 # Agent 动作制作审阅环（Motion Authoring Review Loop）
 
-状态：已实现（issue #32 工作包 A + B；C 依赖 #21 的参考量化接口，**保持阻塞**——仓库内无重投影/拟合实现，不得复制 solver 或假装有该能力）。
+状态：已实现（issue #32 工作包 A + B；C 依赖 #21 的参考量化接口，**保持阻塞**并单独跟踪——仓库内无重投影/拟合实现，不得复制 solver 或假装有该能力）。
 
 目的：外部参考帧 / 人工标注目标 → 坐标与相机条件核对 → 声明目标并用现有工具求解/人工修正 → 固定视角+时刻的参考对照与数值检查 → **有界迭代（≤3 轮）** → 报告无法验证/失败之处 → 交付可编辑 WorkshopDoc。衡量标准是减少「猜坐标 → 改数值 → 重截图」的无效往返，不是产出更多截图与指标。
 
@@ -34,14 +34,15 @@
 **Step 0 · 视觉坐标自校准（每次会话读图前一次）**
 
 ```sh
-sh scripts/check-process-limit.sh && node scripts/agent-vision-check.mjs --emit   # → tmp/agent-vision/
+sh scripts/check-process-limit.sh && node scripts/agent-vision-check.mjs --emit   # → tmp/agent-vision-<时间>-<pid>/
 # 查看 vision-check.png（放大 200%），把 10 个圆点中心 + 红矩形左上/宽高填进 answers.json
-sh scripts/check-process-limit.sh && node scripts/agent-vision-check.mjs --check tmp/agent-vision/answers.json
+sh scripts/check-process-limit.sh && node scripts/agent-vision-check.mjs --check <dir>/answers.json
 ```
 
+- 每次 `--emit` 生成**随机种子**的新题（`answers.template.json` 带 `challengeId`，种子写在同目录隐藏 sidecar 里）。不要复用上一次的答案或仓库里旧的 `vision-check.result.json`——固定题面等于公开答案，读图能力没被验证。
 - `pass`（≤4px）→ 可做像素级读数；`warn`（≤10px）→ 只许大粒度判断（左右/上下/明显穿模），像素级结论一律不可确定；`fail` → **停止读图**，反馈「需要人工标点/校准相机」，不继续随机试角度。
 - 本检查只校准**图像平面定位**，不证明 3D 深度/姿态推断能力；不绑定特定模型。
-- 2026-10-26 实测记录：本机 agent 自跑 PASS（10 标记 0.0px、矩形 1.4px；`tmp/agent-vision/`，测试 `tests/agent-vision-check.test.ts` 钉死 fail/warn 路径）。
+- 2026-10-26 实测记录：本机 agent 自跑 PASS（10 标记 0.0px、矩形 1.4px；`evidence/issue-32/vision-check/`，用固定种子 `issue-32-archived-fixed-seed` 归档，`--check` 可复算出同一结果；测试 `tests/agent-vision-check.test.ts` 钉死随机挑战、错配挑战与 fail/warn 路径）。归档的是**一次历史记录**，不是可复用的题库。
 
 **Step 1 · 条件核对**：按上节模板输出可确定/不可确定项。缺参考就直接声明「无参考，一切对照 unverified」。
 
@@ -74,10 +75,12 @@ node scripts/review-crop.mjs <shot>.png --region 0.3,0.4,0.3,0.3 --scale 4 --gri
 node scripts/motion-review.mjs init <dir>/manifest.json [--round N] [--reference ref.png]
 # 逐张实际查看 shots[].file，填 visual: ok|suspect（suspect 必填 note）
 # findings[] 每条必填：category / evidence / suggestion / uncertainty（写「无」也要显式）
-node scripts/motion-review.mjs check <dir>/review.json   # 退出码 1 = 不合格
+node scripts/motion-review.mjs check <dir>/review.json   # 退出码 0 仅当 verdict=pass
 ```
 
-`check` 是硬门禁：没逐张看图不给过、finding 缺字段不给过、声称「偏离参考」但参考 unverified 直接判错、**round > 3 必须填 handoff{reasons,humanItems} 移交人工**。没有综合评分。
+`check` 是硬门禁，三种结果要分清：`PASS`（记录合法且无未解决发现，退出 0）、`HANDOFF`（记录合法但仍有真实发现/超轮次，退出 1——这是**审核未通过**，需要修复后开下一轮或按 handoff 移交，不是格式错误）、`INVALID`（记录违背契约，退出 1）。没逐张看图不给过、finding 缺字段不给过、声称「偏离参考」但参考 unverified 直接判错、**round > 3 必须填 handoff{reasons,humanItems} 移交人工**。没有综合评分。
+
+`init` 的腕残差自动发现用的是**该时刻插值帧的腕目标**（`solved.right.wristTarget`），不是最近关键帧的目标；manifest 同时记录 `nearestKeyTarget`，中点处两者通常不同——拿关键帧目标去比会凭空产生 `ik-clamp`。
 
 **Step 6 · 修复或停止**：修复落在 WorkshopDoc/语义命令 → 复跑 Step 3–5（round+1）。第 3 轮仍不合格：停止，如实交付「失败部位 + 诊断证据 + 未解决原因 + 人工介入项」，不调宽阈值掩盖错误。
 
@@ -97,11 +100,13 @@ node scripts/motion-review.mjs check <dir>/review.json   # 退出码 1 = 不合�
 
 - `ready-swing-contact.workshop.json`：全新 ready→引拍→击球→随挥→回位文档（**非**内置预设）；`tests/issue-32-fixture.test.ts` 在真实 `parseDoc → frameAt → solveEffectiveFrame → analyzePose` 路径上验证全部审阅时刻（腕残差 0.0mm、无限位违反）。
 - `synthetic-reference-frame.png`：合成参考帧（火柴人，持拍臂下垂、与 fixture 击球姿态故意不一致、**无标定**）。用于演示：视觉可判「不一致」→ referenceStatus 只能是 `inconsistent`（且不可给量化误差）；若声称 `deviates-from-reference` 但 referenceStatus=`unverified`，`check` 直接拒绝。
-- 负例演示路径：图像坐标读错 → Step 0 fail 分支（测试钉死）；数值合法但与参考不符 → fixture + 合成参考的 findings 流程；不可观测/未校准 → `reference-unjudgeable` 类别与 unverified 规则。
+- `vision-check/`：一次视觉坐标自校准的归档记录（`answers.json` + 隐藏 sidecar 提供该次随机题的固定种子 + `vision-check.result.json`），可用 `--check` 复算；它证明的只是**当时**那一次读图能力，不是可复用题库，也不要拿它当本轮会话的校准凭据。
+- `example-review.json`：review 记录的**手写示例**（字段形状演示），不是一次真实 capture 的产物；真实链路的可运行证据是 CI 里的 `review-bundle-browser-qa`（见第 4 节）与本地 `tests/review-bundle-qa.test.ts`。
+- 负例演示路径：图像坐标读错 → Step 0 fail 分支（测试钉死）；数值合法但与参考不符 → fixture + 合成参考的 findings 流程；不可观测/未校准 → `reference-unjudgeable` 类别与 unverified 规则；中点残差误算 → `tests/review-bundle-qa.test.ts` 用同一 fixture 的最近关键帧目标复现旧算法的虚假 `ik-clamp` 并要求验收检查拒绝。
 
 ## 4. 移交与边界
 
-- **本机（macpro）禁跑任何浏览器自动化**（kernel panic）；Step 3 的 capture 在 CI 或其他开发机执行。固定输入可复现：同一 doc + 版本 + 视角集合 → 相同图片与摘要（时间戳/机器环境除外）。
+- **本机（macpro）禁跑任何浏览器自动化**（kernel panic）；Step 3 的 capture 在 CI 或其他开发机执行。固定输入可复现：同一 doc + 版本 + 视角集合 → 相同图片与摘要（时间戳/机器环境除外）。`browser-qa` workflow 的「Capture and review the real issue-32 bundle」步骤用 `evidence/issue-32/ready-swing-contact.workshop.json` 跑真实导入 → key+中点截图 → manifest → `motion-review init/check`，再由 `scripts/review-bundle-browser-qa.mjs` 断言中点腕残差 ≤5 mm、至少一个中点的插值目标与最近关键帧目标相差 ≥5 cm（防回归到「拿关键帧目标算中点残差」），并确认未查看的 review 记录会被 `check` 拦下。
 - 工具为 CLI/Agent-first：不在工作台加 UI 面板、不建新渲染器、不新增图像依赖（PNG codec 为 `scripts/lib/png.mjs` 零依赖实现）。review 过程不修改用户动作——capture 只读导入，修改必须经确认的 WorkshopDoc/语义命令路径。
 - C（#21 参考量化诊断）在真实接口合并前保持阻塞并如实标记，不复制 solver。
 - 保存/撤销/导入/回放/JSON/GLB 旧路径不受影响：本环只读消费 `workshop-capture` 产物。

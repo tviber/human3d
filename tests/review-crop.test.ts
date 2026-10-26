@@ -2,7 +2,8 @@ import {describe,it,expect} from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {encodePng,decodePng} from '../scripts/lib/png.mjs';
+import {spawnSync} from 'node:child_process';
+import {encodePng,decodePng,cropRegion} from '../scripts/lib/png.mjs';
 import {overlayGrid,overlayPoint,sideBySide,composeSheet,processImage,compareSideBySide,sheetFromManifest} from '../scripts/lib/review-crop.mjs';
 
 const solid=(w:number,h:number,v:number)=>({width:w,height:h,rgba:new Uint8Array(w*h*4).fill(v)});
@@ -11,6 +12,12 @@ const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'human3d-review-crop-'));
 const writePng=(name:string,img:{width:number;height:number;rgba:Uint8Array})=>{const p=path.join(tmp,name);fs.writeFileSync(p,encodePng(img.width,img.height,img.rgba));return p;};
 
 describe('overlays and composites',()=>{
+ it('interprets the full-frame fractional region 0,0,1,1 as the whole image',()=>{
+  const img=solid(8,6,77);
+  const cropped=cropRegion(img,{x:0,y:0,w:1,h:1});
+  expect([cropped.width,cropped.height]).toEqual([8,6]);
+  expect(px(cropped,7,5)).toEqual([77,77,77]);
+ });
  it('overlayGrid marks grid lines without touching other pixels',()=>{
   const img=overlayGrid(solid(120,80,255),50);
   expect(px(img,50,10)).toEqual([200,200,200]);
@@ -39,6 +46,16 @@ describe('overlays and composites',()=>{
 });
 
 describe('file-backed tools',()=>{
+ it('accepts --grid 50 without treating 50 as an input image',()=>{
+  const input=writePng('grid-cli-input.png',solid(120,80,255));
+  const output=path.join(tmp,'grid-cli-output.png');
+  const cli=path.resolve('scripts/review-crop.mjs');
+  const result=spawnSync(process.execPath,[cli,'--img',input,'--grid','50','--out',output],{encoding:'utf8'});
+  expect(result.status).toBe(0);
+  const img=decodePng(fs.readFileSync(output));
+  expect(px(img,50,10)).toEqual([200,200,200]);
+  expect(px(img,51,10)).toEqual([200,200,200]);
+ });
  it('processImage crops, scales and draws overlays end to end',()=>{
   const src=writePng('src.png',solid(100,100,240));
   const out=path.join(tmp,'zoom.png');

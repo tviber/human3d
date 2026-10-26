@@ -140,7 +140,14 @@ try{
  await page.mouse.move(spot.x+45,spot.y-35,{steps:10});await page.mouse.up();
  const edited=await read(),targetAfter=edited.doc.keys[0].pose.handL.target;
  assert(Math.hypot(targetAfter.x-targetBefore.x,targetAfter.y-targetBefore.y,targetAfter.z-targetBefore.z)>.005,'pointer drag did not adjust the preset copy');
- assert.deepEqual(edited.storage.docs.find(d=>d.id===edited.doc.id).keys[0].pose.handL.target,targetAfter);
+ // The library persists asynchronously (throttled during the drag, flushed at
+ // drag end), so wait for the dragged value to reach storage instead of racing
+ // the save with an immediate read.
+ await page.waitForFunction(([id,want])=>{
+  const stored=JSON.parse(localStorage.getItem('kinesis-workshop-library')??'null');
+  const t=stored?.docs?.find(d=>d.id===id)?.keys?.[0]?.pose?.handL?.target;
+  return !!t&&Math.abs(t.x-want[0])<1e-12&&Math.abs(t.y-want[1])<1e-12&&Math.abs(t.z-want[2])<1e-12;
+ },[edited.doc.id,[targetAfter.x,targetAfter.y,targetAfter.z]],{timeout:5000});
  await page.getByRole('button',{name:'撤销',exact:true}).click();
  assert.deepEqual((await read()).doc.keys[0].pose.handL.target,targetBefore);
  await page.getByRole('button',{name:'重做',exact:true}).click();

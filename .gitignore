@@ -6,3 +6,8 @@ dist/
 .venv-dynamics/
 __pycache__/
 .out/
+
+# Vision-calibration seeds are per-challenge secrets; the one archived evidence
+# record is committed explicitly.
+.vision-check-*.json
+!evidence/issue-32/vision-check/.vision-check-*.json

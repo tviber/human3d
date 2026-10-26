@@ -13,6 +13,7 @@
 | 改宿主耦合/移植小程序 | [engineering/miniapp-port.md](engineering/miniapp-port.md) → `apps/web/src/platform/platform.ts` | 宿主 API 全走 `AppPlatform`，单点替换 |
 | 新增/改肌肉驱动动作 | [ACTION-TEMPLATE.md](ACTION-TEMPLATE.md) → [DYNAMICS.md](DYNAMICS.md) | 信封注册表、dynamics-motion kind、Python 工具链 |
 | 接任务/提交流程本身 | [engineering/review-protocol.md](engineering/review-protocol.md) → [engineering/task-protocol.md](engineering/task-protocol.md) → [engineering/review-gates.md](engineering/review-gates.md) | task brief、Fast/Final Review、Level 0–3 |
+| 以 agent 身份制作/审阅一个新动作 | [agent/motion-review.md](agent/motion-review.md) | 先自校准视觉坐标、坐标条件核对、审阅包 + ≤3 轮有界返工、不编造 3D |
 | 选最小验证集 | [engineering/test-matrix.md](engineering/test-matrix.md) | 改动面 → 定向测试映射 |
 | 开 worktree/并行任务 | [engineering/worktree-policy.md](engineering/worktree-policy.md) | 依赖/端口/测试发现防串线 |
 | 协议设计动机 | [ANIMATION-PROTOCOL-PLAN.md](ANIMATION-PROTOCOL-PLAN.md) | v1 MVP 边界、未实现项 |
@@ -24,6 +25,7 @@
 | 路径 | 内容 | 什么时候读 |
 |---|---|---|
 | [engineering/](engineering/) | 流程约定：review-protocol（审查协议 + 模板）、task-protocol（owner lane/ledger）、review-gates（验证生命周期）、ci-lifecycle（Draft/Ready CI 矩阵）、test-matrix、worktree-policy | 接任务/提交前 |
+| [agent/](agent/) | agent 动作审阅环：视觉坐标自校准、坐标约定速查、review bundle 与结构化 review.json、有界返工（issue #32 A+B） | agent 制作/审阅新动作前 |
 | [domain/](domain/) | 领域不变量：motion-model / solver / pose-package / workshop | 改对应代码前按需读 |
 | [decisions/](decisions/) | ADR：已确认方案、被否方案与依据（0001–0010） | 要改某个设计前提时 |
 | [history/](history/) | 冻结的完整调查史（investigate.md）与 PR 审查记录（issue-11-pr13-16-review.md） | 只在需要历史证据时，非默认必读 |

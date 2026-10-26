@@ -1,0 +1,75 @@
+{
+  "kind": "h3d-motion-review",
+  "version": 1,
+  "round": 1,
+  "docDigest": "3f7a1c",
+  "revision": "workshop-doc/v5",
+  "doc": {
+    "id": "issue32-ready-swing-contact",
+    "name": "引拍击球 · issue32",
+    "duration": 1.1,
+    "keys": 5,
+    "gripSide": "R",
+    "handFrames": {
+      "L": "pelvis",
+      "R": "pelvis"
+    }
+  },
+  "capture": {
+    "manifestSource": "manifest.json",
+    "shots": 2,
+    "views": [
+      "front",
+      "side",
+      "threeQuarter"
+    ]
+  },
+  "reference": {
+    "available": true,
+    "aligned": false,
+    "frames": [
+      "evidence/issue-32/synthetic-reference-frame.png"
+    ],
+    "note": "相机未标定：视觉并排相似不等于重投影一致"
+  },
+  "shots": [
+    {
+      "file": "issue32-t0.000-g-ready-front.png",
+      "time": 0,
+      "view": "front",
+      "keyId": "g-ready",
+      "shotRole": "key",
+      "visual": "ok",
+      "note": ""
+    },
+    {
+      "file": "issue32-t0.720-g-hit-side.png",
+      "time": 0.72,
+      "view": "side",
+      "keyId": "g-hit",
+      "shotRole": "key",
+      "visual": "ok",
+      "note": ""
+    }
+  ],
+  "findings": [
+    {
+      "id": "F1",
+      "time": 0.72,
+      "keyId": "g-hit",
+      "view": "side",
+      "part": "持拍手与参考",
+      "category": "reference-unjudgeable",
+      "evidence": "并排对比 review-crop cmp（合成参考无标定，只判视觉不同向，不给量化误差）",
+      "solveStatus": "numeric-valid",
+      "referenceStatus": "unverified",
+      "suggestion": "需要人工给出标定参考或人工确认击球臂高度",
+      "uncertainty": "参考为合成物、无内外参；无法量化"
+    }
+  ],
+  "numerical": {
+    "worstWristResidualMm": 0,
+    "flagged": []
+  },
+  "handoff": null
+}

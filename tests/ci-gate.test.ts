@@ -150,6 +150,9 @@ describe('browser QA workflow',()=>{
   const steps=JSON.stringify(browserJobs.library.steps);
   expect(steps).toContain('library-backup-qa.mjs');
   expect(steps).toContain('library-concurrency-browser-qa.mjs');
+  expect(steps).toContain('bevel-hand-qa.mjs');
+  expect(steps).toContain('workshop-capture.mjs');
+  expect(steps).toContain('review-bundle-browser-qa.mjs');
   expect(steps).toContain('playwright install');
   expect(Number.isInteger(browserJobs.library['timeout-minutes'])).toBe(true);
  });

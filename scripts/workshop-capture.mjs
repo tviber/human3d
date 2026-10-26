@@ -13,20 +13,29 @@ import {verifyWebIdentity} from './lib/worktree-check.mjs';
 //
 //   node scripts/workshop-capture.mjs <doc.json> [--times 0,0.54,1.2]
 //        [--views front,side,back,threeQuarter] [--labels a,b,c] [--tag name]
+//        [--bundle]
 //
 // Times default to the document's key times; labels default to the key labels.
+// --bundle (issue #32 B1) captures a REVIEW BUNDLE instead: key times ∪
+// interval midpoints, default views front,side,threeQuarter (front/side for
+// the pose, the oblique view to expose occlusion/depth), per-shot key/midpoint
+// role and a document digest (same sha-256 form as the pose package's
+// definition-hash document side) so every image traces back to the exact
+// authored document. Feed the manifest to scripts/motion-review.mjs.
 // Output: <dir>/<tag>-t<time>-<view>.png plus manifest.json with the document
 // id/name, per-key constraint flags and the solved wrist/elbow/racket readings,
 // so a reviewer can tie an image back to the numbers that produced it.
+import {timesForBundle,shotRole,bundleBlock} from './lib/review-bundle.mjs';
 const repoRoot=process.cwd();
 const output=resolveOutputDir('visual-capture',process.argv.slice(2),repoRoot,process.env);
 const args=output.args;
-const flags={times:'',views:'front,side,back,threeQuarter',labels:'',tag:''};
+const flags={times:'',views:'',labels:'',tag:'',bundle:false};
 const positional=[];
 for(let i=0;i<args.length;i++){
  const arg=args[i];
  if(arg.startsWith('--')){
   const name=arg.slice(2);
+  if(name==='bundle'){flags.bundle=true;continue;}
   if(!(name in flags))throw new Error(`unknown option --${name}`);
   if(i+1>=args.length||args[i+1].startsWith('--'))throw new Error(`--${name} requires a value`);
   flags[name]=args[++i];
@@ -41,10 +50,13 @@ const doc=raw.kind==='workshop-motion'?raw.document
  :raw;
 if(!doc||doc.schemaVersion!==2||!Array.isArray(doc.keys))throw new Error(`${positional[0]} does not contain a workshop document`);
 const tag=flags.tag||doc.id||'doc';
-const views=flags.views.split(',').filter(Boolean);
+const views=flags.views?flags.views.split(',').filter(Boolean)
+ :flags.bundle?['front','side','threeQuarter']
+ :['front','side','back','threeQuarter'];
 const labels=flags.labels?flags.labels.split(','):[];
 const times=flags.times
  ?flags.times.split(',').map(Number)
+ :flags.bundle?timesForBundle(doc)
  :doc.keys.map(k=>k.time);
 if(times.some(t=>!Number.isFinite(t)||t<0||t>doc.duration+1e-9))throw new Error(`--times must be numbers within [0, ${doc.duration}]`);
 
@@ -63,12 +75,19 @@ try{
  await page.goto(new URL('/workshop.html',webBase).href);
  await page.waitForFunction(()=>window.__WS__?.ready,{timeout:60000});
  await page.evaluate(()=>window.__WS__.setPlaying(false));
- // Import through the real hidden file input of the 动作文档 card.
- await page.locator('input[type=file][accept*=".json"]').setInputFiles({
+ // Import through the real hidden file input behind 导入动作. The card has a
+ // second .json input (从备份恢复), so target the import one by position — the
+ // same ordering the library QA suites rely on — instead of accepting both.
+ const fileInputs=page.locator('input[type=file][accept=".json,application/json"]');
+ if(await fileInputs.count()!==2)throw new Error(`workshop import card changed: expected 2 JSON inputs, found ${await fileInputs.count()}`);
+ await fileInputs.first().setInputFiles({
   name:`${tag}.json`,mimeType:'application/json',buffer:Buffer.from(JSON.stringify(doc)),
  });
  await page.waitForFunction(id=>window.__WS__.getDoc()?.id===id,doc.id,{timeout:30000});
  await page.evaluate(()=>window.__WS__.setPlaying(false));
+ // The page normalized the document on import (parseDoc); digest THAT form so
+ // the bundle identity matches what the pose-package pipeline would see.
+ const normalizedDoc=flags.bundle?JSON.parse(await page.evaluate(()=>JSON.stringify(window.__WS__.getDoc()))):null;
 
  const shots=[];
  for(let i=0;i<times.length;i++){
@@ -80,10 +99,7 @@ try{
     // will render; captureStill's own snapshot then restores to this same
     // time, so the read and the pixels describe one frame.
     e.seek(time);e.solveCurrent();
-    const blob=await e.captureStill(time,{view});
-    const bytes=new Uint8Array(await blob.arrayBuffer());
-    let binary='';
-    for(let k=0;k<bytes.length;k+=0x8000)binary+=String.fromCharCode(...bytes.subarray(k,k+0x8000));
+    const solvedFrame=e.latestFrame;
     // Read the solved frame the image was rendered from (same playhead time).
     const rig=e.rig;
     const vec=n=>rig.point(n).toArray().map(v=>Math.round(v*1e4)/1e4);
@@ -105,16 +121,23 @@ try{
       const elev=Math.asin(Math.max(-1,Math.min(1,u.y)))*180/Math.PI;
       const az=Math.atan2(u.dot(out),u.dot(front))*180/Math.PI;
       const hand=side==='R'?key.pose.handR:key.pose.handL;
-      const target=new V(hand.target.x,hand.target.y,hand.target.z);
+      const effectiveHand=side==='R'?solvedFrame.pose.handR:solvedFrame.pose.handL;
+      const target=new V(effectiveHand.target.x,effectiveHand.target.y,effectiveHand.target.z);
+      const keyTarget=new V(hand.target.x,hand.target.y,hand.target.z);
       const shoulderToWrist=S.distanceTo(W);
       return {elbow:+elbow.toFixed(1),upperElevation:+elev.toFixed(1),upperAzimuth:+az.toFixed(1),
-       wristResidualMm:Math.round(W.distanceTo(target)*1000),shoulderToWrist:+shoulderToWrist.toFixed(3),
+       wristResidualMm:Math.round(W.distanceTo(target)*1000),wristTarget:target.toArray().map(v=>+v.toFixed(4)),
+       nearestKeyTarget:keyTarget.toArray().map(v=>+v.toFixed(4)),shoulderToWrist:+shoulderToWrist.toFixed(3),
        wrist:vec(`wrist_${side}`),elbowPos:vec(`lowerarm01_${side}`)};
     };
     const tip=e.racket?e.racket.localToWorld(new e.racket.position.constructor(0,.61,0)):undefined;
-    return {png:btoa(binary),time,view,restoredTime:e.time,
-     solved:{right:read('R'),left:read('L'),
-      ...(tip?{tip:tip.toArray().map(v=>Math.round(v*1e4)/1e4)}:{})},
+    const solved={right:read('R'),left:read('L'),
+     ...(tip?{tip:tip.toArray().map(v=>Math.round(v*1e4)/1e4)}:{})};
+    const blob=await e.captureStill(time,{view});
+    const bytes=new Uint8Array(await blob.arrayBuffer());
+    let binary='';
+    for(let k=0;k<bytes.length;k+=0x8000)binary+=String.fromCharCode(...bytes.subarray(k,k+0x8000));
+    return {png:btoa(binary),time,view,restoredTime:e.time,solved,
      nearestKey:{id:key.id,label:key.label,time:key.time,delta:Math.round((time-key.time)*1e4)/1e4,constraints:key.constraints},
      gripSide:doc.gripSide??'R'};
    },{time,view});
@@ -123,12 +146,14 @@ try{
    const file=`${tag}-t${time.toFixed(3)}-${slug}-${view}.png`;
    fs.writeFileSync(outFile(file),Buffer.from(payload.png,'base64'));
    delete payload.png;
-   shots.push({...payload,file,label});
+   shots.push({...payload,file,label,...(flags.bundle?{shotRole:shotRole(doc,time)}:{})});
   }
  }
  if(errors.length)throw new Error(`workshop page reported errors: ${errors.join(' | ')}`);
  const manifest={date:new Date().toISOString(),url:page.url(),webIdentity:identity,
+  ...(flags.bundle?{kind:'workshop-review-bundle'}:{}),
   document:{id:doc.id,name:doc.name,duration:doc.duration,keys:doc.keys.length,gripSide:doc.gripSide??'R',handFrames:doc.handFrames},
+  ...(flags.bundle?{bundle:bundleBlock({doc,normalizedDoc,docPath:path.relative(repoRoot,docPath)})}:{}),
   source:path.relative(repoRoot,docPath),views,shots};
  atomicWriteFile(outFile('manifest.json'),`${JSON.stringify(manifest,null,2)}\n`);
  console.log(JSON.stringify({output:output.dir,shots:shots.map(s=>({file:s.file,time:s.time,view:s.view,label:s.label,nearestKey:s.nearestKey.id,delta:s.nearestKey.delta}))},null,2));

@@ -6,7 +6,10 @@ name: browser-qa
 # stable GPU/browser host, so they run here rather than on a developer machine.
 # This workflow is separate from `test` so the four-job required gate contract
 # stays unchanged; require `browser-qa / library` in branch protection to make
-# it a merge gate.
+# it a merge gate. It also runs the two acceptance paths that need a real
+# browser: the racket-bevel/finger-shape controls (PR #33) and the agent review
+# bundle → review gate (issue #32); both are documented as not runnable on the
+# developer machine, so CI is where they actually execute.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -43,6 +46,13 @@ jobs:
         run: node scripts/library-backup-qa.mjs --out-dir "$RUNNER_TEMP/qa/library-backup"
       - name: Cross-tab concurrency and replace restore point
         run: node scripts/library-concurrency-browser-qa.mjs >"$RUNNER_TEMP/qa/concurrency.log" 2>&1 || { cat "$RUNNER_TEMP/qa/concurrency.log"; exit 1; }
+      - name: Racket bevels and finger shape (real UI controls)
+        run: node scripts/bevel-hand-qa.mjs --out-dir "$RUNNER_TEMP/qa/bevel-hand"
+      - name: Capture and review the real issue-32 bundle
+        run: |
+          mkdir -p "$RUNNER_TEMP/qa/review-bundle"
+          node scripts/workshop-capture.mjs evidence/issue-32/ready-swing-contact.workshop.json --bundle --out-dir "$RUNNER_TEMP/qa/review-bundle/capture"
+          node scripts/review-bundle-browser-qa.mjs "$RUNNER_TEMP/qa/review-bundle/capture"
       - name: Stop dev server
         if: always()
         run: |

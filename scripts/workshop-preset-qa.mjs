@@ -230,12 +230,18 @@ try{
  assert.equal(saved.doc.id,edited.doc.id);
  assert.deepEqual(saved.doc,finalEdited.doc);
  await awaitStoredActive(edited.doc.id);
+ const preReload=await page.evaluate(()=>{
+  const stored=JSON.parse(localStorage.getItem('kinesis-workshop-library')??'null');
+  return {activeId:stored?.activeId,docs:stored?.docs?.map(d=>d.id),window:window.__WS__.getDoc().id};
+ });
+ console.log('pre-reload library state:',JSON.stringify(preReload));
  await page.reload();await ready();
  await reopenPanels(); // reload resets review mode and collapses the panels
  // Playback/seek is allowed; no direct document or engine edit writes.
  await page.evaluate(()=>{window.__WS__.setPlaying(false);window.__WS__.seek(0);});
  const restored=await read();
- assert.equal(restored.doc.id,edited.doc.id);
+ assert.equal(restored.doc.id,edited.doc.id,
+  `reloaded active doc: storage.activeId=${restored.storage.activeId} preReload=${JSON.stringify(preReload)} docs=[${restored.storage.docs.map(d=>d.id).join(', ')}]`);
  assert.deepEqual(restored.doc,saved.doc);
  assert.equal(restored.storage.quarantine.length,0);
  assertRestoredDoc(restored.storage.docs.find(d=>d.id===before.id),before);

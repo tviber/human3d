@@ -1,0 +1,53 @@
+{
+  "kind": "h3d-vision-check",
+  "version": 1,
+  "verdict": "pass",
+  "markers": [
+    {
+      "id": 1,
+      "errorPx": 0
+    },
+    {
+      "id": 2,
+      "errorPx": 0
+    },
+    {
+      "id": 3,
+      "errorPx": 0
+    },
+    {
+      "id": 4,
+      "errorPx": 0
+    },
+    {
+      "id": 5,
+      "errorPx": 0
+    },
+    {
+      "id": 6,
+      "errorPx": 0
+    },
+    {
+      "id": 7,
+      "errorPx": 0
+    },
+    {
+      "id": 8,
+      "errorPx": 0
+    },
+    {
+      "id": 9,
+      "errorPx": 0
+    },
+    {
+      "id": 10,
+      "errorPx": 0
+    }
+  ],
+  "rect": {
+    "errorPx": 1.41
+  },
+  "swapped": [],
+  "maxErrorPx": 1.41,
+  "feedback": []
+}

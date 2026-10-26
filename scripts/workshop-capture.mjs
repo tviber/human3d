@@ -13,20 +13,29 @@ import {verifyWebIdentity} from './lib/worktree-check.mjs';
 //
 //   node scripts/workshop-capture.mjs <doc.json> [--times 0,0.54,1.2]
 //        [--views front,side,back,threeQuarter] [--labels a,b,c] [--tag name]
+//        [--bundle]
 //
 // Times default to the document's key times; labels default to the key labels.
+// --bundle (issue #32 B1) captures a REVIEW BUNDLE instead: key times ∪
+// interval midpoints, default views front,side,threeQuarter (front/side for
+// the pose, the oblique view to expose occlusion/depth), per-shot key/midpoint
+// role and a document digest (same sha-256 form as the pose package's
+// definition-hash document side) so every image traces back to the exact
+// authored document. Feed the manifest to scripts/motion-review.mjs.
 // Output: <dir>/<tag>-t<time>-<view>.png plus manifest.json with the document
 // id/name, per-key constraint flags and the solved wrist/elbow/racket readings,
 // so a reviewer can tie an image back to the numbers that produced it.
+import {timesForBundle,shotRole,bundleBlock} from './lib/review-bundle.mjs';
 const repoRoot=process.cwd();
 const output=resolveOutputDir('visual-capture',process.argv.slice(2),repoRoot,process.env);
 const args=output.args;
-const flags={times:'',views:'front,side,back,threeQuarter',labels:'',tag:''};
+const flags={times:'',views:'',labels:'',tag:'',bundle:false};
 const positional=[];
 for(let i=0;i<args.length;i++){
  const arg=args[i];
  if(arg.startsWith('--')){
   const name=arg.slice(2);
+  if(name==='bundle'){flags.bundle=true;continue;}
   if(!(name in flags))throw new Error(`unknown option --${name}`);
   if(i+1>=args.length||args[i+1].startsWith('--'))throw new Error(`--${name} requires a value`);
   flags[name]=args[++i];
@@ -41,10 +50,13 @@ const doc=raw.kind==='workshop-motion'?raw.document
  :raw;
 if(!doc||doc.schemaVersion!==2||!Array.isArray(doc.keys))throw new Error(`${positional[0]} does not contain a workshop document`);
 const tag=flags.tag||doc.id||'doc';
-const views=flags.views.split(',').filter(Boolean);
+const views=flags.views?flags.views.split(',').filter(Boolean)
+ :flags.bundle?['front','side','threeQuarter']
+ :['front','side','back','threeQuarter'];
 const labels=flags.labels?flags.labels.split(','):[];
 const times=flags.times
  ?flags.times.split(',').map(Number)
+ :flags.bundle?timesForBundle(doc)
  :doc.keys.map(k=>k.time);
 if(times.some(t=>!Number.isFinite(t)||t<0||t>doc.duration+1e-9))throw new Error(`--times must be numbers within [0, ${doc.duration}]`);
 
@@ -69,6 +81,9 @@ try{
  });
  await page.waitForFunction(id=>window.__WS__.getDoc()?.id===id,doc.id,{timeout:30000});
  await page.evaluate(()=>window.__WS__.setPlaying(false));
+ // The page normalized the document on import (parseDoc); digest THAT form so
+ // the bundle identity matches what the pose-package pipeline would see.
+ const normalizedDoc=flags.bundle?JSON.parse(await page.evaluate(()=>JSON.stringify(window.__WS__.getDoc()))):null;
 
  const shots=[];
  for(let i=0;i<times.length;i++){
@@ -123,12 +138,14 @@ try{
    const file=`${tag}-t${time.toFixed(3)}-${slug}-${view}.png`;
    fs.writeFileSync(outFile(file),Buffer.from(payload.png,'base64'));
    delete payload.png;
-   shots.push({...payload,file,label});
+   shots.push({...payload,file,label,...(flags.bundle?{shotRole:shotRole(doc,time)}:{})});
   }
  }
  if(errors.length)throw new Error(`workshop page reported errors: ${errors.join(' | ')}`);
  const manifest={date:new Date().toISOString(),url:page.url(),webIdentity:identity,
+  ...(flags.bundle?{kind:'workshop-review-bundle'}:{}),
   document:{id:doc.id,name:doc.name,duration:doc.duration,keys:doc.keys.length,gripSide:doc.gripSide??'R',handFrames:doc.handFrames},
+  ...(flags.bundle?{bundle:bundleBlock({doc,normalizedDoc,docPath:path.relative(repoRoot,docPath)})}:{}),
   source:path.relative(repoRoot,docPath),views,shots};
  atomicWriteFile(outFile('manifest.json'),`${JSON.stringify(manifest,null,2)}\n`);
  console.log(JSON.stringify({output:output.dir,shots:shots.map(s=>({file:s.file,time:s.time,view:s.view,label:s.label,nearestKey:s.nearestKey.id,delta:s.nearestKey.delta}))},null,2));

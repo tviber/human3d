@@ -10,7 +10,7 @@ import {LibraryList} from './chrome';
 import {useWorkshopUi} from './ui-store';
 import {WorkshopEngine} from './engine';
 import type {WorkshopFrame} from './engine';
-import type {HandFrame,KeyInterpolation,WorkshopDoc,WorkshopKey,V3} from '@human3d/motion-core';
+import type {HandFrame,KeyInterpolation,SemanticPart,WorkshopDoc,WorkshopKey,V3} from '@human3d/motion-core';
 import {blankDocument,contactStartKey,defaultDocument,ensureKey,isReleaseKey,keyAt,loopBlockers,mirrorDoc,mirrorKey,nearestKey,newDocId,normalizeDoc,parseDoc,retimeKeys,serializeDoc,sortedKeys} from '@human3d/motion-core';
 import {BASIC_PRESETS,LIBRARY_KEY,MotionLibrary,OTHER_PRESETS,RACKET_PRESETS,WORKSHOP_PRESETS,type QuarantineEntry} from './library';
 import {clearLabHandoff,handoffConsumedByCreate,handoffHasCard,resolveLabHandoff} from './lab-handoff';
@@ -24,7 +24,8 @@ import {SemanticPanel,type SemanticHost} from './semantic-panel';
 import {copyKeyframe,keyframeInsertSlot,keyframeTimeProblem,moveKeyframe,removeKeyframe} from './keyframes';
 import {clampDuration,RACKET_BEVEL_DEFAULT,RACKET_BEVELS,RELAXED_SPREAD,WORKSHOP_LIMITS} from '@human3d/motion-core';
 import {ankleYForLift,footLift,type Side} from '@human3d/motion-core';
-import {rotateArmJoint,rotateHandFrame} from '@human3d/motion-core';
+import type {HumanRig} from '@human3d/motion-core';
+import {readArmRotation,readWristRotation,setArmRotation,setWristRotation} from './rotation-controls';
 import {unwrapMotionFile} from '@human3d/motion-core';
 import {buildManifestLocal,buildPosePackageLocal} from '@human3d/motion-core';
 import {exportGlb,posePackageToClip} from '@human3d/motion-core/glb';
@@ -74,18 +75,17 @@ function VectorSliders({title,value,testPrefix,min=-2,max=2,minY=-.5,maxY=2.5,on
    onChange={v=>onChange(axis,v)}/>) }
  </div>;
 }
-/** Delta sliders for the stored wrist frame: the control resets to zero each
- * key, edits rotate the key's forward/normal pair by the slider delta. */
-function WristPanel({k,side,free,edit}:{k:WorkshopKey;side:Side;free:boolean;edit:(fn:(key:WorkshopKey)=>void)=>void}){
- const [v,setV]=useState({flex:0,dev:0,twist:0});
- const turn=(kind:'flex'|'dev'|'twist',next:number)=>{
-  const delta=next-v[kind];setV({...v,[kind]:next});
-  edit(key=>{rotateHandFrame(side==='L'?key.pose.handL:key.pose.handR,kind,delta);});
- };
+/** Wrist controls read angles from the solved wrist/forearm pair and write the
+ * requested absolute orientation back through the hand's forward/normal frame. */
+function WristPanel({rig,side,free,edit}:{rig:HumanRig|null;side:Side;free:boolean;edit:(fn:(key:WorkshopKey)=>void)=>void}){
+ const v=readWristRotation(rig,side);
+ const turn=(kind:'flex'|'dev'|'twist',next:number)=>edit(key=>{if(rig)setWristRotation(rig,key.pose,side,kind,next);});
+ const flexMin=free?-180:Math.min(-60,v.flex),flexMax=free?180:Math.max(60,v.flex);
+ const devMin=free?-180:Math.min(-60,v.dev),devMax=free?180:Math.max(60,v.dev);
  return <div className="ws-sub"><h3>{side==='L'?'左':'右'}手腕姿态 <small>屈伸 / 侧偏 / 旋转</small></h3>
-  <Slider label="屈 / 伸" value={v.flex} min={free?-180:-60} max={free?180:60} step={1} testId={`wrist-${side}-flex`} onChange={x=>turn('flex',x)}/>
-  <Slider label="尺桡偏" value={v.dev} min={free?-180:-60} max={free?180:60} step={1} testId={`wrist-${side}-dev`} onChange={x=>turn('dev',x)}/>
-  <Slider label="旋前 / 旋后" value={v.twist} min={-180} max={180} step={1} testId={`wrist-${side}-twist`} onChange={x=>turn('twist',x)}/>
+  <Slider label="屈 / 伸" value={v.flex} min={flexMin} max={flexMax} step={.1} testId={`wrist-${side}-flex`} onChange={x=>turn('flex',x)}/>
+  <Slider label="尺桡偏" value={v.dev} min={devMin} max={devMax} step={.1} testId={`wrist-${side}-dev`} onChange={x=>turn('dev',x)}/>
+  <Slider label="旋前 / 旋后" value={v.twist} min={-180} max={180} step={.1} testId={`wrist-${side}-twist`} onChange={x=>turn('twist',x)}/>
  </div>;
 }
 /** Finger shape: one slider per hand, fist (0) → relaxed (0.5) → spread open
@@ -118,11 +118,10 @@ function FingerShapePanel({k,side,wrapped,edit}:{k:WorkshopKey;side:Side;wrapped
    :<p className="ws-note">握拳时手指收拢到掌面；握拍手的手掌包裹从这个手型插值，所以握拳仍然握住拍柄。非握拍手直接采用该手型。</p>}
  </div>;
 }
-function ArmJointPanel({side,joint,disabled,onTurn}:{side:Side;joint:'upper'|'forearm';disabled:boolean;onTurn:(kind:'lift'|'swing'|'twist',delta:number)=>void}){
- const [v,setV]=useState({lift:0,swing:0,twist:0});
- const turn=(kind:'lift'|'swing'|'twist',next:number)=>{const delta=next-v[kind];setV({...v,[kind]:next});onTurn(kind,delta);};
+function ArmJointPanel({rig,side,joint,disabled,onTurn}:{rig:HumanRig|null;side:Side;joint:'upper'|'forearm';disabled:boolean;onTurn:(kind:'lift'|'swing'|'twist',degrees:number)=>void}){
+ const v=readArmRotation(rig,side,joint);
  return <div className="ws-sub"><h3>{side==='L'?'左':'右'}{joint==='upper'?'大臂':'前臂（小臂）'}关节旋转</h3>
-  {([['lift','前后摆动'],['swing','水平摆动'],['twist','轴向旋转']] as const).map(([kind,label])=><Slider key={kind} label={label} value={v[kind]} min={-180} max={180} step={1} disabled={disabled} testId={`joint-${side}-${joint}-${kind}`} onChange={next=>turn(kind,next)}/>)}
+  {([['lift','前后摆动'],['swing','水平摆动'],['twist','轴向旋转']] as const).map(([kind,label])=><Slider key={kind} label={label} value={v[kind]} min={-180} max={180} step={.1} disabled={disabled} testId={`joint-${side}-${joint}-${kind}`} onChange={next=>onTurn(kind,next)}/>)}
  </div>;
 }
 /** Commit complete numbers on blur/Enter, so typing 0.36 never writes the
@@ -977,9 +976,13 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
    return {rig:e.rig,doc:L.active(),keyId:k.id,origin:e.restRoot(),pelvisShift:()=>e.pelvisShiftAt(k.time)};
   },
   begin:base=>{semanticRecorded.current=books.current.of(base.id).record(base);gate.current.reset();engine.current?.setPlaying(false);},
+  highlightPart:(part:SemanticPart,side)=>engine.current?.anatomy?.setSemanticHighlight(part,side),
+  clearMuscleHighlight:()=>engine.current?.anatomy?.clearSemanticHighlight(),
   write:next=>{
    const i=L.docs.findIndex(x=>x.id===next.id);if(i<0||generationLocked.current||restoreBusy.current)return;
-   L.docs[i]=JSON.parse(JSON.stringify(next)) as WorkshopDoc;L.save();
+   // Slider previews are transient: keep them in memory and persist once the
+   // semantic transaction is committed, rather than serializing on every input event.
+   L.docs[i]=JSON.parse(JSON.stringify(next)) as WorkshopDoc;
    const e=engine.current,k=keyAt(L.docs[i],selected);
    e?.setPlaying(false);e?.markDirty();if(k)e?.seek(k.time);bump(v=>v+1);
   },
@@ -1003,10 +1006,10 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
   <header className="ws-header">
    <div className="brand"><Activity size={25} strokeWidth={2}/><span>KINESIS</span><i/><h1>动作工作台</h1><small>关键帧动作编辑器</small></div>
    <nav><a href="/" className="ws-back" aria-disabled={leaving} onClick={e=>{e.preventDefault();void returnToLab();}}><ArrowLeft size={14}/>返回实验室</a></nav>
-   <div className="ws-save-state" data-testid="save-state" data-state={L.saveState} role="status" aria-live="polite"><span>{L.saveState==='error'?`保存失败：${L.lastError}`:L.saveState==='saving'?leaving?'保存中 · 完成后返回实验室…':'保存中…':'已保存到本机'}</span>{L.saveState!=='saved'?<button type="button" onClick={()=>exportDoc()}><Download size={12}/>导出当前动作 JSON</button>:null}</div>
+   <div className="ws-save-state" data-testid="save-state" data-state={L.saveState} role="status" aria-live="polite"><span>{L.saveState==='error'?`保存失败：${L.lastError}`:L.saveState==='saving'?leaving?'保存中 · 完成后返回实验室…':'保存中…':'已保存到本机'}</span><button type="button" disabled={L.saveState==='saved'} aria-hidden={L.saveState==='saved'} onClick={()=>exportDoc()}><Download size={12}/>导出当前动作 JSON</button></div>
   </header>
   <Group groupRef={panelGroup} orientation="horizontal" className="ws-main" id="workshop-panes">
-   <Panel id="ws-library" panelRef={libraryPanel} collapsible collapsedSize={0} onResize={size=>setLibraryOpen(size.inPixels>1)} className="ws-library-panel" defaultSize={0} minSize={280} maxSize={420}><aside className="ws-left" aria-label="动作与关键帧">
+   <Panel id="ws-library" panelRef={libraryPanel} collapsible collapsedSize={0} onResize={size=>setLibraryOpen(size.inPixels>1)} className="ws-library-panel" defaultSize={0} minSize={280} maxSize={420}><aside className="ws-left scroll-region" aria-label="动作与关键帧">
     {sheetHead('动作 · 关键帧 · 参考')}
     {handoffHasCard(handoff)?<section className="ws-card ws-handoff" data-testid="lab-handoff" inert={generationLockedUi}>
      {handoff.kind==='preset'?<>
@@ -1140,7 +1143,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
      <div className="ws-fold-body">
      <section className="ws-card ws-keyframes" inert={generationLockedUi} aria-label="关键帧管理">
      <h2>关键帧 <small>{orderedKeys.length} / {WORKSHOP_LIMITS.maxKeys}</small></h2>
-     <div className="ws-keyframe-list" role="group" aria-label="按时间排序的关键帧">
+     <div className="ws-keyframe-list scroll-region" role="group" aria-label="按时间排序的关键帧">
       {orderedKeys.map((key,index)=>{
        const name=key.label||`关键帧 ${index+1}`;
        return <div key={key.id} data-testid={`keyframe-row-${key.id}`} className={`ws-keyframe-row ${key.id===sel?.id?'sel':''}`}>
@@ -1174,7 +1177,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
        <Row label="调整姿态通道相位" checked={adjustKinds.phase} onChange={v=>setAdjustKinds(a=>({...a,phase:v}))}/>
       </div>
       <div className="ws-sub"><h3>保护关键帧 <small>{lockedIds.length} 个已锁定</small></h3>
-       <div className="ws-lock-list">{orderedKeys.map((k,i)=>{
+       <div className="ws-lock-list scroll-region">{orderedKeys.map((k,i)=>{
         const isContact=k.constraints.contact,edge=i===0||i===orderedKeys.length-1;
         const checked=isContact||lockedIds.includes(k.id);
         return <Row key={k.id} testId={`generator-lock-${k.id}`} label={`${k.label||`关键帧 ${i+1}`} · ${k.time.toFixed(2)}s`} detail={isContact?'触球帧始终固定':edge?'端点默认固定':undefined} checked={checked} disabled={isContact} onChange={v=>setKeyLocked(k.id,v)}/>;
@@ -1199,7 +1202,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
        <button type="button" data-testid="preview-candidate" aria-label="预览候选动作 B" aria-pressed={previewSide==='candidate'} onClick={()=>setPreview('candidate')}>B · 候选</button>
       </div>
       <p className={`ws-verdict ${candidateSession.candidate.verdict}`}><strong>实验性判断：{candidateSession.candidate.verdict==='improved'?'主要指标改善':candidateSession.candidate.verdict==='neutral'?'有代价下降，未达明显改善门槛':'指标退化'}</strong><small>目标比值 {candidateSession.candidate.objective.toFixed(3)} · 数值指标不代表动作自然度已获人工确认。</small></p>
-      <div className="ws-metric-table-wrap"><table className="ws-metric-table" aria-label="源动作与候选指标比较"><thead><tr><th>指标</th><th>源动作</th><th>候选</th></tr></thead><tbody>
+      <div className="ws-metric-table-wrap scroll-region"><table className="ws-metric-table" aria-label="源动作与候选指标比较"><thead><tr><th>指标</th><th>源动作</th><th>候选</th></tr></thead><tbody>
        {Object.entries(candidateSession.candidate.metrics).map(([key,row])=>{
         const delta=Math.abs(row.after-row.before),noiseFloor=Math.max(1e-9,Math.max(Math.abs(row.before),Math.abs(row.after))*1e-4);
         const better=delta<=noiseFloor?null:row.better==='down'?row.after<row.before:row.better==='up'?row.after>row.before:null;
@@ -1342,14 +1345,14 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
     {!info?<div className="ws-loading"><div className="loading-orbit"/><strong>{error?'加载失败':'正在读取人体模型'}</strong><p>{error}</p></div>:null}
    </section></Panel>
    <Separator className="pane-resize"/>
-   <Panel id="ws-inspector" panelRef={inspectorPanel} collapsible collapsedSize={0} onResize={size=>setInspectorOpen(size.inPixels>1)} className="ws-inspector-panel" defaultSize={0} minSize={320} maxSize={480} inert={generationLockedUi}><aside className="ws-right" aria-label="姿态调整与检查" inert={generationLockedUi}>
+   <Panel id="ws-inspector" panelRef={inspectorPanel} collapsible collapsedSize={0} onResize={size=>setInspectorOpen(size.inPixels>1)} className="ws-inspector-panel" defaultSize={0} minSize={320} maxSize={480} inert={generationLockedUi}><aside className="ws-right scroll-region" aria-label="姿态调整与检查" inert={generationLockedUi}>
     {sheetHead('姿态调整 · 检查')}
     {review?<p className="ws-review-lock">审阅模式：姿态控件已锁定。<button type="button" data-testid="unlock-edit" onClick={()=>switchMode('edit')}><Hand size={13}/>切换到编辑</button></p>:null}
     <section className="ws-card ws-key-card" inert={review}><h2>选中关键帧 {sel?<small>@{sel.time.toFixed(2)}s</small>:null}</h2>
      {sel?<div className="ws-adjustment-tabs" role="group" aria-label="关键帧调整分类">
-      {([['semantic','语义'],['left','左侧'],['right','右侧'],['common','通用']] as const).map(([tab,label])=><button key={tab} type="button" data-testid={`adjustment-tab-${tab}`} aria-pressed={adjustmentTab===tab} onClick={()=>setAdjustmentTab(tab)}>{label}</button>)}
+      {([['semantic','语义'],['left','左侧'],['right','右侧'],['common','通用']] as const).map(([tab,label])=><button key={tab} type="button" data-testid={`adjustment-tab-${tab}`} aria-pressed={adjustmentTab===tab} onClick={()=>{if(tab==='left'||tab==='right'){engine.current?.setPlaying(false);if(sel)engine.current?.seek(sel.time);}setAdjustmentTab(tab);}}>{label}</button>)}
      </div>:null}
-     <div className="ws-key-panel" data-testid={`adjustment-panel-${adjustmentTab}`}>
+     <div className="ws-key-panel scroll-region" data-testid={`adjustment-panel-${adjustmentTab}`}>
      {sel?<>
       <div className="ws-key-metadata">
        <label className="ws-field"><span>帧名称</span><input aria-label="关键帧名称" data-testid="selected-key-name" value={sel.label} placeholder={`关键帧 ${selectedKeyIndex+1}`} onFocus={()=>gate.current.reset()} onBlur={()=>gate.current.reset()} onChange={e=>editSelected(k=>{k.label=e.target.value;})}/></label>
@@ -1400,9 +1403,9 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
       </>:null}
       {adjustmentTab!=='common'?<>
        {!d.freeArms?<p className="ws-note">当前启用人体参考限位。在“通用调整”启用“自由手臂”可使用全方向旋转。</p>:null}
-       <WristPanel key={`${d.id}:${sel.id}:${adjustmentSide}:${wristEpoch.current}:${d.freeArms}`} side={adjustmentSide} free={d.freeArms===true} k={sel} edit={editSelected}/>
+       <WristPanel key={`${d.id}:${sel.id}:${adjustmentSide}:${wristEpoch.current}:${d.freeArms}`} rig={engine.current?.rig??null} side={adjustmentSide} free={d.freeArms===true} edit={editSelected}/>
        <FingerShapePanel key={`${d.id}:${sel.id}:${adjustmentSide}`} side={adjustmentSide} wrapped={d.gripSide===adjustmentSide&&sel.constraints.grip===true} k={sel} edit={editSelected}/>
-       {(['upper','forearm'] as const).map(joint=><ArmJointPanel key={`${d.id}:${sel.id}:${adjustmentSide}:${joint}:${wristEpoch.current}`} side={adjustmentSide} joint={joint} disabled={!info} onTurn={(kind,delta)=>editSelected(k=>{const rig=engine.current?.rig;if(rig)rotateArmJoint(rig,k.pose,adjustmentSide,joint,kind,delta);})}/>)}
+       {(['upper','forearm'] as const).map(joint=><ArmJointPanel key={`${d.id}:${sel.id}:${adjustmentSide}:${joint}:${wristEpoch.current}`} rig={engine.current?.rig??null} side={adjustmentSide} joint={joint} disabled={!info} onTurn={(kind,degrees)=>editSelected(k=>{const rig=engine.current?.rig;if(rig)setArmRotation(rig,k.pose,adjustmentSide,joint,kind,degrees);})}/>)}
       </>:null}
       {(['L','R']as const).filter(side=>adjustmentTab==='left'?side==='L':adjustmentTab==='right'?side==='R':false).map(side=>{
         const cn=side==='L'?'左':'右',handName=side==='L'?'handL':'handR',footName=side==='L'?'footL':'footR';

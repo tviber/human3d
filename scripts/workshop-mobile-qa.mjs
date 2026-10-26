@@ -101,6 +101,10 @@ try{
  assert.equal(await page.locator('.ws-shell').getAttribute('data-mode'),'edit');
  const base=await read(page),keyIndex=base.doc.keys.findIndex(k=>Math.abs(k.time-base.time)<1e-9);
  assert(keyIndex>=0,'playhead is not on the selected key');
+ const rotationValues=prefix=>page.locator(`[data-testid^="${prefix}"]`).evaluateAll(inputs=>inputs.map(input=>Number(input.value)));
+ await page.getByTestId('adjustment-tab-right').tap();
+ const forearmBefore=await rotationValues('joint-R-forearm-');
+ await page.getByTestId('adjustment-tab-semantic').tap();
  const angle0=await elbowAngle(page,'R');
  await page.getByTestId('semantic-part-elbow').tap();await page.getByTestId('semantic-side-R').tap();
  await page.getByTestId('semantic-plus').tap();await page.getByTestId('semantic-plus').tap();
@@ -110,12 +114,20 @@ try{
  const edited=await read(page),angle1=await elbowAngle(page,'R');
  assert(Math.abs(angle1-angle0-10)<.5,`elbow changed ${angle1-angle0}°`);
  edited.doc.keys.forEach((k,i)=>{if(i!==keyIndex)assert.deepEqual(k,base.doc.keys[i],`key ${i} changed`);});
+ await page.getByTestId('adjustment-tab-right').tap();
+ const forearmAfter=await rotationValues('joint-R-forearm-'),wristAfterElbow=await rotationValues('wrist-R-');
+ assert.notDeepEqual(forearmAfter,forearmBefore,'semantic elbow edit was not reflected in parent-relative forearm sliders');
+ await page.getByTestId('adjustment-tab-semantic').tap();
  await page.getByTestId('semantic-part-wrist').tap();await page.getByTestId('semantic-side-R').tap();
  await page.getByTestId('semantic-motion-flexion').tap();await page.getByTestId('semantic-plus').tap();
  assert.match(await page.getByTestId('semantic-report').innerText(),/掌屈：请求 5\.0°/);
  await page.getByTestId('semantic-commit').tap();
  const wristDoc=await read(page);
  assert.notDeepEqual(wristDoc.doc.keys[keyIndex].pose.handR.forward,edited.doc.keys[keyIndex].pose.handR.forward);
+ await page.getByTestId('adjustment-tab-right').tap();
+ const wristAfter=await rotationValues('wrist-R-');
+ assert.notDeepEqual(wristAfter,wristAfterElbow,'semantic wrist edit was not reflected in parent-relative wrist sliders');
+ await page.getByTestId('adjustment-tab-semantic').tap();
  checks.semanticArmAndWrist=true;
  // Thigh forward on a planted key: only the hip moves — knee and ankle angles hold.
  const legAngles=()=>page.evaluate(()=>{const r=window.__WS__.rig,ang=(a,b,c)=>{const p=r.point(a),q=r.point(b),w=r.point(c);return 180-p.clone().sub(q).angleTo(w.clone().sub(q))*180/Math.PI;};

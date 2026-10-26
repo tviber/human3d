@@ -1,10 +1,11 @@
 /* Motion Workshop layout — same design language as the lab viewer. */
 .ws-shell{height:100dvh;min-height:640px;display:grid;grid-template-rows:auto minmax(0,1fr) 132px;overflow:hidden}
 .ws-header{background:var(--card);display:flex;flex-wrap:wrap;gap:4px 10px;min-height:64px;align-items:center;justify-content:space-between;padding:6px 28px;border-bottom:1px solid var(--line);z-index:2}
-.ws-save-state{flex:0 0 100%;display:flex;align-items:center;gap:8px;min-width:0;font-size:11px;color:var(--muted)}
+.ws-save-state{flex:0 0 100%;display:flex;align-items:center;gap:8px;min-width:0;min-height:28px;font-size:11px;color:var(--muted)}
 .ws-save-state span{overflow-wrap:anywhere}
 .ws-save-state[data-state=error]{color:var(--red)}
 .ws-save-state button{display:inline-flex;align-items:center;gap:4px;flex-shrink:0;min-height:28px;padding:2px 6px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg-2)}
+.ws-save-state[data-state=saved] button{visibility:hidden}
 .ws-header .brand{display:flex;align-items:center;gap:11px}
 .ws-header .brand>svg{color:var(--blue)}
 .ws-header .brand>span{font-size:23px;font-weight:700;letter-spacing:-.7px}
@@ -248,7 +249,7 @@
 .ws-compact #ws-library,.ws-compact #ws-inspector{position:fixed !important;left:0;right:0;bottom:0;width:auto !important;height:auto !important;max-width:none !important;flex:none !important;z-index:40;max-height:min(74dvh,640px) !important;border-radius:18px 18px 0 0;background:var(--surface);box-shadow:0 -12px 40px rgb(15 23 42 / .22);transform:translateY(104%);visibility:hidden;transition:transform .28s cubic-bezier(.2,.8,.2,1),visibility 0s .28s}
 .ws-compact.ws-sheet-left #ws-library,.ws-compact.ws-sheet-right #ws-inspector{transform:none;visibility:visible;transition:transform .28s cubic-bezier(.2,.8,.2,1)}
 .ws-compact #ws-library>*,.ws-compact #ws-inspector>*{width:100% !important;height:auto !important;flex:none !important;overflow:visible !important}
-.ws-compact .ws-left,.ws-compact .ws-right{width:100%;height:auto;overflow-y:auto;max-height:min(74dvh,640px);border:0;padding:0 max(12px,env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left));overscroll-behavior:contain}
+.ws-compact .ws-left,.ws-compact .ws-right{width:100%;height:auto;overflow-y:auto;max-height:min(74dvh,640px);border:0;padding:0 max(12px,env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left));padding-right:max(20px,env(safe-area-inset-right));overscroll-behavior:contain}
 .ws-compact .ws-sheet-head{display:flex;position:sticky;top:0;z-index:2;align-items:center;justify-content:space-between;margin:0 -12px;padding:12px 16px 10px;background:var(--surface);border-bottom:1px solid var(--line)}
 .ws-compact .ws-sheet-head::before{content:'';position:absolute;top:5px;left:50%;width:36px;height:4px;margin-left:-18px;border-radius:2px;background:var(--line)}
 .ws-compact .ws-sheet-head strong{font-size:14px}

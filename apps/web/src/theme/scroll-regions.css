@@ -1,0 +1,16 @@
+/* Keep scrollable content clear of overlay scrollbars on macOS and phones.
+ * Classic scrollbars also reserve their gutter, so the inset stays consistent. */
+.scroll-region {
+  scrollbar-gutter: stable;
+  padding-inline-end: max(20px, var(--scroll-region-end-inset, 0px), env(safe-area-inset-right));
+}
+
+.motion-panel.scroll-region { --scroll-region-end-inset: 24px; }
+.inspector.scroll-region { --scroll-region-end-inset: 25px; }
+
+@media (max-width: 760px) {
+  .ws-compact .ws-key-panel.scroll-region {
+    scrollbar-gutter: auto;
+    padding-inline-end: 3px;
+  }
+}

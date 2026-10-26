@@ -42,5 +42,6 @@
 - **语义命令**走 `applySemanticEdit`（`packages/motion-core/src/semantic-edit.ts`）：白名单 `部位 × 侧别 × 动作 × 度数` → 编码进既有 `PoseParams` 字段（不改 schema）→ 生产 `frameAt → solveEffectiveFrame` → 从求解后的骨骼读回解剖角，返回 `requested/actual/residual/reason`；不足 0.5° 或带动支撑脚即 `ok:false`，界面显示原因，不报成功。输入文档不被修改：预览总从事务开始时的同一基底重算，确认 = 一条撤销记录，取消 = 恢复基底并丢掉该记录。
 - **只动被指令的关节**：髋 / 膝语义是对该关节以下的腿做刚性 FK（`foot.target/pole/yaw/pitch` 一起旋转），肩 / 肘同理（`rotateArmAbout`）；`CHILD_JOINTS` 列出必须不变的子关节角，超过 1.5° 判失败。支撑帧上调腿 = 本帧离地 + 相邻帧接管原接触点（显示姿态逐骨核对 ≤1 mm），并补偿掉被取消支撑后不再施加的自动骨盆后移。
 - 「落地」= `groundFoot`：只改本帧，竖直平移整体（自动骨盆后移保持为本帧原值并折算进 `root.z`），支撑腿重新求解；够不到 / 踝超限时拒绝，文档不变。
-- 现有 `rotateArmJoint` 的 lift/swing/twist 仍是工程轴，未改名为解剖术语；语义肩屈/外展用胸廓轴（`rotateArmAbout`），肘屈伸绕求解后的肘铰链。
+- 关节旋转条显示选中帧求解后的绝对角度，不保存组件内增量：大臂相对肩、小臂相对大臂、腕相对小臂，均以主骨之间的 YXZ 局部欧拉角读回；`lift/flex`、`swing/dev`、`twist` 分别对应 X/Y/Z。拖动时设置目标角并经现有姿态字段重解，语义调整和切帧后滑块必须反映真实骨骼姿态；分段 twist 骨只由求解器处理，不单独显示。
+- 底层 `rotateArmJoint` 的 lift/swing/twist 仍是工程轴 API，未改名为解剖术语；工作台绝对角度控件通过 `rotateArmAbout` 编码到现有手目标/肘 pole，腕角编码到手方向向量。语义肩屈/外展用胸廓轴，肘屈伸绕求解后的肘铰链。
 - 审阅反馈是会话态（不写 WorkshopDoc），导出为 `kind:'h3d-review-feedback'` JSON。

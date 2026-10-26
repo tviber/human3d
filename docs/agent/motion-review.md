@@ -78,9 +78,9 @@ node scripts/motion-review.mjs init <dir>/manifest.json [--round N] [--reference
 node scripts/motion-review.mjs check <dir>/review.json   # 退出码 0 仅当 verdict=pass
 ```
 
-`check` 是硬门禁，三种结果要分清：`PASS`（记录合法且无未解决发现，退出 0）、`HANDOFF`（记录合法但仍有真实发现/超轮次，退出 1——这是**审核未通过**，需要修复后开下一轮或按 handoff 移交，不是格式错误）、`INVALID`（记录违背契约，退出 1）。没逐张看图不给过、finding 缺字段不给过、声称「偏离参考」但参考 unverified 直接判错、**round > 3 必须填 handoff{reasons,humanItems} 移交人工**。没有综合评分。
+`check` 是硬门禁，三种结果要分清：`PASS`（记录合法且无未解决发现，退出 0）、`HANDOFF`（记录合法但仍有真实发现/超轮次，退出 1——这是**审核未通过**，需要修复后开下一轮或按 handoff 移交，不是格式错误）、`INVALID`（记录违背契约，退出 1）。没逐张看图不给过、finding 缺字段不给过、声称「偏离参考」但参考 unverified 直接判错、自动数值异常必须保留与 `numerical.flagged` 对应的 finding（只删 finding 会被拒绝；修复后用新 capture 重新 `init`）、**round > 3 必须填 handoff{reasons,humanItems} 移交人工且永不 PASS**。没有综合评分。
 
-`init` 的腕残差自动发现用的是**该时刻插值帧的腕目标**（`solved.right.wristTarget`），不是最近关键帧的目标；manifest 同时记录 `nearestKeyTarget`，中点处两者通常不同——拿关键帧目标去比会凭空产生 `ik-clamp`。
+`init` 的左右腕残差自动发现用的是**该时刻插值帧的腕目标**（`solved.right/left.wristTarget`），不是最近关键帧的目标；manifest 同时记录 `nearestKeyTarget`，中点处两者通常不同——拿关键帧目标去比会凭空产生 `ik-clamp`。
 
 **Step 6 · 修复或停止**：修复落在 WorkshopDoc/语义命令 → 复跑 Step 3–5（round+1）。第 3 轮仍不合格：停止，如实交付「失败部位 + 诊断证据 + 未解决原因 + 人工介入项」，不调宽阈值掩盖错误。
 

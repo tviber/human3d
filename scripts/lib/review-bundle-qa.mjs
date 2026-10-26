@@ -5,8 +5,8 @@ import {WRIST_RESIDUAL_FLAG_MM} from './motion-review.mjs';
 
 /** Verify a workshop-capture `--bundle` output as a real review loop, not just
  * as a set of files (issue #32 review): the manifest must carry bundle
- * identity, every referenced screenshot must exist, every midpoint's wrist
- * residual is computed against THAT frame's interpolated target and stays
+ * identity, every referenced screenshot must exist, both wrists at every
+ * midpoint are computed against THAT frame's interpolated targets and stay
  * under the flag threshold, at least one midpoint proves the interpolated
  * target is genuinely different from its nearest key target (the regression
  * that made healthy midpoints report `ik-clamp`), and `motion-review init` →
@@ -20,6 +20,7 @@ import {WRIST_RESIDUAL_FLAG_MM} from './motion-review.mjs';
 export const MIDPOINT_TARGET_DELTA_M=.05;
 
 const distance=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1],a[2]-b[2]);
+const WRIST_SIDES=['right','left'];
 
 /** Structural + numeric checks. Returns a report or throws with every problem. */
 export function verifyReviewBundleCapture(outputDir,{run=spawnSync,repoRoot=process.cwd()}={}){
@@ -39,20 +40,22 @@ export function verifyReviewBundleCapture(outputDir,{run=spawnSync,repoRoot=proc
  }
  const midpoints=shots.filter(shot=>shot.shotRole==='midpoint');
  if(!midpoints.length)fail('manifest 没有 midpoint 截图——审阅包必须覆盖关键帧区间中点');
+ const wristSamples=[];
  for(const shot of midpoints){
-  const solved=shot.solved?.right;
-  const mm=solved?.wristResidualMm;
-  if(!Number.isFinite(mm)){fail(`${shot.file}: 缺少 right.wristResidualMm`);continue;}
-  if(mm>WRIST_RESIDUAL_FLAG_MM)fail(`${shot.file}: 中点腕残差 ${mm} mm > ${WRIST_RESIDUAL_FLAG_MM} mm`);
-  if(!Array.isArray(solved.wristTarget)||!Array.isArray(solved.nearestKeyTarget))
-   fail(`${shot.file}: 缺少 wristTarget/nearestKeyTarget，无法证明残差用的是插值帧目标`);
+  for(const side of WRIST_SIDES){
+   const solved=shot.solved?.[side];
+   const mm=solved?.wristResidualMm;
+   if(!Number.isFinite(mm)){fail(`${shot.file}: 缺少 ${side}.wristResidualMm`);continue;}
+   wristSamples.push({file:shot.file,time:shot.time,side,mm});
+   if(mm>WRIST_RESIDUAL_FLAG_MM)fail(`${shot.file}: ${side} 中点腕残差 ${mm} mm > ${WRIST_RESIDUAL_FLAG_MM} mm`);
+   if(!Array.isArray(solved.wristTarget)||!Array.isArray(solved.nearestKeyTarget))
+    fail(`${shot.file}: 缺少 ${side}.wristTarget/${side}.nearestKeyTarget，无法证明残差用的是插值帧目标`);
+  }
  }
- const distinct=midpoints.find(shot=>{
-  const solved=shot.solved?.right;
-  return Array.isArray(solved?.wristTarget)&&Array.isArray(solved?.nearestKeyTarget)
-   &&distance(solved.wristTarget,solved.nearestKeyTarget)>=MIDPOINT_TARGET_DELTA_M;
- });
- if(!distinct)fail(`没有任何中点的插值目标与最近关键帧目标相差 ≥${MIDPOINT_TARGET_DELTA_M*100} cm——残差可能仍按最近关键帧目标计算`);
+ const distinct=midpoints.flatMap(shot=>WRIST_SIDES.map(side=>({shot,side,solved:shot.solved?.[side]})))
+  .find(({solved})=>Array.isArray(solved?.wristTarget)&&Array.isArray(solved?.nearestKeyTarget)
+   &&distance(solved.wristTarget,solved.nearestKeyTarget)>=MIDPOINT_TARGET_DELTA_M);
+ if(!distinct)fail(`没有任何中点左右腕的插值目标与最近关键帧目标相差 ≥${MIDPOINT_TARGET_DELTA_M*100} cm——残差可能仍按最近关键帧目标计算`);
 
  let initExit=null,checkExit=null,unviewed=null;
  if(!problems.length){
@@ -76,12 +79,12 @@ export function verifyReviewBundleCapture(outputDir,{run=spawnSync,repoRoot=proc
   }
  }
  if(problems.length)throw new Error(`review bundle 验收失败：\n  - ${problems.join('\n  - ')}`);
- const sample=distinct.solved.right;
+ const sample=distinct.solved;
  return {kind:'h3d-review-bundle-browser-qa',version:1,
   docDigest:manifest.bundle.docDigest,shots:shots.length,midpoints:midpoints.length,
   files:shots.map(shot=>shot.file),
-  midpointWristResiduals:midpoints.map(shot=>({file:shot.file,time:shot.time,mm:shot.solved.right.wristResidualMm})),
-  interpolatedTargetCheck:{file:distinct.file,time:distinct.time,
+  midpointWristResiduals:wristSamples,
+  interpolatedTargetCheck:{file:distinct.shot.file,time:distinct.shot.time,side:distinct.side,
    nearestKeyTargetDeltaM:+distance(sample.wristTarget,sample.nearestKeyTarget).toFixed(4),
    wristResidualMm:sample.wristResidualMm},
   review:{initExit,checkExit,unviewedShots:unviewed,blockedAsRequired:checkExit===1}};

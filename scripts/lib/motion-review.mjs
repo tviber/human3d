@@ -44,6 +44,7 @@ export function initReview(manifest,{round=1,reference}={}){
  }
  const findings=residuals.map((r,i)=>({id:`F${i+1}`,time:r.time,keyId:null,view:r.view,
   part:`腕（${r.side}）`,category:'ik-clamp',auto:true,
+  numericSource:{...r},
   evidence:`wristResidualMm ${r.mm}（>${WRIST_RESIDUAL_FLAG_MM}，来自 capture manifest ${r.file}）`,
   solveStatus:'numeric-invalid',referenceStatus:'unverified',
   suggestion:'先查目标是否超出臂长/限位（语义调整或收近目标），再复跑生产求解',uncertainty:''}));
@@ -90,12 +91,40 @@ export function checkReview(review){
  }
  const round=review.round;
  if(!Number.isInteger(round)||round<1)fail('round 必须是 ≥1 的整数');
+ const flagged=review?.numerical?.flagged;
+ if(!Array.isArray(flagged))fail('numerical.flagged 必须是数组；请从最新 capture manifest 重新 init');
+ const flaggedResiduals=Array.isArray(flagged)?flagged:[];
+ for(const residual of flaggedResiduals){
+  if(!residual||typeof residual!=='object'){
+   fail('numerical.flagged 每项必须是腕残差对象；请重新 capture/init');
+   continue;
+  }
+  const linked=findings.some(f=>f&&typeof f==='object'&&f.auto===true
+   &&f.category==='ik-clamp'&&f.numericSource
+   &&f.numericSource.file===residual.file&&f.numericSource.time===residual.time
+   &&f.numericSource.view===residual.view&&f.numericSource.side===residual.side
+   &&f.numericSource.mm===residual.mm);
+  if(!linked)fail(`numerical.flagged ${residual?.file??'?'}（${residual?.side??'?'}腕 ${residual?.mm??'?'} mm）缺少对应的自动 ik-clamp finding；请重新 capture/init，不能只删除 finding`);
+ }
+ const automaticFindings=findings.filter(f=>f&&typeof f==='object'&&f.auto===true&&f.numericSource);
+ for(const finding of automaticFindings){
+  const linked=flaggedResiduals.some(r=>r&&r.file===finding.numericSource.file&&r.time===finding.numericSource.time
+   &&r.view===finding.numericSource.view&&r.side===finding.numericSource.side&&r.mm===finding.numericSource.mm);
+  if(!linked)fail(`findings[${finding.id??'?'}] 的自动数值来源不在 numerical.flagged 中；请重新 capture/init`);
+ }
+ for(const residual of flaggedResiduals){
+  if(!Number.isFinite(residual?.mm)||residual.mm<=WRIST_RESIDUAL_FLAG_MM)
+   fail('numerical.flagged 只能包含超过阈值的有限腕残差；请重新 capture/init');
+ }
  const realFindings=findings.filter(f=>f&&typeof f==='object'&&f.category!=='reference-unjudgeable');
- const verdict=!problems.length&&!realFindings.length&&shots.every(s=>s&&s.visual==='ok')?'pass':'fail-with-handoff';
+ const handoff=review.handoff;
+ const validHandoff=!!handoff&&Array.isArray(handoff.reasons)&&handoff.reasons.length>0
+  &&Array.isArray(handoff.humanItems)&&handoff.humanItems.length>0;
+ if(round>MAX_ROUNDS&&!validHandoff)
+  fail(`round ${round} 已超过 ${MAX_ROUNDS} 轮上限：必须填写 handoff{reasons,humanItems} 移交人工，不允许继续调角度`);
+ const verdict=round<=MAX_ROUNDS&&!flaggedResiduals.length&&!problems.length&&!realFindings.length
+  &&shots.every(s=>s&&s.visual==='ok')?'pass':'fail-with-handoff';
  if(verdict==='fail-with-handoff'){
-  const handoff=review.handoff;
-  if(round>MAX_ROUNDS&&(!handoff||!Array.isArray(handoff.reasons)||!handoff.reasons.length||!Array.isArray(handoff.humanItems)||!handoff.humanItems.length))
-   fail(`round ${round} 已超过 ${MAX_ROUNDS} 轮上限：必须填写 handoff{reasons,humanItems} 移交人工，不允许继续调角度`);
   if(round<=MAX_ROUNDS&&!handoff&&realFindings.length&&round===MAX_ROUNDS)
    fail(`第 ${MAX_ROUNDS} 轮仍有 ${realFindings.length} 个未解决问题且没有 handoff——修复并开下一轮，或写 handoff 移交`);
  }

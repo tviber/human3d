@@ -15,6 +15,11 @@ const manifest=()=>({kind:'workshop-review-bundle',date:'2026-10-26T00:00:00Z',
   {file:'a-t0.5-front.png',time:.5,view:'front',shotRole:'key',nearestKey:{id:'k2'},solved:{right:{wristResidualMm:9},left:{wristResidualMm:1}}},
   {file:'a-t0.5-side.png',time:.5,view:'side',shotRole:'key',nearestKey:{id:'k2'},solved:{right:{wristResidualMm:1},left:{wristResidualMm:1}}},
  ]});
+const healthyManifest=()=>{
+ const value=manifest();
+ value.shots[1].solved.right.wristResidualMm=1;
+ return value;
+};
 
 const viewAll=(review:ReviewRecord,visual:'ok'|'suspect'='ok')=>{for(const s of review.shots)s.visual=visual;};
 
@@ -50,15 +55,26 @@ describe('checkReview — the gate',()=>{
   expect(r.verdict).toBe('fail-with-handoff');
   expect(r.problems.join('')).toContain('3 张图未查看');
  });
- it('passes only when everything is viewed ok and no real findings remain',()=>{
+ it('does not pass when an automatic numeric finding is deleted but its residual remains flagged',()=>{
   const review=initReview(manifest());
   viewAll(review);
-  review.findings=[];   // the residual finding was addressed in a previous round
+  review.findings=[];
+  const r=checkReview(review);
+  expect(r.valid).toBe(false);expect(r.ok).toBe(false);expect(r.verdict).toBe('fail-with-handoff');
+  expect(r.problems.join('')).toContain('numerical.flagged');
+ });
+ it('passes after a fresh capture reports no numeric residual flags',()=>{
+  const recaptured=manifest();
+  recaptured.shots[1].solved.right.wristResidualMm=1;
+  const review=initReview(recaptured);
+  viewAll(review);
+  expect(review.numerical.flagged).toEqual([]);
+  expect(review.findings).toEqual([]);
   const r=checkReview(review);
   expect(r.valid).toBe(true);expect(r.ok).toBe(true);expect(r.verdict).toBe('pass');
  });
  it('treats reference-unjudgeable as not blocking, but real findings force a handoff path',()=>{
-  const review=initReview(manifest());
+  const review=initReview(healthyManifest());
   viewAll(review);
   review.findings=[{id:'F1',time:.5,keyId:'k2',view:'front',part:'右腕',category:'reference-unjudgeable',evidence:'e',solveStatus:'numeric-valid',referenceStatus:'unverified',suggestion:'s',uncertainty:'u'}];
   expect(checkReview(review).verdict).toBe('pass');
@@ -69,7 +85,7 @@ describe('checkReview — the gate',()=>{
   expect(unresolved.ok).toBe(false);
  });
  it('rejects "deviates from reference" claims made while the reference is unverified',()=>{
-  const review=initReview(manifest());
+  const review=initReview(healthyManifest());
   viewAll(review);
   review.findings=[{id:'F1',time:.5,keyId:'k2',view:'front',part:'右腕',category:'deviates-from-reference',evidence:'e',solveStatus:'numeric-valid',referenceStatus:'unverified',suggestion:'s',uncertainty:'u'}];
   const r=checkReview(review);
@@ -103,7 +119,7 @@ describe('checkReview — the gate',()=>{
   expect(checkReview(review).problems.join('')).toContain('uncertainty');
  });
  it('enforces the rework bound: round > 3 needs a handoff, not more angle tweaks',()=>{
-  const review=initReview(manifest(),{round:MAX_ROUNDS+1});
+  const review=initReview(healthyManifest(),{round:MAX_ROUNDS+1});
   viewAll(review);
   review.findings=[{id:'F1',time:.5,keyId:'k2',view:'front',part:'右肘',category:'ik-clamp',evidence:'e',solveStatus:'numeric-invalid',referenceStatus:'unverified',suggestion:'s',uncertainty:'u'}];
   const bare=checkReview(review);
@@ -117,12 +133,28 @@ describe('checkReview — the gate',()=>{
    expect(handedOff.ok).toBe(false);
 
  });
+ it('cannot PASS after round 3 even when all findings were removed',()=>{
+  const review=initReview(manifest(),{round:MAX_ROUNDS+1});
+  viewAll(review);
+  review.findings=[];
+  review.numerical.flagged=[];
+  review.numerical.worstWristResidualMm=0;
+  const withoutHandoff=checkReview(review);
+  expect(withoutHandoff.ok).toBe(false);
+  expect(withoutHandoff.verdict).toBe('fail-with-handoff');
+  expect(withoutHandoff.problems.join('')).toContain(`超过 ${MAX_ROUNDS} 轮`);
+  review.handoff={reasons:['自动返工轮数已耗尽'],humanItems:['人工复核最终动作']};
+  const handedOff=checkReview(review);
+  expect(handedOff.valid).toBe(true);
+  expect(handedOff.ok).toBe(false);
+  expect(handedOff.verdict).toBe('fail-with-handoff');
+ });
 });
 
 describe('file round-trip',()=>{
  it('exits non-zero for a valid fail-with-handoff review record',()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'human3d-motion-review-cli-'));
-  const review=initReview(manifest());
+  const review=initReview(healthyManifest());
   viewAll(review);
   review.findings=[{id:'F1',time:.5,keyId:'k2',view:'front',part:'右腕',category:'ik-clamp',evidence:'残差 9 mm',solveStatus:'numeric-invalid',referenceStatus:'unverified',suggestion:'检查手腕目标',uncertainty:'当前数值只说明存在残差'}];
   const file=path.join(dir,'review.json');

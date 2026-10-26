@@ -26,20 +26,24 @@ beforeAll(async()=>{
  rig=new HumanRig(gltf.scene,JSON.parse(fs.readFileSync('public/models/rig.json','utf8')));
 },30000);
 
-type Solved={wristResidualMm:number;wristTarget:number[];nearestKeyTarget:number[]};
-/** Manifest `solved.right` per capture time, from the real frameAt → solve path. */
+type SolvedSide={wristResidualMm:number;wristTarget:number[];nearestKeyTarget:number[]};
+type Solved={right:SolvedSide;left:SolvedSide};
+/** Manifest wrist samples per capture time, from the real frameAt → solve path. */
 const solvedShots=(mode:'interpolated'|'nearest-key')=>{
  const doc=parseDoc(fs.readFileSync(FIXTURE,'utf8'));
  return timesForBundle(doc).map((time:number)=>{
   const frame=frameAt(doc,time,rig.rest.get('root')!);
   solveEffectiveFrame(rig,frame);
   const key=doc.keys.reduce((best,key)=>Math.abs(key.time-time)<Math.abs(best.time-time)?key:best,doc.keys[0]);
-  const target=mode==='interpolated'?frame.pose.handR.target:key.pose.handR.target;
-  const wrist=rig.point('wrist_R');
-  return {role:shotRole(doc,time),solved:{right:{
-   wristResidualMm:Math.round(wrist.distanceTo(new Vector3(target.x,target.y,target.z))*1000),
-   wristTarget:mode==='interpolated'?Object.values(frame.pose.handR.target):Object.values(key.pose.handR.target),
-   nearestKeyTarget:Object.values(key.pose.handR.target)}}};
+  const read=(side:'L'|'R')=>{
+   const hand=side==='R'?'handR':'handL';
+   const target=mode==='interpolated'?frame.pose[hand].target:key.pose[hand].target;
+   const wrist=rig.point(`wrist_${side}`);
+   return {wristResidualMm:Math.round(wrist.distanceTo(new Vector3(target.x,target.y,target.z))*1000),
+    wristTarget:mode==='interpolated'?Object.values(frame.pose[hand].target):Object.values(key.pose[hand].target),
+    nearestKeyTarget:Object.values(key.pose[hand].target)};
+  };
+  return {role:shotRole(doc,time),solved:{right:read('R'),left:read('L')}};
  });
 };
 
@@ -64,6 +68,9 @@ describe('review-bundle acceptance',()=>{
   const result=verifyReviewBundleCapture(dir);
   expect(result.shots).toBeGreaterThan(0);
   expect(result.midpoints).toBeGreaterThan(0);
+  expect(result.midpointWristResiduals).toHaveLength(result.midpoints*2);
+  expect(result.midpointWristResiduals.some(r=>r.side==='left')).toBe(true);
+  expect(result.midpointWristResiduals.some(r=>r.side==='right')).toBe(true);
   expect(result.interpolatedTargetCheck.nearestKeyTargetDeltaM).toBeGreaterThanOrEqual(MIDPOINT_TARGET_DELTA_M);
   expect(result.midpointWristResiduals.every(r=>r.mm<=WRIST_RESIDUAL_FLAG_MM)).toBe(true);
   expect(result.review.blockedAsRequired).toBe(true);
@@ -75,6 +82,13 @@ describe('review-bundle acceptance',()=>{
   const inflated=shots.filter(s=>s.role==='midpoint'&&s.solved.right.wristResidualMm>WRIST_RESIDUAL_FLAG_MM);
   expect(inflated.length, 'the buggy form must visibly inflate at least one healthy midpoint').toBeGreaterThan(0);
   expect(()=>verifyReviewBundleCapture(dir)).toThrow(/中点腕残差/);
+ },60000);
+ it('rejects a left-wrist midpoint residual above the threshold',()=>{
+  const shots=solvedShots('interpolated');
+  const leftMidpoint=shots.find(s=>s.role==='midpoint')!.solved.left;
+  leftMidpoint.wristResidualMm=WRIST_RESIDUAL_FLAG_MM+1;
+  const dir=writeBundle(fs.mkdtempSync(path.join(os.tmpdir(),'h3d-bundle-left-wrist-')),shots);
+  expect(()=>verifyReviewBundleCapture(dir)).toThrow(/left\.wristResidualMm|left.*中点腕残差/);
  },60000);
  it('rejects a capture that is not a review bundle',()=>{
   const dir=writeBundle(fs.mkdtempSync(path.join(os.tmpdir(),'h3d-bundle-plain-')),solvedShots('interpolated'),{manifestKind:'plain'});

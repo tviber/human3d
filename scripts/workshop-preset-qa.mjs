@@ -68,7 +68,7 @@ try{
  });
  const presets=await page.evaluate(async url=>{
   const {MOTION_FILES}=await import(url);
-  return MOTION_FILES.map(p=>({id:p.id,name:p.name,kind:p.kind,document:p.document}));
+  return MOTION_FILES.map(p=>({id:p.id,name:p.name,kind:p.kind,category:p.category,capabilities:p.capabilities,document:p.document}));
  },`/@fs/${path.resolve(repoRoot,'packages/motion-core/src/motion-files.ts')}`);
  // Issue #30 PR-B: user motions lead the panel; the preset entry lives in a
  // collapsed fold below it and opens on demand.
@@ -79,7 +79,13 @@ try{
  const presetBox=await startButton.boundingBox(),firstMotionBox=await page.locator('.ws-lib-row').first().boundingBox();
  assert(presetBox&&firstMotionBox&&presetBox.y>firstMotionBox.y,
   'preset start fold must sit below the user motion list (user data first)');
- assert.deepEqual(await select.locator('option').evaluateAll(opts=>opts.map(o=>o.value)),presets.filter(p=>p.kind==='workshop-motion').map(p=>p.id));
+ const presetIds=presets.filter(p=>p.kind==='workshop-motion'&&p.document);
+ const expectedPresetIds=[
+  ...presetIds.filter(p=>p.category==='basic'),
+  ...presetIds.filter(p=>p.capabilities?.prop?.kind==='racket'),
+  ...presetIds.filter(p=>p.category!=='basic'&&!p.capabilities?.prop),
+ ].map(p=>p.id);
+ assert.deepEqual(await select.locator('option').evaluateAll(opts=>opts.map(o=>o.value)),expectedPresetIds);
  const before=(await read()).doc;
  const preset=presets.find(p=>p.id==='forehand');
  await select.selectOption(preset.id);

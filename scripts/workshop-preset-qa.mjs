@@ -64,11 +64,14 @@ try{
  // The workshop starts in review mode with both side panels collapsed (低密度
  // default) — every authoring control below lives behind those three states.
  // Restore them through the real toggles; after a reload the app resets, so
- // every reload site calls this again before touching panel content.
+ // every reload site calls this again before touching panel content. The
+ // library toggle runs FIRST: its setLayout reads back the inspector's current
+ // width, so resizing the inspector before it would race the panel update and
+ // re-collapse the side the edit mode just opened.
  const reopenPanels=async()=>{
-  if(await page.getByTestId('mode-edit').getAttribute('aria-pressed')!=='true')await page.getByTestId('mode-edit').click();
   const sheetLeft=page.getByTestId('sheet-left');
   if(await sheetLeft.getAttribute('aria-expanded')!=='true')await sheetLeft.click();
+  if(await page.getByTestId('mode-edit').getAttribute('aria-pressed')!=='true')await page.getByTestId('mode-edit').click();
  };
  // Library saves are async; a reload rehydrates from storage, so every reload
  // site first waits until storage carries the expected active document.

@@ -19,6 +19,7 @@ try{
  fs.writeFileSync(target,`${JSON.stringify(result,null,2)}\n`);
  console.log(`✓ ${result.shots} 张截图（${result.midpoints} 个中点）· 中点腕残差 ≤5 mm · 插值目标差 ${result.interpolatedTargetCheck.nearestKeyTargetDeltaM} m（≥${MIDPOINT_TARGET_DELTA_M} m）`);
  console.log(`✓ motion-review init(${result.review.initExit}) → 未查看 ${result.review.unviewedShots} 张 → check(${result.review.checkExit}) 已拦截`);
+ console.log(`✓ 正向契约样例：完整填写 ${result.review.completeLedgerShots}/${result.shots} 张截图 → check(PASS/${result.review.completeLedgerExit})`);
  console.log(`→ ${target}`);
 }catch(error){
  console.error(error instanceof Error?error.message:String(error));

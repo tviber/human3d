@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import {createHash} from 'node:crypto';
+import {canonicalJson} from './review-bundle.mjs';
 
 /** Structured motion-review record + bounded-rework gate (issue #32 B3/B5).
  * `init` turns a workshop-capture `--bundle` manifest into a review.json
@@ -29,19 +31,31 @@ export const CATEGORY_NOTES={
  'reference-unjudgeable':'参考未标定/遮挡，无法判定',
 };
 
+const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
+const sameJson=(a,b)=>canonicalJson(a)===canonicalJson(b);
+const shotIdentity=shot=>({file:shot?.file??null,time:shot?.time??null,view:shot?.view??null,
+ keyId:shot?.keyId??shot?.nearestKey?.id??null,shotRole:shot?.shotRole??'key'});
+const reviewShotIdentity=shot=>({file:shot?.file??null,time:shot?.time??null,view:shot?.view??null,
+ keyId:shot?.keyId??null,shotRole:shot?.shotRole??'key'});
+
+function numericResidualsFromManifest(manifest){
+ const residuals=[];
+ for(const shot of manifest.shots){
+  for(const side of ['right','left']){
+   const mm=shot.solved?.[side]?.wristResidualMm;
+   if(Number.isFinite(mm)&&mm>WRIST_RESIDUAL_FLAG_MM)
+    residuals.push({file:shot.file,time:shot.time,view:shot.view,side:side==='right'?'R':'L',mm});
+  }
+ }
+ return residuals;
+}
+
 /** Build the skeleton review record from a capture-bundle manifest. */
 export function initReview(manifest,{round=1,reference}={}){
  if(manifest.kind!=='workshop-review-bundle')throw new Error('需要 workshop-capture --bundle 生成的 manifest（含文档摘要与 key/midpoint 角色）');
  const shots=manifest.shots.map(s=>({file:s.file,time:s.time,view:s.view,keyId:s.nearestKey?.id??null,
   shotRole:s.shotRole??'key',visual:null,note:''}));
- const residuals=[];
- for(const s of manifest.shots){
-  for(const side of ['right','left']){
-   const mm=s.solved?.[side]?.wristResidualMm;
-   if(Number.isFinite(mm)&&mm>WRIST_RESIDUAL_FLAG_MM)
-    residuals.push({file:s.file,time:s.time,view:s.view,side:side==='right'?'R':'L',mm});
-  }
- }
+ const residuals=numericResidualsFromManifest(manifest);
  const findings=residuals.map((r,i)=>({id:`F${i+1}`,time:r.time,keyId:null,view:r.view,
   part:`腕（${r.side}）`,category:'ik-clamp',auto:true,
   numericSource:{...r},
@@ -50,7 +64,7 @@ export function initReview(manifest,{round=1,reference}={}){
   suggestion:'先查目标是否超出臂长/限位（语义调整或收近目标），再复跑生产求解',uncertainty:''}));
  return {kind:REVIEW_KIND,version:REVIEW_VERSION,round,
   docDigest:manifest.bundle?.docDigest??null,revision:manifest.bundle?.revision??null,
-  doc:manifest.document,capture:{manifestSource:null,shots:shots.length,views:manifest.views},
+  doc:manifest.document,capture:{manifestSource:null,manifestDigest:null,shots:shots.length,views:manifest.views},
   reference:reference??{available:false,aligned:false,note:'无参考帧或相机未标定：一切「接近参考」的结论都只能是 unverified'},
   shots,findings,
   numerical:{worstWristResidualMm:residuals.length?Math.max(...residuals.map(r=>r.mm)):0,flagged:residuals},
@@ -58,7 +72,7 @@ export function initReview(manifest,{round=1,reference}={}){
 }
 
 /** Validate a filled review record. Returns every contract violation. */
-export function checkReview(review){
+export function checkReview(review,{manifest,manifestDigest,requireCaptureReference=false}={}){
  const problems=[];
  const fail=(m)=>problems.push(m);
  if(review?.kind!==REVIEW_KIND||review?.version!==REVIEW_VERSION)fail(`必须是 ${REVIEW_KIND} v${REVIEW_VERSION}`);
@@ -66,6 +80,35 @@ export function checkReview(review){
  if(review.findings!==undefined&&!Array.isArray(review.findings))fail('findings 必须是数组');
  const shots=Array.isArray(review.shots)?review.shots:[];
  const findings=Array.isArray(review.findings)?review.findings:[];
+ if(!manifest||manifest.kind!=='workshop-review-bundle'||!Array.isArray(manifest.shots))
+  fail('必须重新读取原始 workshop-review-bundle manifest 才能检查 review');
+ else{
+  const expectedShots=manifest.shots.map(shotIdentity);
+  const recordedShots=shots.map(reviewShotIdentity);
+  if(!sameJson(recordedShots,expectedShots))
+   fail(`review.shots 与原始 manifest 不一致（${recordedShots.length}/${expectedShots.length}）；必须保留完整截图清单`);
+  if(review?.capture?.shots!==manifest.shots.length)
+   fail('capture.shots 与原始 manifest 截图数不一致');
+  if(!sameJson(review?.capture?.views,manifest.views??[]))
+   fail('capture.views 与原始 manifest 不一致');
+  if(!sameJson(review?.doc,manifest.document))
+   fail('review.doc 与原始 manifest 不一致');
+  if(review?.docDigest!==manifest.bundle?.docDigest||review?.revision!==manifest.bundle?.revision)
+   fail('文档摘要或 revision 与原始 manifest 不一致');
+  const expectedResiduals=numericResidualsFromManifest(manifest);
+  if(!sameJson(review?.numerical?.flagged,expectedResiduals))
+   fail('numerical.flagged 与原始 manifest 的左右腕残差不一致');
+ }
+ if(requireCaptureReference){
+  const source=review?.capture?.manifestSource;
+  const recordedDigest=review?.capture?.manifestDigest;
+  if(typeof source!=='string'||!source.trim()||path.isAbsolute(source))
+   fail('capture.manifestSource 必须是相对路径；请从原始 manifest 重新 init');
+  if(typeof recordedDigest!=='string'||!/^[a-f0-9]{64}$/i.test(recordedDigest))
+   fail('缺少 capture.manifestDigest；请从原始 manifest 重新 init');
+  else if(recordedDigest!==manifestDigest)
+   fail('原始 manifest 文件内容已变化；请从当前 capture 重新 init');
+ }
  let unseen=0,unnoted=0;
  for(const s of shots){
   if(!s||typeof s!=='object'){fail('shot 必须是对象');continue;}
@@ -134,19 +177,51 @@ export function checkReview(review){
 
 /** init CLI: read manifest, write skeleton beside it. */
 export function initFromManifestFile(manifestPath,{round,referenceFrames=[],out}={}){
- const manifest=JSON.parse(fs.readFileSync(manifestPath,'utf8'));
+ const manifestBytes=fs.readFileSync(manifestPath);
+ const manifest=JSON.parse(manifestBytes.toString('utf8'));
  const reference=referenceFrames.length
   ?{available:true,aligned:false,frames:referenceFrames,note:'相机未标定：视觉并排相似不等于重投影一致'}
   :undefined;
  const review=initReview(manifest,{round,reference});
- review.capture.manifestSource=path.basename(manifestPath);
  const target=out??path.join(path.dirname(path.resolve(manifestPath)),'review.json');
- fs.writeFileSync(target,JSON.stringify(review,null,2)+'\n');
+ const resolvedTarget=path.resolve(target);
+ const resolvedManifest=path.resolve(manifestPath);
+ if(resolvedTarget===resolvedManifest)throw new Error('review 输出路径不能覆盖原始 manifest');
+ review.capture.manifestSource=path.relative(path.dirname(resolvedTarget),resolvedManifest).replaceAll('\\','/');
+ review.capture.manifestDigest=sha256(manifestBytes);
+ fs.writeFileSync(resolvedTarget,JSON.stringify(review,null,2)+'\n');
  return {review,target};
 }
 
 /** check CLI: load, validate, report; exit code comes from ok. */
 export function checkReviewFile(reviewPath){
  const review=JSON.parse(fs.readFileSync(reviewPath,'utf8'));
- return {review,result:checkReview(review)};
+ const source=review?.capture?.manifestSource;
+ let manifest=null,manifestDigest=null,manifestPath=null,sourceError=null;
+ if(typeof source!=='string'||!source.trim()||path.isAbsolute(source))sourceError='capture.manifestSource 必须是相对路径';
+ else{
+  manifestPath=path.resolve(path.dirname(path.resolve(reviewPath)),source);
+  try{
+   const bytes=fs.readFileSync(manifestPath);
+   manifestDigest=sha256(bytes);
+   manifest=JSON.parse(bytes.toString('utf8'));
+  }catch(error){sourceError=`无法读取原始 capture manifest：${error instanceof Error?error.message:String(error)}`;}
+ }
+ const result=checkReview(review,{manifest,manifestDigest,requireCaptureReference:true});
+ if(sourceError){result.problems.unshift(sourceError);result.valid=false;result.ok=false;result.verdict='fail-with-handoff';}
+ if(manifest&&manifestPath){
+  const missing=[];
+  for(const shot of Array.isArray(manifest.shots)?manifest.shots:[]){
+   if(typeof shot?.file!=='string'||!shot.file||path.basename(shot.file)!==shot.file){
+    missing.push(shot?.file??'<missing file>');
+    continue;
+   }
+   if(!fs.existsSync(path.join(path.dirname(manifestPath),shot.file)))missing.push(shot.file);
+  }
+  if(missing.length){
+   result.problems.push(`原始 manifest 引用的截图缺失：${missing.join('、')}`);
+   result.valid=false;result.ok=false;result.verdict='fail-with-handoff';
+  }
+ }
+ return {review,result};
 }

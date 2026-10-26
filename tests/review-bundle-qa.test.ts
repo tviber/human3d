@@ -75,6 +75,9 @@ describe('review-bundle acceptance',()=>{
   expect(result.midpointWristResiduals.every(r=>r.mm<=WRIST_RESIDUAL_FLAG_MM)).toBe(true);
   expect(result.review.blockedAsRequired).toBe(true);
   expect(result.review.checkExit).toBe(1);
+  expect(result.review.completeLedgerExit).toBe(0);
+  expect(result.review.completeLedgerShots).toBe(result.shots);
+  expect(result.review.completeLedgerPass).toBe(true);
  },60000);
  it('rejects the nearest-keyframe residual as fabricated midpoint residuals and a false ik-clamp',()=>{
   const shots=solvedShots('nearest-key');

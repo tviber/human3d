@@ -80,7 +80,9 @@ node scripts/motion-review.mjs check <dir>/review.json   # 退出码 0 仅当 ve
 
 `check` 是硬门禁，三种结果要分清：`PASS`（记录合法且无未解决发现，退出 0）、`HANDOFF`（记录合法但仍有真实发现/超轮次，退出 1——这是**审核未通过**，需要修复后开下一轮或按 handoff 移交，不是格式错误）、`INVALID`（记录违背契约，退出 1）。没逐张看图不给过、finding 缺字段不给过、声称「偏离参考」但参考 unverified 直接判错、自动数值异常必须保留与 `numerical.flagged` 对应的 finding（只删 finding 会被拒绝；修复后用新 capture 重新 `init`）、**round > 3 必须填 handoff{reasons,humanItems} 移交人工且永不 PASS**。没有综合评分。
 
-`init` 的左右腕残差自动发现用的是**该时刻插值帧的腕目标**（`solved.right/left.wristTarget`），不是最近关键帧的目标；manifest 同时记录 `nearestKeyTarget`，中点处两者通常不同——拿关键帧目标去比会凭空产生 `ik-clamp`。
+`init` 将原始 manifest 的相对路径和文件 SHA-256 写进 review。`check` 会重新读取这份 manifest，并核对原文件未变化、文档摘要、完整截图身份清单、左右腕异常与对应 finding，以及每张截图文件是否存在；删除部分 `shots`，或同时清空 `findings` 和 `numerical.flagged`，都会被拒绝。修复后用新 capture 重新 `init`。
+
+左右腕残差自动发现用的是**该时刻插值帧的腕目标**（`solved.right/left.wristTarget`），不是最近关键帧的目标；manifest 同时记录 `nearestKeyTarget`，中点处两者通常不同——拿关键帧目标去比会凭空产生 `ik-clamp`。
 
 **Step 6 · 修复或停止**：修复落在 WorkshopDoc/语义命令 → 复跑 Step 3–5（round+1）。第 3 轮仍不合格：停止，如实交付「失败部位 + 诊断证据 + 未解决原因 + 人工介入项」，不调宽阈值掩盖错误。
 
@@ -106,7 +108,7 @@ node scripts/motion-review.mjs check <dir>/review.json   # 退出码 0 仅当 ve
 
 ## 4. 移交与边界
 
-- **本机（macpro）禁跑任何浏览器自动化**（kernel panic）；Step 3 的 capture 在 CI 或其他开发机执行。固定输入可复现：同一 doc + 版本 + 视角集合 → 相同图片与摘要（时间戳/机器环境除外）。`browser-qa` workflow 的「Capture and review the real issue-32 bundle」步骤用 `evidence/issue-32/ready-swing-contact.workshop.json` 跑真实导入 → key+中点截图 → manifest → `motion-review init/check`，再由 `scripts/review-bundle-browser-qa.mjs` 断言中点腕残差 ≤5 mm、至少一个中点的插值目标与最近关键帧目标相差 ≥5 cm（防回归到「拿关键帧目标算中点残差」），并确认未查看的 review 记录会被 `check` 拦下。
+- **本机（macpro）禁跑任何浏览器自动化**（kernel panic）；Step 3 的 capture 在 CI 或其他开发机执行。固定输入可复现：同一 doc + 版本 + 视角集合 → 相同图片与摘要（时间戳/机器环境除外）。`browser-qa` workflow 的「Capture and review the real issue-32 bundle」步骤用 `evidence/issue-32/ready-swing-contact.workshop.json` 跑真实导入 → key+中点截图 → manifest → `motion-review init/check`，由 `scripts/review-bundle-browser-qa.mjs` 断言左右腕中点残差 ≤5 mm、插值目标与最近关键帧目标有实质差异、manifest 完整性与未查看门禁；随后将完整 shot ledger 标为 `ok` 跑 CLI 正向 PASS 契约样例。这个自动填写仅验证真实截图与 CLI 记录的完整数据路径，不表示 CI 做了视觉判断；真正的视觉 `ok` 仍须 agent/人工逐图查看。
 - 工具为 CLI/Agent-first：不在工作台加 UI 面板、不建新渲染器、不新增图像依赖（PNG codec 为 `scripts/lib/png.mjs` 零依赖实现）。review 过程不修改用户动作——capture 只读导入，修改必须经确认的 WorkshopDoc/语义命令路径。
 - C（#21 参考量化诊断）在真实接口合并前保持阻塞并如实标记，不复制 solver。
 - 保存/撤销/导入/回放/JSON/GLB 旧路径不受影响：本环只读消费 `workshop-capture` 产物。

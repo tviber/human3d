@@ -57,7 +57,7 @@ export function verifyReviewBundleCapture(outputDir,{run=spawnSync,repoRoot=proc
    &&distance(solved.wristTarget,solved.nearestKeyTarget)>=MIDPOINT_TARGET_DELTA_M);
  if(!distinct)fail(`没有任何中点左右腕的插值目标与最近关键帧目标相差 ≥${MIDPOINT_TARGET_DELTA_M*100} cm——残差可能仍按最近关键帧目标计算`);
 
- let initExit=null,checkExit=null,unviewed=null;
+ let initExit=null,checkExit=null,unviewed=null,completeLedgerExit=null,completeLedgerShots=null;
  if(!problems.length){
   const json=args=>run(process.execPath,args,{cwd:repoRoot,encoding:'utf8'});
   const init=json(['scripts/motion-review.mjs','init',manifestPath]);
@@ -76,6 +76,21 @@ export function verifyReviewBundleCapture(outputDir,{run=spawnSync,repoRoot=proc
    if(check.status!==1)fail(`未查看的 review 必须以退出码 1 拦截，实际 ${check.status}`);
    if(out.includes('判定: PASS'))fail('未查看的 review 被判定为 PASS');
    if(!/未查看|INVALID/.test(out))fail('check 没有报告未查看的 shot');
+   if(review.findings.length)fail(`正向审阅契约样例要求数值 finding 为空，实际 ${review.findings.length} 条`);
+   else{
+    // This is a contract fixture over the real screenshots, not a claim that
+    // CI performed visual judgement. It proves every captured image can be
+    // represented in a complete review ledger and that the real CLI accepts
+    // that fully-filled record only after loading its original manifest.
+    for(const shot of review.shots){shot.visual='ok';shot.note='';}
+    fs.writeFileSync(reviewPath,JSON.stringify(review,null,2)+'\n');
+    const complete=json(['scripts/motion-review.mjs','check',reviewPath]);
+    completeLedgerExit=complete.status;
+    completeLedgerShots=review.shots.length;
+    const completeOut=`${complete.stdout??''}${complete.stderr??''}`;
+    if(complete.status!==0||!completeOut.includes('判定: PASS'))
+     fail(`完整审阅记录必须从原始 manifest 返回 PASS/0，实际 ${complete.status}：${complete.stderr||complete.stdout}`);
+   }
   }
  }
  if(problems.length)throw new Error(`review bundle 验收失败：\n  - ${problems.join('\n  - ')}`);
@@ -87,5 +102,6 @@ export function verifyReviewBundleCapture(outputDir,{run=spawnSync,repoRoot=proc
   interpolatedTargetCheck:{file:distinct.shot.file,time:distinct.shot.time,side:distinct.side,
    nearestKeyTargetDeltaM:+distance(sample.wristTarget,sample.nearestKeyTarget).toFixed(4),
    wristResidualMm:sample.wristResidualMm},
-  review:{initExit,checkExit,unviewedShots:unviewed,blockedAsRequired:checkExit===1}};
+  review:{initExit,checkExit,unviewedShots:unviewed,blockedAsRequired:checkExit===1,
+   completeLedgerExit,completeLedgerShots,completeLedgerPass:completeLedgerExit===0&&completeLedgerShots===shots.length}};
 }

@@ -48,7 +48,7 @@ interface ActionDescriptor{
 const BUNDLED_PARAMS={type:'object',additionalProperties:false,properties:{}};
 const WORKSHOP_DOC_PARAMS={
  type:'object',additionalProperties:false,required:['document'],
- properties:{document:{type:'object',description:`WorkshopDoc v2 JSON: named keyframes with pose targets and constraints (plantL/plantR/grip/contact); each key may select its outgoing interpolation ('hermite' or 'linear', default 'hermite'); optional freeArms=true allows arm and wrist rotation beyond anatomical bend limits; optional document flags such as clavicleLift and gripSide ('R'|'L', default 'R' — which hand holds the racket and gets the grip solve). Solved by the kinematic FK/IK pipeline; at most ${WORKSHOP_LIMITS.maxDuration} s and ${WORKSHOP_LIMITS.maxKeys} keys. schemaVersion must be 2 — older documents are refused (400 validation_failed), never silently upgraded.`}},
+ properties:{document:{type:'object',description:`WorkshopDoc v2 JSON: named keyframes with pose targets and constraints (plantL/plantR/grip/contact); each key may select its outgoing interpolation ('hermite' or 'linear', default 'hermite'), and its pose may set handSpread {L?,R?} in 0–1 (0 fist, 0.5 relaxed — the absent default, 1 open; a sampled pose channel that changes the solved finger joints). Optional freeArms=true allows arm and wrist rotation beyond anatomical bend limits; optional document flags such as clavicleLift, gripSide ('R'|'L', default 'R' — which hand holds the racket and gets the grip solve) and gripBevel (integer 1–8, default 1 — which of the handle's eight palm-relative bevels rests against the palm; orients the prop only, not a solve input). Solved by the kinematic FK/IK pipeline; at most ${WORKSHOP_LIMITS.maxDuration} s and ${WORKSHOP_LIMITS.maxKeys} keys. schemaVersion must be 2 — older documents are refused (400 validation_failed), never silently upgraded.`}},
 };
 const IDEMPOTENCY_KEY=new RegExp(`^[!-~]{1,${LIMITS_SVC.idempotencyKeyMaxLength}}$`);
 
@@ -191,7 +191,7 @@ function solveMotion(ctx:ServiceContext,body:unknown,headers:Record<string,strin
  const motionId=artifactId(fp,definitionSHA256,ctx,SOLVER_NAME);
  const meta=(id:string)=>workshopMeta({motionId:id,manifestSHA256:ctx.manifest.manifestSHA256,bones:ctx.manifest.bones.length,
   actionId,revision,definitionSHA256,documentName:requestDoc?.name,
-  prop:doc.keys.some(k=>k.constraints?.grip),loop:doc.loop,gripSide:doc.gripSide,
+  prop:doc.keys.some(k=>k.constraints?.grip),loop:doc.loop,gripSide:doc.gripSide,bevel:doc.gripBevel,
   source:descriptor.provenance.source,license:descriptor.provenance.license,requestFingerprint:fp,
   fps,duration:doc.duration,keys:doc.keys.length,notes:descriptor.notes});
  const pkg=solveWorkshop(ctx.rig,doc,fps,meta(motionId),descriptor.phases);

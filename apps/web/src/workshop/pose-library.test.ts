@@ -2,7 +2,7 @@ import {beforeAll,describe,expect,it} from 'vitest';
 import fs from 'node:fs';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import type {WorkshopDoc} from '@human3d/motion-core';
-import {HumanRig,blankDocument,frameAt,motionFileById,sortedKeys,solveEffectiveFrame} from '@human3d/motion-core';
+import {HumanRig,blankDocument,flattenPose,frameAt,motionFileById,RELAXED_SPREAD,sortedKeys,solveEffectiveFrame} from '@human3d/motion-core';
 import {applyPoseAt,isPoseShape,PoseLibrary,type StorageLike} from './pose-library';
 
 const docOf=(id:string)=>structuredClone(motionFileById(id)!.document!) as WorkshopDoc;
@@ -58,6 +58,28 @@ describe('PoseLibrary',()=>{
   expect(isPoseShape(idle.keys[0].pose)).toBe(true);
   expect(isPoseShape({})).toBe(false);
  });
+ it('rejects a malformed handSpread and drops presets carrying one on load',()=>{
+  // handSpread is optional: absent (the legacy shape), an empty object (both
+  // sides relaxed) and the closed/open boundaries are all storable shapes.
+  const base=structuredClone(idle.keys[0].pose);
+  expect(isPoseShape({...base,handSpread:{L:.2,R:.8}})).toBe(true);
+  expect(isPoseShape({...base,handSpread:{}})).toBe(true);
+  expect(isPoseShape({...base,handSpread:{L:0,R:1}})).toBe(true);
+  const malformed:unknown[]=[null,42,'.5',[],[.5,.5],{l:.2},{L:.2,X:.5},
+   {L:-.01},{R:1.01},{L:Number.NaN},{R:Number.POSITIVE_INFINITY},{L:'0.2'},{R:true}];
+  for(const spread of malformed)
+   expect(isPoseShape({...structuredClone(base),handSpread:spread}),`handSpread ${JSON.stringify(spread)}`).toBe(false);
+  // …and load() filters such presets out instead of keeping a pose whose
+  // finger channels would flatten to NaN downstream.
+  const {store}=memoryStore();
+  store.setItem('kinesis-workshop-poses',JSON.stringify([
+   {id:'bad',name:'坏手指',pose:{...structuredClone(base),handSpread:{L:2}}},
+   {id:'ok',name:'好手指',pose:{...structuredClone(base),handSpread:{L:.2,R:.8}}},
+  ]));
+  const lib=new PoseLibrary(store).load();
+  expect(lib.presets.map(p=>p.id)).toEqual(['ok']);
+  expect(lib.presets[0].pose.handSpread).toEqual({L:.2,R:.8});
+ });
 });
 
 describe('applyPoseAt',()=>{
@@ -72,6 +94,24 @@ describe('applyPoseAt',()=>{
   expect(target.pose).toEqual(idle.keys[2].pose);
   expect(target.constraints).toEqual(before.constraints);
   expect(target.time).toBe(before.time);
+ });
+ it('applying a legacy pose with no handSpread resets a prior shaped key to relaxed',()=>{
+  const doc=docOf('idle');
+  const key=doc.keys[1];
+  // Shape the key through the real write path first: a preset carrying
+  // handSpread stamps its finger shape onto the key.
+  const shaped=structuredClone(key.pose);shaped.handSpread={L:.1,R:.9};
+  applyPoseAt(doc,shaped,key.time,origin);
+  expect(key.pose.handSpread).toEqual({L:.1,R:.9});
+  // A preset captured before handSpread existed has no key at all. Absence is
+  // the canonical relaxed value, so it must CLEAR the old fist/open hand —
+  // not leave the shaped channels behind the way Object.assign alone would.
+  const legacy=structuredClone(idle.keys[2].pose);
+  delete legacy.handSpread;
+  const report=applyPoseAt(doc,legacy,key.time,origin);
+  expect(report?.result).toBe('replaced');
+  expect(key.pose.handSpread).toBeUndefined();
+  expect(flattenPose(key.pose).slice(-2)).toEqual([RELAXED_SPREAD,RELAXED_SPREAD]);
  });
  it('inserts a new key carrying the pose when the playhead is between keys',()=>{
   const doc=docOf('idle');

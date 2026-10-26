@@ -24,7 +24,10 @@ export const isPoseShape=(v:unknown):v is PoseParams=>{
    &&isV3((h as Record<string,unknown>).forward)&&isV3((h as Record<string,unknown>).normal);
   const foot=(f:unknown)=>!!f&&typeof f==='object'&&isV3((f as Record<string,unknown>).target)&&isV3((f as Record<string,unknown>).pole)
    &&Number.isFinite((f as Record<string,unknown>).yaw)&&Number.isFinite((f as Record<string,unknown>).pitch);
-  return isV3(p.root)&&Number.isFinite(p.yaw)&&Number.isFinite(p.lean)&&Number.isFinite(p.chest)&&Number.isFinite(p.side)
+  const spread=p.handSpread;
+  const validSpread=spread===undefined||!!spread&&typeof spread==='object'&&!Array.isArray(spread)
+   &&Object.entries(spread as Record<string,unknown>).every(([side,value])=>(side==='L'||side==='R')&&typeof value==='number'&&Number.isFinite(value)&&value>=0&&value<=1);
+  return validSpread&&isV3(p.root)&&Number.isFinite(p.yaw)&&Number.isFinite(p.lean)&&Number.isFinite(p.chest)&&Number.isFinite(p.side)
    &&hand(p.handL)&&hand(p.handR)&&foot(p.footL)&&foot(p.footR);
 };
 
@@ -155,6 +158,10 @@ export function stampPoseIntoKey(doc:WorkshopDoc,key:WorkshopKey,pose:PoseParams
   // Merge over the key's own pose so a held foot keeps its current channels.
   const merged=JSON.parse(JSON.stringify(key.pose)) as PoseParams;
   Object.assign(merged,stamped);
+  // Missing optional pose channels carry their canonical defaults. A legacy
+  // preset with no handSpread must relax a shaped key, not leave its old fist
+  // or open hand behind (the inverse of materializing an absent value).
+  if(stamped.handSpread===undefined)delete merged.handSpread;
   key.pose=merged;
   return {heldFoot,liftoffFoot};
 }

@@ -13,6 +13,14 @@
 - 渲染位置 ≠ 编辑目标时必须拆两个控件：摆动区间内脚柄 `passive`（显示真实位置、拾取穿透），青色 `swing` 手柄绑离地帧存储目标、跟手（learning [6]）。手柄必须跟手是所见即所得底线。
 - 死数据写入口就近提示（learning [7]）：末尾离地帧无后续区间、存储高度不会被采样——UI 给出显式提示且不显路径点手柄。
 
+## 拍柄棱面与手指开合（ADR-0010）
+
+- **bevel 不是求解输入**：`gripBevel` 只转拍面（`mountRacket` 后的局部 roll），拍头在柄轴上、手指绕圆柄包裹、没有骨骼读它——改棱面轨迹不变。但它是文档字段，**照常进请求指纹与定义哈希**（改棱面 = 新 artifact id、同轨迹）；不要为它开「仅展示不入指纹」的旁路。
+- 编号手掌相对且左右镜像（`bevelSign` 右 +1 / 左 −1）：`mirrorDoc` 原样保留 `gripBevel`，镜像后球拍是源的精确 x 镜像（grip-side.test.ts 逐点钉死；探针 x≠0 时左右对应点是**局部 x 取反**的点）。
+- 缺省即规范：显式 1 被 `normalizeDoc` 折叠、未写旧文档字节不变；导出仅在非 1 时写 `presentation.bevel`。
+- **handSpread 的 0.5 是缺省规范形态**：写 0.5 = 删通道；`applyHandShape` 在 0.5 走与旧 `relaxHand` **逐位相同**的快速路径（articulateHand 会引入 −0 分量泄漏进包字节）——改 hand-shape/solver 时不得破坏该等价（hand-shape.test.ts 钉死）。通道追加在 `flattenPose` 尾部（L=47/R=48），旧索引不动；生成器 handL/handR 相位移动必须捎带自己的 spread 通道（`EXTRAS`）。
+- 手型移动指节骨骼 = 运动语义变化，必须 bump `SERVICE_VERSION`（本切片 0.8.0→0.9.0，`WORKSHOP_REVISION` v4→v5）。
+
 ## 撤销与文档生命周期
 
 - 撤销合并窗口的键是「同一文档、同一事务」（`RecordGate`）：跨文档/撤销后必录新快照；增量控件把文档纪元编进 key 随撤销重置（learning [13]）。

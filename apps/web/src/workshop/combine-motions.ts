@@ -83,6 +83,16 @@ export function combineMotions(a:WorkshopDoc,b:WorkshopDoc,options:CombineOption
   if(keys[i-1].constraints[flag]&&!keys[i].constraints[flag])keys[i].pose[foot].target=copy(read((keys[i].time+keys[i+1].time)/2).pose[foot].target);
  }
  const policy=options.kind==='blend'&&options.weight>=.5?b:a;
- return identify({...policy,id,name:title,duration,loop:false,inbetweens:true,handFrames:{L:'world',R:'world'},
-  gripSide:grips(a)?a.gripSide:grips(b)?b.gripSide:policy.gripSide,keys});
+ // The bevel follows the same doc the grip side comes from: it is a display
+ // property of the held prop (never a solve input), so mixing two sources with
+ // different bevels is resolved rather than refused — the surviving grip's
+ // facet wins, exactly like gripSide above.
+ const gripDoc=grips(a)?a:grips(b)?b:policy;
+ const combined:WorkshopDoc={...policy,id,name:title,duration,loop:false,inbetweens:true,handFrames:{L:'world',R:'world'},
+  gripSide:grips(a)?a.gripSide:grips(b)?b.gripSide:policy.gripSide,keys};
+ // The bevel follows the source whose grip side wins. Clear policy's inherited
+ // bevel when that source uses the canonical default (represented by absence).
+ if(gripDoc.gripBevel===undefined)delete combined.gripBevel;
+ else combined.gripBevel=gripDoc.gripBevel;
+ return identify(combined);
 }

@@ -177,12 +177,22 @@ components:
                 accept only `{}`. `workshop-doc` requires `document`: WorkshopDoc
                 JSON (named keyframes with pose targets and plant/grip/contact
                 constraints; each key may set `interpolation` to `hermite`
-                (default) or `linear`; optional `freeArms: true` disables arm/elbow/wrist
-                anatomical bend clamps for authoring; optional flags such as `clavicleLift` and
-                `gripSide` — 'R'|'L', default 'R', which hand holds the racket;
-                at most 10 s and 120 keys). `schemaVersion` must be 2: older
-                documents are refused with 400 `validation_failed`, never
-                silently upgraded.
+                (default) or `linear`, and its pose may set `handSpread` to an
+                optional `{L?,R?}` of 0–1 — 0 closed fist, 0.5 relaxed (the
+                absent default), 1 spread open — a sampled pose channel that
+                changes the solved finger joints and interpolates like every
+                other channel, so a fist can open across a transition; optional
+                `freeArms: true` disables arm/elbow/wrist anatomical bend
+                clamps for authoring; optional document flags such as
+                `clavicleLift`, `gripSide` — 'R'|'L', default 'R', which hand
+                holds the racket — and `gripBevel` — integer 1–8, default 1,
+                which of the racket handle's eight bevels rests against the
+                palm (palm-relative numbering, so the same number is the same
+                grip on either hand and survives mirroring); the bevel is a
+                prop-orientation choice, not a solve input — it changes the
+                artifact id through the document but never the solved
+                trajectory; at most 10 s and 120 keys). `schemaVersion` must be 2: older documents are refused
+                with 400 `validation_failed`, never silently upgraded.
         rig:
           type: string
           default: makehuman-body
@@ -210,7 +220,7 @@ components:
         id: {type: string}
         revision:
           type: string
-          description: "workshop-doc-<first 12 hex digits of definitionSHA256> for bundled actions; workshop-doc/v4 for the client-supplied document action."
+          description: "workshop-doc-<first 12 hex digits of definitionSHA256> for bundled actions; workshop-doc/v5 for the client-supplied document action."
         definitionSHA256:
           type: [string, 'null']
           description: Hash of the resolved action definition; null for client-supplied documents, whose hash is computed per request.

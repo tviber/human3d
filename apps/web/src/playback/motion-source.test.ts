@@ -278,6 +278,20 @@ describe('posePackageSpec — ad-hoc presentation channel',()=>{
   expect(spec.phases.length).toBe(doc.keys.length);
   expect(spec.description).toContain('常量显示');
  });
+ it('carries gripBevel into the prop hint; the canonical bevel stays absent',async()=>{
+  const doc=blankDocument(rig.rest,'换棱面','bevel-grip');
+  doc.keys.forEach(k=>{k.constraints.grip=true;});
+  const plain=await local(doc);
+  expect((plain.action.parameters as {presentation:Record<string,unknown>}).presentation).not.toHaveProperty('bevel');
+  expect(posePackageSpec(plain,'pkg:test').capabilities?.prop).not.toHaveProperty('bevel');
+  doc.gripBevel=6;
+  const pkg=await local(doc);
+  expect(pkg.action.parameters).toEqual({documentName:'换棱面',presentation:{prop:'racket',bevel:6,loop:false}});
+  const spec=posePackageSpec(pkg,'pkg:test');
+  expect(spec.capabilities?.prop).toEqual({kind:'racket',trail:true,handView:true,bevel:6});
+  const src=new PosePackageSource(rig,pkg,spec.capabilities?.prop,racket);
+  expect(src.propBevel).toBe(6);
+ });
  it('carries gripSide into the prop side hint and the mount readout',async()=>{
   const doc=blankDocument(rig.rest,'左持拍','left-grip');
   doc.gripSide='L';doc.keys.forEach(k=>{k.constraints.grip=true;});

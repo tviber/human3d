@@ -1,6 +1,7 @@
 import {Quaternion,Vector3,MathUtils} from 'three';
 import {HumanRig} from './rig';
 import {blendGrip} from './grip';
+import {applyHandShape} from './hand-shape';
 import {PROPS} from './props';
 import {DEG,LIMITS,angleAt,pelvisDorsiCorrection,solveTwoBone,type DorsiLeg} from './kinematics';
 import type {EffectiveFrame,PoseParams,KeyConstraints,SupportWeights} from './document';
@@ -112,10 +113,17 @@ export function solvePose(rig:HumanRig,p:PoseParams,c:KeyConstraints,state:Solve
   rig.limb('L','arm',toV(p.handL.target),toV(p.handL.pole),state.freeArms?180:145);
   rig.hand('R',toV(p.handR.forward).normalize(),toV(p.handR.normal).normalize(),state.freeArms?180:undefined);
   rig.hand('L',toV(p.handL.forward).normalize(),toV(p.handL.normal).normalize(),state.freeArms?180:undefined);
-  // Grip ramp: relaxed fingers blend toward the wrap grip on the gripping
-  // side; amount 1 is the full grip. The other hand always relaxes.
-  blendGrip(rig,gripSide,gripAmount,PROPS.racket.handle);
-  rig.relaxHand(gripSide==='R'?'L':'R');
+  /* Hand shape: the authored fist ⇄ open ramp. `blendGrip` solves the wrap
+   * from the rest pose, writes the authored shape as its base, then blends
+   * shape → wrap, so at amount 0 the gripping hand shows exactly the authored
+   * shape and at 1 the full wrap. An absent channel is the relaxed shape, and
+   * applyHandShape at relaxed is BIT-IDENTICAL to the relaxHand call it
+   * replaces (same axes, same 12/16/8° angles — pinned by hand-shape.test.ts),
+   * so every pre-existing document keeps its exact trajectory. */
+  const other=gripSide==='R'?'L':'R';
+  const spread=(side:Side)=>applyHandShape(rig,side,p.handSpread?.[side]);
+  blendGrip(rig,gripSide,gripAmount,PROPS.racket.handle,()=>spread(gripSide));
+  spread(other);
   rig.syncWorld();
   return {pelvisShift:applied,pelvisSaturated:correction.saturated||applied+1e-9<correction.shift};
  });

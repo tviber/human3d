@@ -1,6 +1,8 @@
 import {Matrix4,Quaternion,Vector3} from 'three';
 import {DEG,smoothstep} from './kinematics';
 import {WORKSHOP_LIMITS} from './limits';
+import {RELAXED_SPREAD} from './hand-shape';
+import {RACKET_BEVEL_DEFAULT} from './props/racket';
 import type {Side} from './foot';
 
 /** Trajectory-first motion document (schema v2): keyframes carry task-space
@@ -15,6 +17,11 @@ const fromV=(v:Vector3):V3=>({x:v.x,y:v.y,z:v.z});
 
 export interface HandTarget{target:V3;pole:V3;forward:V3;normal:V3}
 export interface FootTarget{target:V3;pole:V3;yaw:number;pitch:number}
+/** Hand shape per side, 0 = closed fist, .5 = relaxed (the absent default),
+ * 1 = spread open. A pose CHANNEL, not a display flag: it is sampled and
+ * interpolated like every other pose value, so a fist can open over a
+ * transition. Keys may name one side only. */
+export interface HandSpread{L?:number;R?:number}
 export interface PoseParams{
   /** Root offset from the rest pelvis origin, metres, world space. */
   root:V3;
@@ -22,6 +29,8 @@ export interface PoseParams{
   yaw:number;lean:number;chest:number;side:number;
   handL:HandTarget;handR:HandTarget;
   footL:FootTarget;footR:FootTarget;
+  /** Optional per-hand finger shape; an absent side is relaxed (.5). */
+  handSpread?:HandSpread;
 }
 export interface KeyConstraints{
   /** A planted foot's contact (target, yaw, pitch) is held across the interval that starts at this key. */
@@ -56,6 +65,20 @@ export interface WorkshopDoc{
    * side changes the solved trajectory, so it lives on the document, not
    * on presentation metadata. */
   gripSide?:Side;
+  /** Which bevel (octagonal facet, 1–8) the palm rests on: the prop's own
+   * orientation around the handle axis. Absent means 1 — the canonical facet
+   * the default mount already puts in the palm, so pre-existing documents are
+   * unchanged and normalizeDoc folds an explicit 1 back to absent.
+   *
+   * Document-level, like gripSide: a grip is chosen once and held. Unlike
+   * gripSide it does NOT change the solved trajectory (the tip sits on the
+   * handle axis and the wrap solves around a circular handle), so only the
+   * prop's visual orientation depends on it — but it is authored data that
+   * must survive export/import, so it lives in the document, not on a display
+   * toggle. Numbering is palm-relative and side-signed, so the value is
+   * PRESERVED by mirrorDoc (bevel k always means the same grip on either
+   * hand). See docs/decisions/0010-racket-bevels-hand-shape.md. */
+  gripBevel?:number;
   keys:WorkshopKey[];
 }
 export type DocLike=Pick<WorkshopDoc,'keys'|'duration'|'loop'|'handFrames'>;
@@ -65,7 +88,11 @@ export interface EffectiveFrame{pose:PoseParams;constraints:KeyConstraints;keyIn
  /** The document-level grip side flattened onto the frame — same delivery
   * pattern as clavicleLift, so solveEffectiveFrame sees it with no caller
   * contract change. Absent on hand-built frames means 'R'. */
- gripSide?:Side}
+ gripSide?:Side;
+ /** The document-level bevel flattened onto the frame, same pattern as
+  * gripSide. Absent means the canonical 1. Not a solve input (it only turns
+  * the prop), so it is carried for the renderer's mount, never for the bones. */
+ gripBevel?:number}
 
 /** Grip closes and opens over this window after the key that toggles it. */
 const GRIP_TRANSITION_S=.25;
@@ -84,24 +111,41 @@ const GRIP_TRANSITION_S=.25;
 export const TANGENT_SECANT_CAP=2;
 const ZERO_V3=new Vector3();
 
-/** Deterministic flatten/unflatten so Hermite runs over every numeric field. */
+/** Deterministic flatten/unflatten so Hermite runs over every numeric field.
+ * `handSpread` occupies the two TAIL channels (47 = L, 48 = R) so every
+ * pre-existing channel index keeps its meaning — generate.ts's group ranges,
+ * the property sweep's channel lists and any external reader stay valid. An
+ * absent side flattens to RELAXED_SPREAD, and unflatten re-omits exactly that
+ * value, so a document without hand shapes round-trips to the identical pose
+ * object (no `handSpread` key appears out of nowhere). */
 export function flattenPose(p:PoseParams):number[]{
   const out:number[]=[];
   const push=(v:V3)=>{out.push(v.x,v.y,v.z);};
   push(p.root);out.push(p.yaw,p.lean,p.chest,p.side);
   for(const h of [p.handL,p.handR]){push(h.target);push(h.pole);push(h.forward);push(h.normal);}
   for(const f of [p.footL,p.footR]){push(f.target);push(f.pole);out.push(f.yaw,f.pitch);}
+  out.push(p.handSpread?.L??RELAXED_SPREAD,p.handSpread?.R??RELAXED_SPREAD);
   return out;
 }
 export function unflattenPose(a:number[]):PoseParams{
   let i=0;
   const vec=():V3=>({x:a[i++],y:a[i++],z:a[i++]});
   const num=()=>a[i++];
-  return {root:vec(),yaw:num(),lean:num(),chest:num(),side:num(),
+  const pose:PoseParams={root:vec(),yaw:num(),lean:num(),chest:num(),side:num(),
     handL:{target:vec(),pole:vec(),forward:vec(),normal:vec()},
     handR:{target:vec(),pole:vec(),forward:vec(),normal:vec()},
     footL:{target:vec(),pole:vec(),yaw:num(),pitch:num()},
     footR:{target:vec(),pole:vec(),yaw:num(),pitch:num()}};
+  /* Short arrays come from callers that flattens predate the tail channels
+   * (a stored pose handed straight to unflattenPose); they mean relaxed. */
+  const spread=(value:number|undefined)=>(Number.isFinite(value)?value:RELAXED_SPREAD) as number;
+  const l=spread(a[i]),r=spread(a[i+1]);
+  if(l!==RELAXED_SPREAD||r!==RELAXED_SPREAD){
+   pose.handSpread={};
+   if(l!==RELAXED_SPREAD)pose.handSpread.L=l;
+   if(r!==RELAXED_SPREAD)pose.handSpread.R=r;
+  }
+  return pose;
 }
 
 /** Hand forward/normal are an orthonormal basis by contract: normalize f and
@@ -122,10 +166,13 @@ const clonePose=(p:PoseParams):PoseParams=>unflattenPose(flattenPose(p));
 
 /* ---- Channel layout (flattenPose): root 0–2 · yaw 3 · lean 4 · chest 5 · side 6
  * handL target 7–9, pole 10–12, forward 13–15, normal 16–18 · handR 19–21, 22–24, 25–27, 28–30
- * footL target 31–33, pole 34–36, yaw 37, pitch 38 · footR 39–41, 42–44, 45, 46 */
+ * footL target 31–33, pole 34–36, yaw 37, pitch 38 · footR 39–41, 42–44, 45, 46
+ * handSpread L 47, R 48 (finger shape — appended, so no old index moved) */
 const ANGLE_CHANNELS=[3,4,5,6,37,38,45,46];
 const FOOT_CH:Record<Side,number>={L:31,R:39};
 const HAND_CH:Record<Side,number>={L:7,R:19};
+/** Finger-shape channels, in the same L/R order as HAND_CH. */
+export const SPREAD_CH:Record<Side,number>={L:47,R:48};
 /** A contact locks the foot's target position AND its yaw/pitch. */
 const lockedChannels=(ch:number)=>[ch,ch+1,ch+2,ch+6,ch+7];
 const LOCK_SIDE=new Map<number,Side>();
@@ -463,15 +510,15 @@ export function frameAt(doc:WorkshopDoc,time:number,origin:V3|Vector3=ZERO_V3):E
  * `m` must come from buildModel(doc, …) on THIS document. Param 2 is narrowed
  * to exactly the doc fields it reads so a CompiledMotion (which carries those
  * four fields verbatim) satisfies it directly; full WorkshopDocs still fit. */
-export function frameFromModel(m:Model,doc:Pick<WorkshopDoc,'duration'|'inbetweens'|'gripSide'|'clavicleLift'|'freeArms'>,time:number):EffectiveFrame{
+export function frameFromModel(m:Model,doc:Pick<WorkshopDoc,'duration'|'inbetweens'|'gripSide'|'gripBevel'|'clavicleLift'|'freeArms'>,time:number):EffectiveFrame{
   const t=Math.max(0,Math.min(doc.duration,time)),side:Side=doc.gripSide==='L'?'L':'R';
   if(!doc.inbetweens){
     const {keyIndex,constraints}=constraintsAt(m.keys,t),e=m.entries[keyIndex];
     return {pose:unflattenPose(e.flat.slice()),constraints:{...constraints},keyIndex,
-      support:{L:e.plant.L?1:0,R:e.plant.R?1:0},gripAmount:e.grip?1:0,clavicleLift:doc.clavicleLift,freeArms:doc.freeArms,gripSide:side};
+      support:{L:e.plant.L?1:0,R:e.plant.R?1:0},gripAmount:e.grip?1:0,clavicleLift:doc.clavicleLift,freeArms:doc.freeArms,gripSide:side,gripBevel:doc.gripBevel};
   }
   const r=interpolate(m,t),k=m.chain[r.i].real;
-  return {pose:r.pose,constraints:{...m.keys[k].constraints},keyIndex:k,support:r.support,gripAmount:r.grip,clavicleLift:doc.clavicleLift,freeArms:doc.freeArms,gripSide:side};
+  return {pose:r.pose,constraints:{...m.keys[k].constraints},keyIndex:k,support:r.support,gripAmount:r.grip,clavicleLift:doc.clavicleLift,freeArms:doc.freeArms,gripSide:side,gripBevel:doc.gripBevel};
 }
 
 /** Recursively Object.freeze a plain-JSON value — pojos, arrays and
@@ -503,6 +550,8 @@ export interface CompiledMotion{
  inbetweens:boolean;
  loop:boolean;
  gripSide?:Side;
+ /** Prop bevel (1–8; absent = 1) — visual orientation only, never a solve input. */
+ gripBevel?:number;
  clavicleLift?:boolean;
  freeArms?:boolean;
  /** The origin buildModel baked into the snapshot — a fresh Vector3 owned by
@@ -525,7 +574,7 @@ export function compileMotion(doc:WorkshopDoc,origin:V3|Vector3=ZERO_V3):Compile
  const keys=doc.keys.map(k=>freezeDeep<WorkshopKey>({...k,pose:clonePose(k.pose),constraints:{...k.constraints}}));
  const model=buildModel({keys,duration:doc.duration,loop:doc.loop,handFrames:{...doc.handFrames}},origin);
  return Object.freeze({docId:doc.id,keyCount:keys.length,duration:doc.duration,inbetweens:doc.inbetweens,loop:doc.loop,
-  gripSide:doc.gripSide,clavicleLift:doc.clavicleLift,freeArms:doc.freeArms,origin:Object.freeze(model.origin),model});
+  gripSide:doc.gripSide,gripBevel:doc.gripBevel,clavicleLift:doc.clavicleLift,freeArms:doc.freeArms,origin:Object.freeze(model.origin),model});
 }
 /** frameAt over a compiled snapshot — the single sampling entry point for
  * batch consumers: the same EffectiveFrame, with the per-call buildModel
@@ -619,6 +668,9 @@ export function validateDocShape(d:unknown):string[]{
  if(doc.clavicleLift!==undefined&&typeof doc.clavicleLift!=='boolean')e.push('clavicleLift 必须是布尔值');
  if(doc.freeArms!==undefined&&typeof doc.freeArms!=='boolean')e.push('freeArms 必须是布尔值');
  if(doc.gripSide!==undefined&&doc.gripSide!=='R'&&doc.gripSide!=='L')e.push('gripSide 必须是 R 或 L');
+ if(doc.gripBevel!==undefined){
+  if(!Number.isInteger(doc.gripBevel)||doc.gripBevel<1||doc.gripBevel>8)e.push('gripBevel 必须是 1–8 的整数');
+ }
  for(const s of ['L','R']as const){
   const v=(doc.handFrames as Record<string,unknown>|undefined)?.[s];
   if(v!=='world'&&v!=='pelvis')e.push(`handFrames.${s} 必须是 world 或 pelvis`);
@@ -661,6 +713,13 @@ export function validateDocShape(d:unknown):string[]{
   for(const a of ['yaw','lean','chest','side']as const)if(!Number.isFinite(p[a]))e.push(`keys[${idx}].pose.${a} 不是有限数`);
   hand(p.handL,`keys[${idx}].pose.handL`);hand(p.handR,`keys[${idx}].pose.handR`);
   foot(p.footL,`keys[${idx}].pose.footL`);foot(p.footR,`keys[${idx}].pose.footR`);
+  if(p.handSpread!==undefined){
+   if(!p.handSpread||typeof p.handSpread!=='object'||Array.isArray(p.handSpread))e.push(`keys[${idx}].pose.handSpread 必须是 {L?,R?} 对象`);
+   else for(const s of ['L','R']as const){
+    const v=(p.handSpread as Record<string,unknown>)[s];
+    if(v!==undefined&&(!(typeof v==='number')||!Number.isFinite(v)||v<0||v>1))e.push(`keys[${idx}].pose.handSpread.${s} 必须是 0–1 的有限数`);
+   }
+  }
   const c=k.constraints;
   if(!c||typeof c!=='object'){e.push(`keys[${idx}].constraints 缺失`);return;}
   for(const f of ['plantL','plantR','grip','contact']as const)if(typeof c[f]!=='boolean')e.push(`keys[${idx}].constraints.${f} 必须是布尔值`);
@@ -688,9 +747,20 @@ export function normalizeDoc(raw:unknown):WorkshopDoc{
   const d=raw as WorkshopDoc;
   /* Canonical form: 'R' is the implicit default, so an explicit 'R' is folded
    * back to absent — documents that mean the same solve must serialize and
-   * fingerprint identically (normalizedRequest embeds the parsed doc). */
+   * fingerprint identically (normalizedRequest embeds the parsed doc). The
+   * bevel's default 1 and a relaxed hand shape (.5) are folded the same way:
+   * they are what an absent channel already means, and keeping them would make
+   * a document that merely touched a slider and returned it differ byte-wise
+   * from the identical one that never did. */
   if(d.gripSide==='R')delete d.gripSide;
+  if(d.gripBevel===RACKET_BEVEL_DEFAULT)delete d.gripBevel;
   for(const k of d.keys)canonicalizeHands(k.pose);
+  for(const k of d.keys){
+   const spread=k.pose.handSpread;
+   if(!spread)continue;
+   for(const side of ['L','R']as const)if(spread[side]===RELAXED_SPREAD)delete spread[side];
+   if(spread.L===undefined&&spread.R===undefined)delete k.pose.handSpread;
+  }
   return d;
 }
 export function parseDoc(text:string):WorkshopDoc{return normalizeDoc(JSON.parse(text));}
@@ -761,6 +831,16 @@ export function mirrorKey(key:WorkshopKey):WorkshopKey{
     pose:{root:mv(p.root),yaw:-p.yaw,lean:p.lean,chest:-p.chest,side:-p.side,
       handL:hand(p.handR),handR:hand(p.handL),footL:foot(p.footR),footR:foot(p.footL)},
     constraints:{plantL:c.plantR,plantR:c.plantL,grip:c.grip,contact:c.contact}};
+  // Hand shape is a side-keyed scalar, so it travels with its hand. An
+  // explicit relaxed value is preserved rather than dropped: mirror∘mirror
+  // must stay byte-exact, and normalizeDoc is the only place that folds
+  // defaults away.
+  if(p.handSpread){
+   const swapped:HandSpread={};
+   if(p.handSpread.R!==undefined)swapped.L=p.handSpread.R;
+   if(p.handSpread.L!==undefined)swapped.R=p.handSpread.L;
+   if(swapped.L!==undefined||swapped.R!==undefined)out.pose.handSpread=swapped;
+  }
   if(key.interpolation!==undefined)out.interpolation=key.interpolation;
   if(key.videoTime!==undefined)out.videoTime=key.videoTime;
   return out;
@@ -773,10 +853,11 @@ export function mirrorDoc(doc:WorkshopDoc):WorkshopDoc{
    * must get a line below (swap, mirror or keep — silent omission means the
    * mirrored document quietly keeps the source's value):
    *   WorkshopDoc: schemaVersion · id · name · english · duration ·
-   *     inbetweens · loop · handFrames · clavicleLift · freeArms · gripSide · keys
+   *     inbetweens · loop · handFrames · clavicleLift · freeArms · gripSide ·
+   *     gripBevel · keys
    *   WorkshopKey: id · time · label · pose · constraints · interpolation · videoTime
    *   PoseParams:  root · yaw · lean · chest · side · handL · handR ·
-   *     footL · footR   (hand: target/pole/forward/normal; foot: +yaw/pitch)
+   *     footL · footR · handSpread   (hand: target/pole/forward/normal; foot: +yaw/pitch)
    *   KeyConstraints: plantL · plantR · grip · contact                       */
   const keys=doc.keys.map(mirrorKey);
   return {schemaVersion:2,id:toggle(doc.id,'.mirrored'),name:toggle(doc.name,' · 镜像'),english:toggle(doc.english,' · MIRRORED'),
@@ -785,6 +866,11 @@ export function mirrorDoc(doc:WorkshopDoc):WorkshopDoc{
     ...(doc.clavicleLift!==undefined?{clavicleLift:doc.clavicleLift}:{}),
     ...(doc.freeArms!==undefined?{freeArms:doc.freeArms}:{}),
     ...(doc.gripSide==='L'?{}:{gripSide:'L' as const}),
+    /* Bevel PRESERVED, not swapped: the numbering is palm-relative and
+     * side-signed (bevelRoll flips sign with the mount), so the same number
+     * is the same grip on the mirrored hand. Copying it is what keeps the
+     * mirrored racket the exact x-mirror of the source's. */
+    ...(doc.gripBevel!==undefined?{gripBevel:doc.gripBevel}:{}),
     keys};
 }
 

@@ -64,22 +64,30 @@ export function applyGrip(rig:HumanRig,side:'L'|'R',handle:HandleGrip){
   rig.syncWorld();
 }
 
-/** Grip at `amount` in [0,1] on `side`'s hand: relaxed fingers at 0, full
+/** Grip at `amount` in [0,1] on `side`'s hand: the base hand pose at 0, full
  * wrap at 1.
  * The wrap is solved once, from the rest finger pose (as the authored grip
- * poses are), and each finger joint is then blended from its relaxed local
+ * poses are), and each finger joint is then blended from the base local
  * rotation to its grip local rotation. Blending inside the sequential wrap
  * solve made the result jump as the amount approached 1, because each joint's
- * wrap geometry depends on the joints solved before it. */
-export function blendGrip(rig:HumanRig,side:'L'|'R',amount:number,handle:HandleGrip){
+ * wrap geometry depends on the joints solved before it.
+ *
+ * `base` writes the hand pose the wrap blends FROM — the authored hand shape
+ * (fist ⇄ open) for the gripping hand. Omitted, it is the legacy relaxed pose
+ * (relaxHand + identity thumb), so every pre-existing document solves exactly
+ * as before. */
+export function blendGrip(rig:HumanRig,side:'L'|'R',amount:number,handle:HandleGrip,base?:()=>void){
   const names:string[]=[];
   for(let finger=1;finger<=5;finger++)for(let joint=1;joint<=3;joint++)names.push(`finger${finger}-${joint}_${side}`);
   applyGrip(rig,side,handle);
   const grip=names.map(n=>rig.bone(n).quaternion.clone());
-  rig.relaxHand(side);
-  // relaxHand curls fingers 2–5 but leaves the thumb where applyGrip put it;
-  // the relaxed thumb is the rest pose, so amount 0 must reach identity too.
-  for(let joint=1;joint<=3;joint++)rig.bone(`finger1-${joint}_${side}`).quaternion.identity();
+  if(base)base();
+  else{
+    rig.relaxHand(side);
+    // relaxHand curls fingers 2–5 but leaves the thumb where applyGrip put it;
+    // the relaxed thumb is the rest pose, so amount 0 must reach identity too.
+    for(let joint=1;joint<=3;joint++)rig.bone(`finger1-${joint}_${side}`).quaternion.identity();
+  }
   names.forEach((n,i)=>rig.bone(n).quaternion.slerp(grip[i],amount));
   rig.syncWorld();
 }

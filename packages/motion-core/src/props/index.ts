@@ -14,14 +14,16 @@ export interface PropDescriptor{
  kind:PropKind;
  handle:HandleGrip;
  tipLocal:Vector3;
- /** Create the prop and mount it on the wrist of `side` (rig-owned). */
- attach(rig:HumanRig,side?:'L'|'R'):Group;
+ /** Create the prop and mount it on the wrist of `side` (rig-owned).
+  * `bevel` is the racket-specific facet index a prop may honour; props without
+  * facets ignore it. */
+ attach(rig:HumanRig,side?:'L'|'R',bevel?:number):Group;
 }
 export const PROPS:Readonly<Record<PropKind,PropDescriptor>>={
  racket:{kind:'racket',handle:RACKET_HANDLE,tipLocal:RACKET_TIP_LOCAL,attach:attachRacket},
 };
 /** Attach a registered prop to the wrist of `side` (default right). */
-export function attachProp(rig:HumanRig,kind:PropKind,side:'L'|'R'='R'):Group{
- return PROPS[kind].attach(rig,side);
+export function attachProp(rig:HumanRig,kind:PropKind,side:'L'|'R'='R',bevel?:number):Group{
+ return PROPS[kind].attach(rig,side,bevel);
 }
-export {attachRacket,mountRacket,RACKET_HANDLE,RACKET_TIP_LOCAL} from './racket';
+export {attachRacket,mountRacket,RACKET_HANDLE,RACKET_TIP_LOCAL,RACKET_BEVELS,RACKET_BEVEL_DEFAULT,normalizeBevel,bevelRoll,bevelDirection,bevelAnchor} from './racket';

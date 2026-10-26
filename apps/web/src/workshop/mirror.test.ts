@@ -145,6 +145,22 @@ describe('mirrorDoc — round-trip involution',()=>{
    expect(k.constraints.grip).toBe(o.constraints.grip);expect(k.constraints.contact).toBe(o.constraints.contact);
   }
  });
+ it('preserves gripBevel verbatim and swaps handSpread sides (palm-relative numbering)',()=>{
+  const base=shipDoc('forehand');base.gripBevel=6;
+  // Asymmetric, with an explicit relaxed R — the mirror carries it as data
+  // (only normalizeDoc folds). The byte-exact involution is pinned on
+  // mirrorDoc's own output: a mutated doc has gripBevel after `keys`, while
+  // mirrorDoc emits it before, so mirror∘mirror reproduces mirrorDoc's
+  // canonical placement, not the mutation order.
+  base.keys[0].pose.handSpread={L:.2,R:.5};
+  base.keys[1].pose.handSpread={R:.8};
+  const m=mirrorDoc(base);
+  expect(m.gripBevel).toBe(6);                       // same number = same grip
+  expect(m.keys[0].pose.handSpread).toEqual({L:.5,R:.2});
+  expect(m.keys[1].pose.handSpread).toEqual({L:.8});
+  expect(serializeDoc(mirrorDoc(mirrorDoc(m)))).toBe(serializeDoc(m));
+  expect(validateDocShape(parseDoc(JSON.stringify(m)))).toEqual([]);
+ });
 });
 
 describe('mirrorDoc — mirrored solve',()=>{

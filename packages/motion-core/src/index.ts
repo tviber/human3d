@@ -16,6 +16,7 @@ export * from './rig';
 export * from './kinematics';
 export * from './hand-frame';
 export * from './grip';
+export * from './hand-shape';
 export * from './props';
 export * from './semantic-map';
 export * from './muscle-action';

@@ -45,7 +45,7 @@ export class HumanEngine{
  private _source?:MotionSource;private fade=new PoseFade();private dynSession?:DynamicsSession;
  debug:DebugOptions={surface:true,skeleton:false,axes:false,targets:false,trail:false,muscles:false};
  skin:SkinId='default';
- racket?:Group;private racketSide:'L'|'R'='R';
+ racket?:Group;private racketSide:'L'|'R'='R';private racketBevel:number|undefined;
  /** Locally computed identities for the pose-package import gate: the rig
   * manifest hash (compared against a package's rig block — see rigMatches)
   * and each bundled envelope's definition hash (the trust closure in
@@ -147,12 +147,14 @@ export class HumanEngine{
    }
   }
  }
- /** Mount the shared racket on the wrist the source's prop declares. The side
-  * is constant per source, so this fires at most once per source switch;
-  * prop-less sources report 'R' and restore the canonical mount. */
+ /** Mount the shared racket on the wrist and bevel the source's prop declares.
+  * Both are constant per source, so this fires at most once per source switch;
+  * prop-less sources report 'R'/bevel 1 and restore the canonical mount. */
  private syncRacketSide(src:MotionSource){
-  const side=src.propSide??'R';
-  if(this.racket&&this.rig&&side!==this.racketSide){mountRacket(this.rig,this.racket,side);this.racketSide=side;}
+  const side=src.propSide??'R',bevel=src.propBevel;
+  if(this.racket&&this.rig&&(side!==this.racketSide||bevel!==this.racketBevel)){
+   mountRacket(this.rig,this.racket,side,bevel);this.racketSide=side;this.racketBevel=bevel;
+  }
  }
  /** Register an externally delivered pose package as a temporary motion.
   * The package is shape-checked against the local rig; a malformed package is

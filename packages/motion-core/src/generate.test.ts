@@ -5,7 +5,7 @@ import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {HumanRig} from './rig';
 import {attachRacket} from './props/racket';
 import {motionFileById} from './motion-files';
-import {defaultDocument,validateDocShape,type WorkshopDoc} from './document';
+import {defaultDocument,sampleMotion,validateDocShape,type WorkshopDoc} from './document';
 import {probeFrames,type Quat,type Vec3} from './quality-probe';
 import {
  applyGenMove,buildGenContext,generateMotion,integratedAngularJerk,
@@ -72,6 +72,30 @@ describe('subsampled interval curves',()=>{
   expect(sub.keys[0].interpolation).toBe('linear');
   expect(sub.keys[1].interpolation).toBe('linear');
   expect(sub.keys[2].interpolation).toBeUndefined();
+ });
+ it('carries the doc-level bevel and samples hand spread with the pose',()=>{
+  const doc=defaultDocument(rig.rest);doc.gripBevel=5;
+  doc.keys[0].pose.handSpread={L:.1,R:.2};doc.keys[1].pose.handSpread={L:.9,R:.8};
+  const sub=subsampleDoc(doc,[0,.22],rig.rest);
+  expect(sub.gripBevel).toBe(5);
+  expect(sub.keys[0].pose.handSpread).toEqual({L:.1,R:.2});
+  expect(sub.keys[1].pose.handSpread).toEqual({L:.9,R:.8});
+ });
+ it('phase-shifts only the selected hand, including its appended spread channel',()=>{
+  const doc=defaultDocument(rig.rest);
+  // k-back (time .22) is mid-swing, neither contact nor first/last: legal phase key.
+  doc.keys[1].pose.handSpread={L:.9,R:.85};
+  const ctx=buildGenContext(rig,doc,{bounds:{maxPhaseShiftS:.1}});
+  const offset=.1,t=.22+offset;   // the move snapshots the source at keyTime+offset
+  const src=sampleMotion(ctx.compiled,t);
+  const right=applyGenMove(ctx,doc,{kind:'phase',keyId:'k-back',group:'handR',offset});
+  if(!right)throw new Error('expected a legal handR phase move');
+  expect(right.keys.find(k=>k.id==='k-back')!.pose.handSpread?.R).toBeCloseTo(src.handSpread!.R!,7);
+  expect(right.keys.find(k=>k.id==='k-back')!.pose.handSpread?.L).toBe(.9);
+  const left=applyGenMove(ctx,doc,{kind:'phase',keyId:'k-back',group:'handL',offset});
+  if(!left)throw new Error('expected a legal handL phase move');
+  expect(left.keys.find(k=>k.id==='k-back')!.pose.handSpread?.L).toBeCloseTo(src.handSpread!.L!,7);
+  expect(left.keys.find(k=>k.id==='k-back')!.pose.handSpread?.R).toBe(.85);
  });
 });
 

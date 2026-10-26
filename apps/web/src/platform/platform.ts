@@ -132,20 +132,39 @@ export const webPlatform:AppPlatform={
         for(const k of uninitialized)transaction.objectStore('snapshots').put(values.get(k),k);
         transaction.oncomplete=()=>resolve();transaction.onabort=()=>reject(transaction.error??new Error('初始化保存快照失败'));
       });
+      // The localStorage mirror lands AFTER the canonical snapshot commits:
+      // boot reads prefer the snapshot store, so a page death between the two
+      // writes leaves the snapshot new and the mirror old — the next boot
+      // reads the committed snapshot instead of one lagging behind the mirror
+      // (the mirror-first order restored a stale active document after a
+      // crash). A mirror failure (quota) is the one case where BOTH stores
+      // must stay unchanged: roll back the mirror keys already written and
+      // compensate the snapshot back to its pre-transaction values.
       await new Promise<void>((resolve,reject)=>{
         const transaction=db.transaction('snapshots','readwrite');
         let failure:unknown;
-        transaction.oncomplete=()=>resolve();
-        transaction.onabort=()=>{
-          try{for(const [k,value] of previous){if(value===null)native.removeItem?.(k);else native.setItem(k,value);}}
-          catch(err){reject(new Error(`恢复未提交，本机缓存回滚失败；请刷新读取原快照：${String(err)}`));return;}
-          reject(failure??transaction.error??new Error('提交动作失败'));
+        transaction.oncomplete=()=>{
+          const written:string[]=[];
+          try{
+            for(const [k,value] of mirrored){native.setItem(k,value);written.push(k);}
+          }catch(err){
+            try{
+              for(const k of written){const v=previous.get(k);if(v===undefined||v===null)native.removeItem?.(k);else native.setItem(k,v);}
+              const rollback=db.transaction('snapshots','readwrite');
+              for(const [k] of mirrored){
+                if(uninitialized.includes(k))rollback.objectStore('snapshots').delete(k);
+                else rollback.objectStore('snapshots').put(values.get(k)??null,k);
+              }
+              rollback.oncomplete=()=>reject(err);
+              rollback.onabort=()=>reject(new Error(`恢复未提交，快照回滚失败：${String(err)}`));
+            }catch(rollErr){reject(new Error(`恢复未提交，本机回滚失败：${String(rollErr)}`));}
+            return;
+          }
+          resolve();
         };
+        transaction.onabort=()=>reject(failure??transaction.error??new Error('提交动作失败'));
         try{
           for(const [k,value] of updates)transaction.objectStore('snapshots').put(value,k);
-          // A quota error aborts the SAME transaction, before either canonical
-          // snapshot commits. Readers wait for this transaction to complete.
-          for(const [k,value] of mirrored)native.setItem(k,value);
         }catch(err){failure=err;transaction.abort();}
       });
     };

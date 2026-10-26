@@ -20,7 +20,7 @@ export function LibraryList({docs, activeId, onSelect, onDuplicate, onRemove, on
  const sensors=useSensors(useSensor(PointerSensor, {activationConstraint:{distance:6}}));
  return <DndContext sensors={sensors} onDragEnd={e=>{const over=e.over?.id;if(over&&e.active.id!==over)onReorder(String(e.active.id), String(over));}}>
   <SortableContext items={docs.map(d=>d.id)} strategy={verticalListSortingStrategy}>
-   <div className="ws-lib">
+   <div className="ws-lib scroll-region">
     {docs.map(doc=><LibRow key={doc.id} id={doc.id} name={doc.name} meta={`${doc.keys.length} 关键帧 · ${doc.duration.toFixed(2)}s`} selected={doc.id===activeId} onSelect={()=>onSelect(doc.id)} onDuplicate={()=>onDuplicate(doc.id)} onRemove={()=>onRemove(doc.id)}/>)}
    </div>
   </SortableContext>

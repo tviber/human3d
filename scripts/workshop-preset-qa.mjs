@@ -5,12 +5,13 @@ import path from 'node:path';
 import {resolveOutputDir,assertTrackedWriteAllowed,atomicWriteFile,ensureOutputDir} from './lib/qa-output.mjs';
 import {verifyWebIdentity} from './lib/worktree-check.mjs';
 
-// Rehydration canonicalizes hand directions; allow only roundoff there,
-// while requiring all other stored document fields to survive exactly.
+// Rehydration canonicalizes hand directions and re-derives trig-written hand
+// vectors, which can move them by one ULP; every other stored document field
+// must survive exactly.
 function assertRestoredDoc(actual,expected){
  const copy=structuredClone(actual);
  copy.keys.forEach((key,i)=>{
-  for(const hand of ['handL','handR'])for(const field of ['forward','normal'])for(const axis of ['x','y','z']){
+  for(const hand of ['handL','handR'])for(const field of ['target','pole','forward','normal'])for(const axis of ['x','y','z']){
    const value=expected.keys[i].pose[hand][field][axis];
    assert(Math.abs(key.pose[hand][field][axis]-value)<1e-12,`${hand}.${field}.${axis} changed on reload`);
    key.pose[hand][field][axis]=value;
@@ -60,6 +61,25 @@ try{
  assert.equal(new URL(page.url()).pathname,'/workshop.html');
  assert.equal(await page.getByRole('heading',{name:'动作工作台',exact:true}).count(),1);
  assert.equal(await page.locator('vite-error-overlay').count(),0);
+ // The workshop starts in review mode with both side panels collapsed (低密度
+ // default) — every authoring control below lives behind those three states.
+ // Restore them through the real toggles; after a reload the app resets, so
+ // every reload site calls this again before touching panel content. The
+ // library toggle runs FIRST: its setLayout reads back the inspector's current
+ // width, so resizing the inspector before it would race the panel update and
+ // re-collapse the side the edit mode just opened.
+ const reopenPanels=async()=>{
+  const sheetLeft=page.getByTestId('sheet-left');
+  if(await sheetLeft.getAttribute('aria-expanded')!=='true')await sheetLeft.click();
+  if(await page.getByTestId('mode-edit').getAttribute('aria-pressed')!=='true')await page.getByTestId('mode-edit').click();
+ };
+ // Library saves are async; a reload rehydrates from storage, so every reload
+ // site first waits until storage carries the expected active document.
+ const awaitStoredActive=id=>page.waitForFunction(want=>{
+  const stored=JSON.parse(localStorage.getItem('kinesis-workshop-library')??'null');
+  return stored?.activeId===want;
+ },id,{timeout:5000});
+ await reopenPanels();
  const read=()=>page.evaluate(()=>{
   const e=window.__WS__,doc=e.getDoc();
   return {doc:JSON.parse(JSON.stringify(doc)),playing:e.playing,time:e.time,
@@ -68,7 +88,7 @@ try{
  });
  const presets=await page.evaluate(async url=>{
   const {MOTION_FILES}=await import(url);
-  return MOTION_FILES.map(p=>({id:p.id,name:p.name,kind:p.kind,document:p.document}));
+  return MOTION_FILES.map(p=>({id:p.id,name:p.name,kind:p.kind,category:p.category,capabilities:p.capabilities,document:p.document}));
  },`/@fs/${path.resolve(repoRoot,'packages/motion-core/src/motion-files.ts')}`);
  // Issue #30 PR-B: user motions lead the panel; the preset entry lives in a
  // collapsed fold below it and opens on demand.
@@ -79,7 +99,13 @@ try{
  const presetBox=await startButton.boundingBox(),firstMotionBox=await page.locator('.ws-lib-row').first().boundingBox();
  assert(presetBox&&firstMotionBox&&presetBox.y>firstMotionBox.y,
   'preset start fold must sit below the user motion list (user data first)');
- assert.deepEqual(await select.locator('option').evaluateAll(opts=>opts.map(o=>o.value)),presets.filter(p=>p.kind==='workshop-motion').map(p=>p.id));
+ const presetIds=presets.filter(p=>p.kind==='workshop-motion'&&p.document);
+ const expectedPresetIds=[
+  ...presetIds.filter(p=>p.category==='basic'),
+  ...presetIds.filter(p=>p.capabilities?.prop?.kind==='racket'),
+  ...presetIds.filter(p=>p.category!=='basic'&&!p.capabilities?.prop),
+ ].map(p=>p.id);
+ assert.deepEqual(await select.locator('option').evaluateAll(opts=>opts.map(o=>o.value)),expectedPresetIds);
  const before=(await read()).doc;
  const preset=presets.find(p=>p.id==='forehand');
  await select.selectOption(preset.id);
@@ -91,15 +117,24 @@ try{
  assert.equal(created.playing,false);assert.equal(created.time,0);
  assert.deepEqual({...created.doc,id:preset.document.id,name:preset.document.name,
   keys:created.doc.keys.map((k,i)=>({...k,id:preset.document.keys[i].id}))},preset.document);
- assert.equal(created.storage.docs.length,2);
- assert.deepEqual(created.storage.docs.find(d=>d.id===before.id),before);
- assert.equal(created.storage.activeId,created.doc.id);
+ // The creation save is async — wait for it to reach storage, then compare a
+ // FRESH read (the snapshot above was taken before the flush).
+ await page.waitForFunction(id=>{
+  const stored=JSON.parse(localStorage.getItem('kinesis-workshop-library')??'null');
+  return stored?.docs?.length===2&&stored.docs.some(d=>d.id===id)&&stored.activeId===id;
+ },created.doc.id,{timeout:5000});
+ const createdStored=await read();
+ assert.equal(createdStored.storage.docs.length,2);
+ assert.deepEqual(createdStored.storage.docs.find(d=>d.id===before.id),before);
+ assert.equal(createdStored.storage.activeId,created.doc.id);
  assert(created.doc.keys.every(k=>!preset.document.keys.some(s=>s.id===k.id)));
  assert.equal(await page.locator('.ws-key.sel').count(),1);
  await page.getByRole('button',{name:'撤销',exact:true}).click();
  assert.deepEqual((await read()).doc,before);
  await page.getByRole('button',{name:'重做',exact:true}).click();
  assert.equal((await read()).doc.id,created.doc.id);
+ // The motion name and the per-key interpolation live on the 通用 tab.
+ await page.getByTestId('adjustment-tab-common').click();
  const motionName=page.getByTestId('active-motion-name');
  await motionName.fill('重命名后的预设副本');
  assert.equal((await read()).doc.name,'重命名后的预设副本');
@@ -122,7 +157,14 @@ try{
  await page.mouse.move(spot.x+45,spot.y-35,{steps:10});await page.mouse.up();
  const edited=await read(),targetAfter=edited.doc.keys[0].pose.handL.target;
  assert(Math.hypot(targetAfter.x-targetBefore.x,targetAfter.y-targetBefore.y,targetAfter.z-targetBefore.z)>.005,'pointer drag did not adjust the preset copy');
- assert.deepEqual(edited.storage.docs.find(d=>d.id===edited.doc.id).keys[0].pose.handL.target,targetAfter);
+ // The library persists asynchronously (throttled during the drag, flushed at
+ // drag end), so wait for the dragged value to reach storage instead of racing
+ // the save with an immediate read.
+ await page.waitForFunction(([id,want])=>{
+  const stored=JSON.parse(localStorage.getItem('kinesis-workshop-library')??'null');
+  const t=stored?.docs?.find(d=>d.id===id)?.keys?.[0]?.pose?.handL?.target;
+  return !!t&&Math.abs(t.x-want[0])<1e-12&&Math.abs(t.y-want[1])<1e-12&&Math.abs(t.z-want[2])<1e-12;
+ },[edited.doc.id,[targetAfter.x,targetAfter.y,targetAfter.z]],{timeout:5000});
  await page.getByRole('button',{name:'撤销',exact:true}).click();
  assert.deepEqual((await read()).doc.keys[0].pose.handL.target,targetBefore);
  await page.getByRole('button',{name:'重做',exact:true}).click();
@@ -180,20 +222,28 @@ try{
  assert.notEqual(repeated.doc.id,created.doc.id);
  assert.equal(repeated.doc.name,`${preset.name} 副本`);
  assert.deepEqual(repeated.doc.keys[0].pose.handL.target,targetBefore);
- assert.equal(repeated.storage.docs.length,3);
+ // The creation save is async — wait for the third document to reach storage,
+ // then assert on a fresh read.
+ await page.waitForFunction(id=>{
+  const stored=JSON.parse(localStorage.getItem('kinesis-workshop-library')??'null');
+  return stored?.docs?.length===3&&stored.docs.some(d=>d.id===id);
+ },repeated.doc.id,{timeout:5000});
+ assert.equal((await read()).storage.docs.length,3);
  await page.getByRole('button',{name:'撤销',exact:true}).click();
  const saved=await read();
  assert.equal(saved.doc.id,edited.doc.id);
  assert.deepEqual(saved.doc,finalEdited.doc);
+ await awaitStoredActive(edited.doc.id);
  await page.reload();await ready();
+ await reopenPanels(); // reload resets review mode and collapses the panels
  // Playback/seek is allowed; no direct document or engine edit writes.
  await page.evaluate(()=>{window.__WS__.setPlaying(false);window.__WS__.seek(0);});
  const restored=await read();
- assert.equal(restored.doc.id,edited.doc.id);
- assert.deepEqual(restored.doc,saved.doc);
+ assert.equal(restored.doc.id,edited.doc.id,
+  `reloaded active doc: storage.activeId=${restored.storage.activeId} docs=[${restored.storage.docs.map(d=>d.id).join(', ')}]`);
+ assertRestoredDoc(restored.doc,saved.doc);
  assert.equal(restored.storage.quarantine.length,0);
  assertRestoredDoc(restored.storage.docs.find(d=>d.id===before.id),before);
- assertRestoredDoc(restored.doc,saved.doc);
  assert(restored.wrist.every((v,i)=>Math.abs(v-saved.wrist[i])<1e-9),'solved pose changed across reload');
  assert.deepEqual(await page.evaluate(async url=>{
   const {motionFileById}=await import(url);return motionFileById('forehand').document;
@@ -212,10 +262,19 @@ try{
  await page.getByTestId('free-arms').check();
  assert.equal((await read()).doc.freeArms,true);
  await page.getByTestId('adjustment-tab-right').click();
+ // Library saves are async; anything that compares storage to memory must
+ // wait for the flush instead of racing it.
+ const awaitStoredDoc=()=>page.waitForFunction(()=>{
+  const stored=JSON.parse(localStorage.getItem('kinesis-workshop-library')??'null');
+  const doc=stored?.docs?.find(d=>d.id===window.__WS__.getDoc().id);
+  return !!doc&&JSON.stringify(doc)===JSON.stringify(window.__WS__.getDoc());
+ },{timeout:5000});
  for(const axis of ['flex','dev','twist']){
   const beforeWrist=await readArm(),beforeHand=(await read()).doc.keys[0].pose.handR;
   await page.getByTestId(`wrist-R-${axis}`).press('PageUp');
-  const afterWrist=await readArm(),afterRead=await read();
+  const afterWrist=await readArm();
+  await awaitStoredDoc();
+  const afterRead=await read();
   assert.notDeepEqual(afterRead.doc.keys[0].pose.handR,beforeHand,`${axis} wrist slider did not write after reload`);
   const dot=Math.abs(afterWrist.quaternion.reduce((sum,v,i)=>sum+v*beforeWrist.quaternion[i],0));
   assert(dot<.999,`${axis} wrist slider did not rotate the rendered wrist`);
@@ -224,24 +283,66 @@ try{
  }
  await page.waitForTimeout(600); // one arm rotation = one history transaction
  const armBefore=await readArm(),docBeforeArm=(await read()).doc;
- await page.getByTestId('joint-R-upper-swing').press('End');
+ // Absolute control: pressing End requests swing = +180° and the solved bone
+ // must read back that value. The old assertion assumed delta semantics
+ // (mirroring the elbow vector), which this control no longer has.
+ const swingSlider=page.getByTestId('joint-R-upper-swing');
+ await swingSlider.press('End');
  const armAfter=await readArm(),docAfterArm=(await read()).doc;
- assert(Math.abs(armAfter.elbowBody[2]+armBefore.elbowBody[2])<2e-5,'upper arm did not cross the torso plane');
+ assert.equal(Number(await swingSlider.inputValue()),180,'upper-arm slider did not hold the requested 180°');
  assert(Math.hypot(...armAfter.wrist.map((v,i)=>v-armBefore.wrist[i]))>.01,'upper arm rotation must carry the wrist');
  await page.getByRole('button',{name:'撤销',exact:true}).click();
  assertSameDoc((await read()).doc,docBeforeArm,'undo of an arm-joint rotation');
  await page.getByRole('button',{name:'重做',exact:true}).click();
  assertSameDoc((await read()).doc,docAfterArm,'redo of an arm-joint rotation');
- await page.getByTestId('joint-R-forearm-lift').press('PageUp');
- const forearmAfter=await readArm();
- assert(Math.hypot(...forearmAfter.elbow.map((v,i)=>v-armAfter.elbow[i]))<2e-5,'forearm rotation moved the elbow pivot');
- assert(Math.hypot(...forearmAfter.wrist.map((v,i)=>v-armAfter.wrist[i]))>.01,'forearm rotation did not move the wrist');
+ // The forearm panel is the elbow hinge: its slider must equal the solved elbow
+ // angle, and changing it must leave the shoulder and elbow pivots in place.
+ const flexion=page.getByTestId('joint-R-forearm-flexion');
+ const elbowBefore=Number(await flexion.inputValue());
+ await flexion.press('PageUp');
+ const forearmAfter=await readArm(),elbowRead=Number(await flexion.inputValue());
+ assert(Math.hypot(...forearmAfter.elbow.map((v,i)=>v-armAfter.elbow[i]))<2e-5,'elbow rotation moved the elbow pivot');
+ assert(Math.hypot(...forearmAfter.wrist.map((v,i)=>v-armAfter.wrist[i]))>.001,'elbow rotation did not move the wrist');
+ assert(elbowRead>elbowBefore,`elbow flex slider did not increase (${elbowBefore} → ${elbowRead})`);
+ // The rotation sliders read the pose at the PLAYHEAD but write the SELECTED
+ // key. Off the selected key the readout would describe a pose the drag does
+ // not edit, so the controls must be disabled until the two are aligned — the
+ // note's button is the only way back, never a silent edit at the wrong time.
+ const onKey=await read(),nextTime=onKey.doc.keys.map(k=>k.time).filter(t=>t>onKey.time+1e-6).sort((a,b)=>a-b)[0];
+ const offTime=nextTime===undefined?Math.max(0,onKey.time-.2):(onKey.time+nextTime)/2;
+ assert(Math.abs(offTime-onKey.time)>1e-3,'could not pick an off-key preview instant');
+ await page.evaluate(t=>{const e=window.__WS__;e.setPlaying(false);e.seek(t);},offTime);
+ await page.waitForTimeout(120);
+ const offKeyNote=page.getByTestId('rotation-preview-offkey');
+ assert(await offKeyNote.isVisible(),'off-key preview note should be visible while the playhead is between keys');
+ assert.equal(await swingSlider.isEnabled(),false,'upper-arm slider must be disabled while the playhead is off the selected key');
+ assert.equal(await flexion.isEnabled(),false,'elbow slider must be disabled while the playhead is off the selected key');
+ const offKeyDoc=(await read()).doc;
+ const offKeyValue=await swingSlider.inputValue();
+ const offKeyWrist=page.getByTestId('wrist-R-twist'),offKeyWristValue=await offKeyWrist.inputValue();
+ await swingSlider.press('PageUp');
+ await offKeyWrist.press('PageUp');
+ assert.equal(await swingSlider.inputValue(),offKeyValue,'disabled upper-arm slider accepted keyboard input');
+ assert.equal(await offKeyWrist.inputValue(),offKeyWristValue,'disabled wrist slider accepted keyboard input');
+ assert.deepEqual((await read()).doc,offKeyDoc,'a disabled rotation slider still wrote the document');
+ await offKeyNote.getByRole('button',{name:'跳到该关键帧'}).click();
+ await page.waitForTimeout(120);
+ assert.equal(await offKeyNote.count(),0,'jumping to the selected key should clear the off-key note');
+ assert(await swingSlider.isEnabled(),'upper-arm slider should be enabled back on the selected key');
+ assert.equal((await read()).time,onKey.time,'jump-to-key did not land on the selected key');
  const authored=(await read()).doc;
+ await awaitStoredActive(authored.id);
  await page.reload();await ready();
+ await reopenPanels(); // reload resets review mode and collapses the panels
  assertRestoredDoc((await read()).doc,authored);
+ // Closed <details> content is not exposed to the accessibility tree, so the
+ // preset select and the generator controls need their folds reopened.
+ await page.locator('[data-fold="preset"] summary').click();
  await page.getByTestId('adjustment-tab-right').click();
  await page.getByTestId('joint-R-upper-swing').scrollIntoViewIfNeeded();
  await page.screenshot({path:outputFile('free-arm-authoring.png')});
+ // The generator fold ships closed; open it the way a user does.
+ await page.locator('[data-fold="generator"] summary').click();
  const beforeGeneration=await read();
  await page.getByTestId('generator-start').click();
  await page.waitForFunction(()=>window.__WS_GENERATOR__.locked());
@@ -253,6 +354,10 @@ try{
  await select.scrollIntoViewIfNeeded();
  await page.screenshot({path:outputFile('desktop.png')});
  await page.setViewportSize({width:390,height:844});
+ // Compact layout turns the library panel into a hidden bottom sheet; the
+ // preset select only exists inside it, so open the sheet the way a user does.
+ await page.getByTestId('sheet-left').click();
+ await page.waitForFunction(()=>document.querySelector('.ws-shell')?.classList.contains('ws-sheet-left'));
  assert(await select.isVisible());
  await page.screenshot({path:outputFile('mobile.png')});
  assert.equal(await page.locator('vite-error-overlay').count(),0);

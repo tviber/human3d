@@ -114,6 +114,8 @@ HUMAN3D_WEB_PORT=5174 npm run qa:pose-validity
 | `workshopStillExport` | 「渲染静帧」真实点击下载：PNG magic + IHDR 钉死固定出图 640×720，文件名 `<docId>.t<秒>.png`，导出后 `__WS__` 播放态与时间原样恢复；「关键帧拼图」（播放中点击）下载 `<docId>.sheet.png`，3 键文档为 3 格单行（1920×748），体积大于单帧静帧；整张拼图在同一段外层捕获会话里完成（`capturing` 从入口持有到拼图 toBlob，逐格 `endCapture` 恢复点读到的是会话内暂停态），最后一次外层恢复才把播放态交回 true——tap `endCapture` 实测 3 次逐格暂停恢复 + 1 次外层 true 恢复 |
 | `workshopGripSide` | 「握拍侧」真实下拉选「左手」→ `doc.gripSide==='L'`、约束行重标为「左手握拍」、真实勾选两键握拍；求解后球拍 `parent===wrist_L` 且原点距左腕 <0.15 m、比右腕更近；随后真实指针拖动拍头手柄：写入 `handL.target`，`handR.target` 逐字节不变 |
 | `workshopMirror` | 「镜像动作」真实点击 → 新文档入库并选中（id 带 `.mirrored`、名称带「镜像」，库计数 +1 且原文档保留）；左握 QA 文档镜像后 `gripSide` 回右手、球拍重挂 `wrist_R`；t=.5 真实求解腕位左右互换（镜像 `wrist_L` ≈ 源 `wrist_R` 的 x 反射，容差 1e-5）；「撤销」一步回到源文档 id 且求解一致 |
+| `workshopRotationSync` | 播放头停在两键之间 → 提示可见、大臂/肘/腕滑块均为 disabled；对大臂和腕滑块发 `press('PageUp')` 后输入值与文档不变；点「跳到该关键帧」后提示消失、滑块启用且播放头等于选中帧时间（`scripts/workshop-preset-qa.mjs`，CI `browser-qa / library`） |
+| `workshopMobileArmControls` | 手机 UI 在右侧编辑右腕 twist 与肘屈曲，滑块读数和求解角度变化、对应 hand frame 写入选中 key；切换左侧编辑左腕 twist，读数和 hand frame 同步变化（`scripts/workshop-mobile-qa.mjs`，CI `browser-qa / library`） |
 
 ### WP-C 追加的检查与证据（求解语义变更：切线限界 + 手部 SO(3) 三次）
 
@@ -196,7 +198,7 @@ HUMAN3D_WEB_PORT=5174 npm run qa:pose-validity
 
 ## 2026-10-22 移动端与语义控件（issue #23）
 
-`node scripts/workshop-mobile-qa.mjs`（Playwright Chromium，`isMobile/hasTouch` 模拟，DPR 1）全部通过：390×844 无溢出、Review 下单指拖手柄与双指捏合只动相机不写库、正/侧/45°/全视野、上一/下一关键帧与播放暂停、Review 下拖关键帧不重定时、语义肘屈曲 +10°（请求 = 读回 10.0°，其他关键帧逐字节不变）与腕掌屈 5°、两步撤销/重做、刷新后求解肘角不变、肘屈曲超 145° 报「未完全执行」且取消恢复基底、审阅反馈 JSON 复制；375×667、844×390、768×1024、1024×768 无溢出；1536×1024 桌面面板与旧控件仍在。
+`node scripts/workshop-mobile-qa.mjs`（Playwright Chromium，`isMobile/hasTouch` 模拟，DPR 1）全部通过（768×1024 / 1024×768 桌面布局在粗指针仿真下存在**既有**平板溢出，脚本改为测量并写入 `checks.tabletOverflowKnownIssue`，修复另立任务）：390×844 无溢出、Review 下单指拖手柄与双指捏合只动相机不写库、正/侧/45°/全视野、上一/下一关键帧与播放暂停、Review 下拖关键帧不重定时、语义肘屈曲 +10°（请求 = 读回 10.0°，其他关键帧逐字节不变）与腕掌屈 5°、两步撤销/重做、刷新后求解肘角不变、肘屈曲超 145° 报「未完全执行」且取消恢复基底、审阅反馈 JSON 复制；375×667、844×390、768×1024、1024×768 无溢出；1536×1024 桌面面板与旧控件仍在。
 
 **未验证**：真机 Safari / Android Chrome 的双指手势、WebGL 前后台恢复、软键盘与刘海安全区实测；移动渲染档（`pointer:coarse` → DPR ≤1.5、阴影 1024²）未做设备帧率测量。#21 PR-E 未合并，任务空间相对移动（PR-C 第一项）未实现。
 

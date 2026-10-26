@@ -37,6 +37,7 @@
    border:0;border-top:1px solid var(--line);
    border-radius:16px 16px 0 0;
    padding:0 max(12px,env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left)) !important;
+   padding-right:max(20px,env(safe-area-inset-right)) !important;
    transform:translateY(104%);visibility:hidden;
    transition:transform .28s var(--ease-spring),visibility .28s;
    box-shadow:0 -12px 40px rgba(18,18,33,.16);

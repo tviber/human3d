@@ -30,6 +30,7 @@
 ## 持久化与隔离
 
 - `MotionLibrary`：JSON 损坏或 `schemaVersion` 未知时整体进隔离区、跳过自动保存、原文不覆盖（learning [14]）；隔离导出对字符串原文原样导出。
+- 双存储提交顺序（`webPlatform.storageLock`）：**IndexedDB 快照先提交，localStorage 镜像在后**。启动读取以快照为准，所以页面死在两写之间的崩溃窗口里快照是新值、镜像滞后——下次启动读到已提交快照而不是落后一次保存的镜像（镜像先写时正好相反，workshop-preset-qa 的 reload 断言实测抓到过期 active 文档）。镜像写入失败（配额）是唯一必须两存储都不变的情形：回滚已写的镜像键，并用补偿事务把快照恢复为事务前的值；IDB 事务本身中止则镜像从未被碰过。
 - 生成预览（`generationPreview`）是易失覆盖，不落 localStorage、不进库字节；取消清空候选恢复源，保留才复制为新文档。
 
 ## 渲染导出
@@ -42,5 +43,12 @@
 - **语义命令**走 `applySemanticEdit`（`packages/motion-core/src/semantic-edit.ts`）：白名单 `部位 × 侧别 × 动作 × 度数` → 编码进既有 `PoseParams` 字段（不改 schema）→ 生产 `frameAt → solveEffectiveFrame` → 从求解后的骨骼读回解剖角，返回 `requested/actual/residual/reason`；不足 0.5° 或带动支撑脚即 `ok:false`，界面显示原因，不报成功。输入文档不被修改：预览总从事务开始时的同一基底重算，确认 = 一条撤销记录，取消 = 恢复基底并丢掉该记录。
 - **只动被指令的关节**：髋 / 膝语义是对该关节以下的腿做刚性 FK（`foot.target/pole/yaw/pitch` 一起旋转），肩 / 肘同理（`rotateArmAbout`）；`CHILD_JOINTS` 列出必须不变的子关节角，超过 1.5° 判失败。支撑帧上调腿 = 本帧离地 + 相邻帧接管原接触点（显示姿态逐骨核对 ≤1 mm），并补偿掉被取消支撑后不再施加的自动骨盆后移。
 - 「落地」= `groundFoot`：只改本帧，竖直平移整体（自动骨盆后移保持为本帧原值并折算进 `root.z`），支撑腿重新求解；够不到 / 踝超限时拒绝，文档不变。
-- 现有 `rotateArmJoint` 的 lift/swing/twist 仍是工程轴，未改名为解剖术语；语义肩屈/外展用胸廓轴（`rotateArmAbout`），肘屈伸绕求解后的肘铰链。
+- 关节旋转条显示选中帧求解后的绝对角度，不保存组件内增量。**只暴露求解器真能独立兑现的自由度**（三者都经 `frameAt → solveEffectiveFrame` 实测 round-trip）：
+  - **大臂**：肩相对 `shoulder01`→`upperarm01` 的 YXZ 三通道（`lift/swing/twist` = X/Y/Z）全部可控，读回残差 0.00°。肩是球关节，`rotateArmAbout` 把世界旋转编码进手目标 / 肘 pole，脚本无关。
+  - **前臂**：`rig.limb` 由腕目标与 pole 反解 `lowerarm01`，方向与弯曲平面是**输出**；绕前臂自身纵轴的旋转对读回值 **0.000° 影响**，lift/swing 目标残差 20–40° 且串到其他轴。因此前臂只提供**肘铰链角**（`readElbowAngle`/`setElbowAngle`，0° 伸直，受 `LIMITS.elbowFlexion[1]` 或自由手臂 180° 限制），实测精确 round-trip；三轴伪绝对量不再伪装成独立控制量。
+  - **腕**：腕相对 `lowerarm01` 的 YXZ 三通道精确可控（0.00° 残差）。非自由手臂时求解器把**合成弯曲角**（手前向与前臂轴夹角）夹到 `WRIST_BEND_LIMIT_DEG`，不是逐通道限位：屈伸 / 侧偏可能在滑轨端点前饱和（实测屈曲约 50° 饱和），旋前旋后不受影响；面板给出提示，自由手臂下三通道 ±180° 精确。
+  - 欧拉分支：一个旋转有两组等价 YXZ 三元组（`(x,y,z)` 与 `(π−x, y±π, z±π)`），lift 过 ±90° 时标准解码会让三条滑轨一起跳。控件保留上一次读数作 reference，只在候选三元组经四元数回代验证等价时切换，因此 1° 步进拖拽全程连续（rotation-controls.test.ts 钉死）。分段 twist 骨只由求解器处理，不单独显示。
+  - ±180° 接缝：`+180°` 与 `−180°` 是同一旋转但滑轨两端。环绕后一律取 +180° 会让从 −175° 拖到 −180° 的滑轨跳到右端；读数沿用上一次读数的符号，左来停左端、右来停右端。仅精确落在 ±180° 时生效，179.2° 这类邻近值不会被翻符号。
+- 滑块读数描述**播放头**姿态，写入目标是**选中关键帧**（`editAtKey` 写入前会重新 seek）。播放头不在该帧上（含播放中——时钟每帧移动，否则门控会随经过该帧而闪烁）时旋转滑块**禁用**，面板提示当前时刻并给出「跳到该关键帧」按钮：读数与编辑目标一致时才允许拖动，而不是先允许在错误上下文里编辑再解释。门控判据是 `rotationControlsInSync`（`rotation-controls.ts`，有单测）。手指开合只读写作者值，不受此门控。
+- 底层 `rotateArmJoint` 的 lift/swing/twist 仍是工程轴 API，未改名为解剖术语；工作台绝对角度控件通过 `rotateArmAbout` 编码到现有手目标 / 肘 pole，腕角编码到手方向向量。语义肩屈/外展用胸廓轴，肘屈伸绕求解后的肘铰链。
 - 审阅反馈是会话态（不写 WorkshopDoc），导出为 `kind:'h3d-review-feedback'` JSON。

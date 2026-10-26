@@ -13,6 +13,8 @@ export interface SemanticHost{
  /** Cancel: restore the base and drop the transaction's history step. */
  cancel:(base:WorkshopDoc)=>void;
  commit:()=>void;
+ highlightPart:(part:SemanticPart,side?:Side)=>void;
+ clearMuscleHighlight:()=>void;
 }
 const STEPS=[1,5,15];
 const PARTS=Object.keys(SEMANTIC_MOTIONS) as SemanticPart[];
@@ -31,6 +33,8 @@ export function SemanticPanel({host,defaultSide,keyLabel}:{host:SemanticHost;def
  const [error,setError]=useState('');
  const [ground,setGround]=useState<GroundReport|null>(null);
  const base=useRef<{doc:WorkshopDoc;keyId:string;shift?:number}|null>(null);
+ const hostRef=useRef(host);hostRef.current=host;
+ const hoveredPart=useRef<SemanticPart|null>(null);
  const info=SEMANTIC_MOTIONS[part].find(m=>m.motion===motion)??SEMANTIC_MOTIONS[part][0];
  const preview=(degrees:number)=>{
   setGround(null);
@@ -62,18 +66,24 @@ export function SemanticPanel({host,defaultSide,keyLabel}:{host:SemanticHost;def
  const commit=()=>{if(base.current)host.commit();reset();};
  const cancel=()=>{if(base.current)host.cancel(base.current.doc);reset();};
  const pending=base.current!==null&&amount!==0;
+ const highlightPart=(p:SemanticPart,s=side)=>hostRef.current.highlightPart(p,SIDELESS_PARTS.includes(p)?undefined:s);
+ const stopMuscleHighlight=()=>{hoveredPart.current=null;hostRef.current.clearMuscleHighlight();};
+ const enterPart=(p:SemanticPart)=>{hoveredPart.current=p;highlightPart(p);};
+ const leavePart=(p:SemanticPart)=>{if(hoveredPart.current===p){hoveredPart.current=null;hostRef.current.clearMuscleHighlight();}};
  // Unmount (key switch, undo remount) ends a running transaction: the
  // previewed pose is already in the document and its undo step recorded.
- const hostRef=useRef(host);hostRef.current=host;
- useEffect(()=>()=>{if(base.current){base.current=null;hostRef.current.commit();}},[]);
+ useEffect(()=>{
+  return()=>{stopMuscleHighlight();if(base.current){base.current=null;hostRef.current.commit();}};
+ },[]);
  // Changing what is being edited commits the running preview first, so a
  // stale base can never be applied to a different part/side/motion.
- const switchTo=(fn:()=>void)=>{if(pending)commit();else reset();setGround(null);fn();};
+ const switchTo=(fn:()=>void)=>{if(pending)commit();else reset();stopMuscleHighlight();setGround(null);fn();};
  const dir=amount>0?info.positive:amount<0?info.negative:'';
  return <div className="ws-semantic" data-testid="semantic-panel">
   <p className="ws-note">关键帧「{keyLabel}」 · 解剖学方向，求解后读回真实变化。</p>
   <div className="ws-chip-row" role="group" aria-label="部位">{PARTS.map(p=><button key={p} type="button" aria-pressed={part===p} data-testid={`semantic-part-${p}`}
-   onClick={()=>switchTo(()=>{setPart(p);setMotion(SEMANTIC_MOTIONS[p][0].motion);})}>{SEMANTIC_PART_LABELS[p]}</button>)}</div>
+   onPointerEnter={e=>{if(e.pointerType==='mouse')enterPart(p);}} onPointerLeave={e=>{if(e.pointerType==='mouse')leavePart(p);}}
+   onClick={()=>{const keepHovered=hoveredPart.current===p;switchTo(()=>{setPart(p);setMotion(SEMANTIC_MOTIONS[p][0].motion);});if(keepHovered)enterPart(p);}}>{SEMANTIC_PART_LABELS[p]}</button>)}</div>
   {!SIDELESS_PARTS.includes(part)?<div className="ws-chip-row" role="group" aria-label="侧别">{(['L','R'] as const).map(s=><button key={s} type="button" aria-pressed={side===s} data-testid={`semantic-side-${s}`} onClick={()=>switchTo(()=>setSide(s))}>{s==='L'?'左侧':'右侧'}</button>)}</div>:null}
   <div className="ws-chip-row" role="group" aria-label="动作方向">{SEMANTIC_MOTIONS[part].map(m=><button key={m.motion} type="button" aria-pressed={info.motion===m.motion} data-testid={`semantic-motion-${m.motion}`} onClick={()=>switchTo(()=>setMotion(m.motion))}>{m.label}</button>)}</div>
   <div className="ws-semantic-amount">

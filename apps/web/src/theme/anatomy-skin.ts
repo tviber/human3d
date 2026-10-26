@@ -3,7 +3,7 @@ import {Color,DataTexture,MeshStandardMaterial,NearestFilter,NoColorSpace,RGBAFo
 
 export interface MuscleRegion{id:number;key:string;name:string;englishName:string;surfaceTexels:number;surfaceExclusion?:string;sourceObjects:{name:string;node:string;group:string}[]}
 export interface AnatomyMetadata{version:number;encoding:string;width:number;height:number;regions:MuscleRegion[];source:{name:string;url:string;license:string;licenseURL:string;attribution:string;geometrySHA256:string;conversionCommit:string;muscleComponentCount:number}}
-export interface AnatomyAtlas{metadata:AnatomyMetadata;pixels:Uint8Array;texture:DataTexture;regionAt(uv:Vector2):MuscleRegion|undefined;dispose():void}
+export interface AnatomyAtlas{metadata:AnatomyMetadata;pixels:Uint8Array;texture:DataTexture;highlightTexture:DataTexture;regionAt(uv:Vector2):MuscleRegion|undefined;setHighlightedRegions(ids:Iterable<number>):void;dispose():void}
 
 /** Categorical IDs use nearest sampling and no colour conversion, on both CPU
  * and GPU. R/G encode a 16-bit ID; B feathers the inside of region borders. */
@@ -13,11 +13,19 @@ export function createAnatomyAtlas(metadata:AnatomyMetadata,pixels:Uint8Array):A
  const regions=new Map(metadata.regions.map(r=>[r.id,r]));
  const texture=new DataTexture(pixels,width,height,RGBAFormat,UnsignedByteType);
  texture.colorSpace=NoColorSpace;texture.minFilter=texture.magFilter=NearestFilter;texture.generateMipmaps=false;texture.flipY=false;texture.needsUpdate=true;
- return {metadata,pixels,texture,regionAt(uv){
+ // A compact 16-bit-id lookup lets the semantic panel tint many regions in
+ // one GPU sample, without a long per-fragment list of muscle ids.
+ const highlightPixels=new Uint8Array(256*256*4),highlightTexture=new DataTexture(highlightPixels,256,256,RGBAFormat,UnsignedByteType);
+ highlightTexture.colorSpace=NoColorSpace;highlightTexture.minFilter=highlightTexture.magFilter=NearestFilter;highlightTexture.generateMipmaps=false;highlightTexture.flipY=false;highlightTexture.needsUpdate=true;
+ return {metadata,pixels,texture,highlightTexture,regionAt(uv){
   if(!Number.isFinite(uv.x)||!Number.isFinite(uv.y))return undefined;
   const x=Math.min(width-1,Math.max(0,Math.floor(uv.x*width))),y=Math.min(height-1,Math.max(0,Math.floor(uv.y*height)));
   const i=(y*width+x)*4;return regions.get(pixels[i]+pixels[i+1]*256);
- },dispose(){texture.dispose();}};
+ },setHighlightedRegions(ids){
+  highlightPixels.fill(0);
+  for(const id of ids)if(Number.isInteger(id)&&id>0&&id<256*256)highlightPixels[id*4]=255;
+  highlightTexture.needsUpdate=true;
+ },dispose(){texture.dispose();highlightTexture.dispose();}};
 }
 
 export interface DecodedMask{naturalWidth:number;naturalHeight:number;pixels:Uint8Array}
@@ -44,26 +52,28 @@ export async function loadAnatomyAtlas(platform:AppPlatform=webPlatform,decoder:
  return createAnatomyAtlas(metadata,decoded.pixels);
 }
 
-export interface AnatomySkin{mesh:SkinnedMesh;id:{value:number};amount:{value:number}}
+export interface AnatomySkin{mesh:SkinnedMesh;id:{value:number};amount:{value:number};semanticAmount:{value:number}}
 /** Display material only. UVs and authored regions travel with the skin;
  * selection is a uniform, never a mutation of skin weights or motion data. */
-export function applyAnatomySkin(mesh:SkinnedMesh,atlas:AnatomyAtlas):AnatomySkin{
+export function applyAnatomySkin(mesh:SkinnedMesh,atlas:AnatomyAtlas,semanticAmount={value:0}):AnatomySkin{
  if(!mesh.geometry.getAttribute('uv'))throw new Error('人体模型缺少 UV 坐标');
- const skin:AnatomySkin={mesh,id:{value:0},amount:{value:0}};
+ const skin:AnatomySkin={mesh,id:{value:0},amount:{value:0},semanticAmount};
  const material=new MeshStandardMaterial({color:0xd8d1c7,roughness:.76,metalness:0});
- const tint=new Color(0xe99580);
+ const tint=new Color(0xe99580),semanticTint=new Color(0xffd54f);
  material.onBeforeCompile=shader=>{
-  shader.uniforms.anatomyMap={value:atlas.texture};shader.uniforms.anatomyId=skin.id;shader.uniforms.anatomyAmount=skin.amount;shader.uniforms.anatomyTint={value:tint};
+  shader.uniforms.anatomyMap={value:atlas.texture};shader.uniforms.anatomyHighlightMap={value:atlas.highlightTexture};shader.uniforms.anatomyId=skin.id;shader.uniforms.anatomyAmount=skin.amount;shader.uniforms.anatomyTint={value:tint};shader.uniforms.anatomySemanticAmount=skin.semanticAmount;shader.uniforms.anatomySemanticTint={value:semanticTint};
   shader.vertexShader=shader.vertexShader.replace('#include <common>','#include <common>\nvarying vec2 anatomyUv;').replace('#include <uv_vertex>','#include <uv_vertex>\nanatomyUv = uv;');
   shader.fragmentShader=shader.fragmentShader
-   .replace('#include <common>','#include <common>\nuniform sampler2D anatomyMap; varying vec2 anatomyUv; uniform float anatomyId;\nuniform float anatomyAmount;\nuniform vec3 anatomyTint;')
+   .replace('#include <common>','#include <common>\nuniform sampler2D anatomyMap; uniform sampler2D anatomyHighlightMap; varying vec2 anatomyUv; uniform float anatomyId;\nuniform float anatomyAmount; uniform vec3 anatomyTint; uniform float anatomySemanticAmount; uniform vec3 anatomySemanticTint;')
    .replace('#include <map_fragment>',`#include <map_fragment>
     vec4 muscle = texture2D(anatomyMap, anatomyUv);
     float regionId = floor(muscle.r * 255.0 + 0.5) + floor(muscle.g * 255.0 + 0.5) * 256.0;
     float selected = (1.0 - step(0.5, abs(regionId - anatomyId))) * step(0.5, anatomyId);
-    diffuseColor.rgb = mix(diffuseColor.rgb, anatomyTint, selected * anatomyAmount * muscle.b);`);
+    float semanticSelected = texture2D(anatomyHighlightMap, (vec2(mod(regionId, 256.0), floor(regionId / 256.0)) + 0.5) / 256.0).r;
+    diffuseColor.rgb = mix(diffuseColor.rgb, anatomyTint, selected * anatomyAmount * muscle.b);
+    diffuseColor.rgb = mix(diffuseColor.rgb, anatomySemanticTint, semanticSelected * anatomySemanticAmount * muscle.b);`);
  };
- material.customProgramCacheKey=()=>'h3d-anatomy-highlight-v3';
+ material.customProgramCacheKey=()=>'h3d-anatomy-highlight-v4';
  const old=Array.isArray(mesh.material)?mesh.material:[mesh.material];old.forEach(m=>m.dispose());mesh.material=material;
  return skin;
 }

@@ -116,6 +116,8 @@ try{
  assert.deepEqual((await read()).doc,before);
  await page.getByRole('button',{name:'重做',exact:true}).click();
  assert.equal((await read()).doc.id,created.doc.id);
+ // The motion name and the per-key interpolation live on the 通用 tab.
+ await page.getByTestId('adjustment-tab-common').click();
  const motionName=page.getByTestId('active-motion-name');
  await motionName.fill('重命名后的预设副本');
  assert.equal((await read()).doc.name,'重命名后的预设副本');

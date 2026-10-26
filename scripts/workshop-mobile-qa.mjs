@@ -131,34 +131,6 @@ try{
  await page.getByTestId('adjustment-tab-right').tap();
  const wristAfter=await rotationValues('wrist-R-');
  assert.notDeepEqual(wristAfter,wristAfterElbow,'semantic wrist edit was not reflected in parent-relative wrist sliders');
- // Phone authoring regressions: switch sides and exercise the real wrist and
- // elbow range inputs. The selected key is paused and on-key after semantic
- // commits, so each control must write that key and update the solved readout.
- const rightTwist=page.getByTestId('wrist-R-twist'),rightTwistBefore=Number(await rightTwist.inputValue());
- const rightNormalBefore=(await read(page)).doc.keys[keyIndex].pose.handR.normal;
- await rightTwist.press('ArrowRight');
- let rightTwistAfter=Number(await rightTwist.inputValue());
- if(rightTwistAfter===rightTwistBefore){await rightTwist.press('ArrowLeft');rightTwistAfter=Number(await rightTwist.inputValue());} // slider sat on its end
- const rightTwistDoc=(await read(page)).doc;
- assert(rightTwistAfter!==rightTwistBefore,`right wrist twist did not move: ${rightTwistBefore} → ${rightTwistAfter}`);
- assert.notDeepEqual(rightTwistDoc.keys[keyIndex].pose.handR.normal,rightNormalBefore,'right wrist slider did not write the selected key');
- const rightElbow=page.getByTestId('joint-R-forearm-flexion'),rightElbowBefore=Number(await rightElbow.inputValue());
- const rightElbowAngleBefore=await elbowAngle(page,'R');
- await rightElbow.press('ArrowRight');
- const rightElbowAfter=Number(await rightElbow.inputValue()),rightElbowAngleAfter=await elbowAngle(page,'R');
- assert(rightElbowAfter>rightElbowBefore,`right elbow slider did not increase: ${rightElbowBefore} → ${rightElbowAfter}`);
- assert(rightElbowAngleAfter>rightElbowAngleBefore+.05,`right elbow angle did not follow its slider: ${rightElbowAngleBefore} → ${rightElbowAngleAfter}`);
- await page.getByTestId('adjustment-tab-left').tap();
- const leftTwist=page.getByTestId('wrist-L-twist'),leftTwistBefore=Number(await leftTwist.inputValue());
- const leftNormalBefore=(await read(page)).doc.keys[keyIndex].pose.handL.normal;
- await leftTwist.press('ArrowRight');
- let leftTwistAfter=Number(await leftTwist.inputValue());
- if(leftTwistAfter===leftTwistBefore){await leftTwist.press('ArrowLeft');leftTwistAfter=Number(await leftTwist.inputValue());} // slider sat on its end
- const leftTwistDoc=(await read(page)).doc;
- assert(leftTwistAfter!==leftTwistBefore,`left wrist twist did not move after side switch: ${leftTwistBefore} → ${leftTwistAfter}`);
- assert.notDeepEqual(leftTwistDoc.keys[keyIndex].pose.handL.normal,leftNormalBefore,'left wrist slider did not write the selected key after side switch');
- checks.phoneWristAndElbowControls=true;
- await page.getByTestId('adjustment-tab-right').tap();
  // Drag each upper-arm slider through the real control and require the SOLVED
  // shoulder→upper-arm rotation to be the YXZ triple the three sliders show.
  // Plain quaternion math in the page (no THREE import needed): the sliders must
@@ -264,6 +236,35 @@ try{
  assert.equal(feedback.kind,'h3d-review-feedback');assert.equal(feedback.notes[0].issue,'手臂穿身');assert.equal(feedback.notes[0].keyLabel,keyLabel);
  sameDoc((await read(page)).doc,wristDoc.doc,'review notes touched the document');
  checks.reviewFeedback=true;
+ // Phone authoring regressions: switch sides and exercise the real wrist and
+ // elbow range inputs. Placed after the undo/reload baselines because every
+ // write here is a real history entry. The playhead is paused on the selected
+ // key (reload → key tap → edit mode), so each control writes that key.
+ await page.getByTestId('adjustment-tab-right').tap();
+ const rightTwist=page.getByTestId('wrist-R-twist'),rightTwistBefore=Number(await rightTwist.inputValue());
+ const rightNormalBefore=(await read(page)).doc.keys[keyIndex].pose.handR.normal;
+ await rightTwist.press('ArrowRight');
+ let rightTwistAfter=Number(await rightTwist.inputValue());
+ if(rightTwistAfter===rightTwistBefore){await rightTwist.press('ArrowLeft');rightTwistAfter=Number(await rightTwist.inputValue());} // slider sat on its end
+ const rightTwistDoc=(await read(page)).doc;
+ assert(rightTwistAfter!==rightTwistBefore,`right wrist twist did not move: ${rightTwistBefore} → ${rightTwistAfter}`);
+ assert.notDeepEqual(rightTwistDoc.keys[keyIndex].pose.handR.normal,rightNormalBefore,'right wrist slider did not write the selected key');
+ const rightElbow=page.getByTestId('joint-R-forearm-flexion'),rightElbowBefore=Number(await rightElbow.inputValue());
+ const rightElbowAngleBefore=await elbowAngle(page,'R');
+ await rightElbow.press('ArrowRight');
+ const rightElbowAfter=Number(await rightElbow.inputValue()),rightElbowAngleAfter=await elbowAngle(page,'R');
+ assert(rightElbowAfter>rightElbowBefore,`right elbow slider did not increase: ${rightElbowBefore} → ${rightElbowAfter}`);
+ assert(rightElbowAngleAfter>rightElbowAngleBefore+.05,`right elbow angle did not follow its slider: ${rightElbowAngleBefore} → ${rightElbowAngleAfter}`);
+ await page.getByTestId('adjustment-tab-left').tap();
+ const leftTwist=page.getByTestId('wrist-L-twist'),leftTwistBefore=Number(await leftTwist.inputValue());
+ const leftNormalBefore=(await read(page)).doc.keys[keyIndex].pose.handL.normal;
+ await leftTwist.press('ArrowRight');
+ let leftTwistAfter=Number(await leftTwist.inputValue());
+ if(leftTwistAfter===leftTwistBefore){await leftTwist.press('ArrowLeft');leftTwistAfter=Number(await leftTwist.inputValue());} // slider sat on its end
+ const leftTwistDoc=(await read(page)).doc;
+ assert(leftTwistAfter!==leftTwistBefore,`left wrist twist did not move after side switch: ${leftTwistBefore} → ${leftTwistAfter}`);
+ assert.notDeepEqual(leftTwistDoc.keys[keyIndex].pose.handL.normal,leftNormalBefore,'left wrist slider did not write the selected key after side switch');
+ checks.phoneWristAndElbowControls=true;
  await phone.close();
 
  /* ---------- other sizes ---------- */

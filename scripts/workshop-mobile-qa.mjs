@@ -44,7 +44,9 @@ function sameDoc(actual,expected,label){
   const v=expected.keys[i].pose[hand][f][x];assert(Math.abs(key.pose[hand][f][x]-v)<1e-12,`${label}: ${hand}.${f}.${x}`);key.pose[hand][f][x]=v;}});
  assert.deepEqual(a,expected,label);
 }
-const noOverflow=page=>page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth&&document.documentElement.scrollHeight<=innerHeight+1);
+const noOverflow=page=>page.evaluate(()=>({ok:document.documentElement.scrollWidth<=innerWidth&&document.documentElement.scrollHeight<=innerHeight+1,
+ w:document.documentElement.scrollWidth-innerWidth,h:document.documentElement.scrollHeight-innerHeight,
+ sw:document.documentElement.scrollWidth,sh:document.documentElement.scrollHeight,iw:innerWidth,ih:innerHeight}));
 // Library saves are async (Web Locks + snapshot transaction); a reload
 // rehydrates from that store, so wait until storage carries the live document
 // before reloading.
@@ -289,7 +291,8 @@ try{
  for(const [width,height] of sizes){
   const ctx=await browser.newContext({viewport:{width,height},deviceScaleFactor:1,isMobile:true,hasTouch:true});
   const p=await ctx.newPage();watch(p);await p.goto(url);await ready(p);
-  assert(await noOverflow(p),`${width}×${height} overflows`);
+  const layout=await noOverflow(p);
+  assert(layout.ok,`${width}×${height} overflows: ${JSON.stringify(layout)}`);
   await p.screenshot({path:outputFile(`layout-${width}x${height}.png`)});
   await ctx.close();
  }

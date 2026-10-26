@@ -100,32 +100,44 @@ try{
  fs.writeFileSync(outFile('bevel-badges-threeQuarter.png'),Buffer.from(still,'base64'));
  check('导出带编号静帧供人工核对可读性',true,'bevel-badges-threeQuarter.png');
 
- // ---- 3. finger spread on the NON-gripping hand: real slider drag
+ // ---- 3. finger spread on the NON-gripping hand: real slider input
  await panel('right');
  await page.getByTestId('adjustment-tab-left').click();
  const leftSlider=page.getByTestId('finger-spread-L');
  await leftSlider.waitFor({state:'visible',timeout:10000});
- const dragTo=async(slider,pct)=>{
-  const box=await slider.boundingBox();
-  if(!box)throw new Error('slider has no box (panel not visible?)');
-  await page.mouse.move(box.x+box.width*pct,box.y+box.height/2);
-  await page.mouse.down();await page.mouse.up();
+ /* Drive the range input the way a keyboard user does: focus it, then Home /
+  * End / arrow keys. A raw page.mouse click at a computed box position silently
+  * lands elsewhere when the panel scrolls or an overlay shifts — CI showed the
+  * value stuck at 50% with zero failures raised, so the check would have
+  * "passed" while testing nothing. Focus + keys goes through the same input
+  * element and fires the same input/change events, and the resulting value is
+  * read back and asserted, so a no-op is caught here rather than believed. */
+ const setSpread=async(slider,keys)=>{
+  await slider.focus();
+  for(const key of keys)await page.keyboard.press(key);
   await page.waitForTimeout(120);
  };
  const leftQuat=()=>page.evaluate(()=>{
   const e=window.__WS__,out={};
+  const doc=JSON.parse(JSON.stringify(e.getDoc()));
   for(const n of ['finger2-1_L','finger2-2_L','finger3-1_L','finger5-1_L'])out[n]=e.rig.bone(n).quaternion.toArray();
-  return out;
+  return {bones:out,stored:doc.keys[0].pose.handSpread?.L??null};
  });
- await dragTo(leftSlider,.5);const relaxed=await leftQuat();
- await dragTo(leftSlider,0);const fist=await leftQuat();
- await dragTo(leftSlider,1);const open=await leftQuat();
+ await setSpread(leftSlider,['Home']);
+ for(let i=0;i<50;i++)await page.keyboard.press('ArrowRight'); // step 1 → 50%
+ await page.waitForTimeout(120);
+ const relaxed=await leftQuat();
+ await setSpread(leftSlider,['Home']);
+ const fist=await leftQuat();
+ await setSpread(leftSlider,['End']);
+ const open=await leftQuat();
  const leftValue=await leftSlider.inputValue();
  const delta=(a,b)=>Math.max(...Object.keys(a).map(n=>Math.hypot(...a[n].map((x,i)=>x-b[n][i]))));
- check('左侧滑块拖到底写入张开值',leftValue==='100',`${leftValue}%`);
- check('滑块拖到握拳：指节明显改变',delta(relaxed,fist)>.05,delta(relaxed,fist).toFixed(3));
- check('滑块拖到张开：指节明显改变（含外展）',delta(relaxed,open)>.05,delta(relaxed,open).toFixed(3));
- check('握拳与张开不同',delta(fist,open)>.05,delta(fist,open).toFixed(3));
+ check('左侧滑块键盘归零写入握拳',fist.stored===0,`stored=${fist.stored}`);
+ check('左侧滑块键盘到顶写入张开',leftValue==='100'&&open.stored===1,`${leftValue}% stored=${open.stored}`);
+ check('滑块握拳使指节明显改变',delta(relaxed.bones,fist.bones)>.05,delta(relaxed.bones,fist.bones).toFixed(3));
+ check('滑块张开使指节明显改变（含外展）',delta(relaxed.bones,open.bones)>.05,delta(relaxed.bones,open.bones).toFixed(3));
+ check('握拳与张开不同',delta(fist.bones,open.bones)>.05,delta(fist.bones,open.bones).toFixed(3));
  check('握拍手以外不显示「握拍优先」提示',await page.getByTestId('finger-spread-wrapped-L').count()===0);
 
  // ---- 4. the gripping hand: honest note, and the slider really is inert
@@ -134,17 +146,19 @@ try{
  await rightSlider.waitFor({state:'visible',timeout:10000});
  const wrappedRight=await page.getByTestId('finger-spread-wrapped-R').count();
  check('右手握拍时右手指开合面板显示「握拍优先」提示',wrappedRight>=1,`匹配 ${wrappedRight} 处`);
- const rightFingers=()=>page.evaluate(()=>{
+ const rightState=()=>page.evaluate(()=>{
   const e=window.__WS__,out=[];
+  const doc=JSON.parse(JSON.stringify(e.getDoc()));
   for(let f=1;f<=5;f++)for(let j=1;j<=3;j++)out.push(...e.rig.bone(`finger${f}-${j}_R`).quaternion.toArray());
-  return out;
+  return {bones:out,stored:doc.keys[0].pose.handSpread?.R??null};
  });
- await dragTo(rightSlider,0);
- const rightFist=await rightFingers(),fistValue=await rightSlider.inputValue();
- await dragTo(rightSlider,1);
- const rightOpen=await rightFingers(),openValue=await rightSlider.inputValue();
- const maxDelta=Math.max(...rightFist.map((v,i)=>Math.abs(v-rightOpen[i])));
- check('满握持关键帧的滑块仍可写入两端手型',fistValue==='0'&&openValue==='100',`${fistValue}%→${openValue}%`);
+ await setSpread(rightSlider,['Home']);
+ const rightFist=await rightState(),fistValue=await rightSlider.inputValue();
+ await setSpread(rightSlider,['End']);
+ const rightOpen=await rightState(),openValue=await rightSlider.inputValue();
+ const maxDelta=Math.max(...rightFist.bones.map((v,i)=>Math.abs(v-rightOpen.bones[i])));
+ check('满握持关键帧的滑块仍可写入两端手型',fistValue==='0'&&openValue==='100'&&rightFist.stored===0&&rightOpen.stored===1,
+  `${fistValue}%→${openValue}% stored=${rightFist.stored}→${rightOpen.stored}`);
  check('满握持时手型确实不改变外观（提示文案的前提成立）',maxDelta<1e-6,maxDelta.toExponential(1));
 
  if(errors.length)throw new Error(`workshop page reported errors: ${errors.join(' | ')}`);

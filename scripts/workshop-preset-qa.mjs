@@ -60,6 +60,16 @@ try{
  assert.equal(new URL(page.url()).pathname,'/workshop.html');
  assert.equal(await page.getByRole('heading',{name:'动作工作台',exact:true}).count(),1);
  assert.equal(await page.locator('vite-error-overlay').count(),0);
+ // The workshop starts in review mode with both side panels collapsed (低密度
+ // default) — every authoring control below lives behind those three states.
+ // Restore them through the real toggles; after a reload the app resets, so
+ // every reload site calls this again before touching panel content.
+ const reopenPanels=async()=>{
+  if(await page.getByTestId('mode-edit').getAttribute('aria-pressed')!=='true')await page.getByTestId('mode-edit').click();
+  const sheetLeft=page.getByTestId('sheet-left');
+  if(await sheetLeft.getAttribute('aria-expanded')!=='true')await sheetLeft.click();
+ };
+ await reopenPanels();
  const read=()=>page.evaluate(()=>{
   const e=window.__WS__,doc=e.getDoc();
   return {doc:JSON.parse(JSON.stringify(doc)),playing:e.playing,time:e.time,
@@ -192,6 +202,7 @@ try{
  assert.equal(saved.doc.id,edited.doc.id);
  assert.deepEqual(saved.doc,finalEdited.doc);
  await page.reload();await ready();
+ await reopenPanels(); // reload resets review mode and collapses the panels
  // Playback/seek is allowed; no direct document or engine edit writes.
  await page.evaluate(()=>{window.__WS__.setPlaying(false);window.__WS__.seek(0);});
  const restored=await read();
@@ -279,10 +290,13 @@ try{
  assert.equal((await read()).time,onKey.time,'jump-to-key did not land on the selected key');
  const authored=(await read()).doc;
  await page.reload();await ready();
+ await reopenPanels(); // reload resets review mode and collapses the panels
  assertRestoredDoc((await read()).doc,authored);
  await page.getByTestId('adjustment-tab-right').click();
  await page.getByTestId('joint-R-upper-swing').scrollIntoViewIfNeeded();
  await page.screenshot({path:outputFile('free-arm-authoring.png')});
+ // The generator fold ships closed; open it the way a user does.
+ await page.locator('[data-fold="generator"] summary').click();
  const beforeGeneration=await read();
  await page.getByTestId('generator-start').click();
  await page.waitForFunction(()=>window.__WS_GENERATOR__.locked());
@@ -294,6 +308,10 @@ try{
  await select.scrollIntoViewIfNeeded();
  await page.screenshot({path:outputFile('desktop.png')});
  await page.setViewportSize({width:390,height:844});
+ // Compact layout turns the library panel into a hidden bottom sheet; the
+ // preset select only exists inside it, so open the sheet the way a user does.
+ await page.getByTestId('sheet-left').click();
+ await page.waitForFunction(()=>document.querySelector('.ws-shell')?.classList.contains('ws-sheet-left'));
  assert(await select.isVisible());
  await page.screenshot({path:outputFile('mobile.png')});
  assert.equal(await page.locator('vite-error-overlay').count(),0);

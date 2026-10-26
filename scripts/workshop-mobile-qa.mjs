@@ -137,8 +137,10 @@ try{
  const rightTwist=page.getByTestId('wrist-R-twist'),rightTwistBefore=Number(await rightTwist.inputValue());
  const rightNormalBefore=(await read(page)).doc.keys[keyIndex].pose.handR.normal;
  await rightTwist.press('ArrowRight');
- const rightTwistAfter=Number(await rightTwist.inputValue()),rightTwistDoc=(await read(page)).doc;
- assert(rightTwistAfter>rightTwistBefore,`right wrist twist did not increase: ${rightTwistBefore} → ${rightTwistAfter}`);
+ let rightTwistAfter=Number(await rightTwist.inputValue());
+ if(rightTwistAfter===rightTwistBefore){await rightTwist.press('ArrowLeft');rightTwistAfter=Number(await rightTwist.inputValue());} // slider sat on its end
+ const rightTwistDoc=(await read(page)).doc;
+ assert(rightTwistAfter!==rightTwistBefore,`right wrist twist did not move: ${rightTwistBefore} → ${rightTwistAfter}`);
  assert.notDeepEqual(rightTwistDoc.keys[keyIndex].pose.handR.normal,rightNormalBefore,'right wrist slider did not write the selected key');
  const rightElbow=page.getByTestId('joint-R-forearm-flexion'),rightElbowBefore=Number(await rightElbow.inputValue());
  const rightElbowAngleBefore=await elbowAngle(page,'R');
@@ -150,8 +152,10 @@ try{
  const leftTwist=page.getByTestId('wrist-L-twist'),leftTwistBefore=Number(await leftTwist.inputValue());
  const leftNormalBefore=(await read(page)).doc.keys[keyIndex].pose.handL.normal;
  await leftTwist.press('ArrowRight');
- const leftTwistAfter=Number(await leftTwist.inputValue()),leftTwistDoc=(await read(page)).doc;
- assert(leftTwistAfter>leftTwistBefore,`left wrist twist did not increase after side switch: ${leftTwistBefore} → ${leftTwistAfter}`);
+ let leftTwistAfter=Number(await leftTwist.inputValue());
+ if(leftTwistAfter===leftTwistBefore){await leftTwist.press('ArrowLeft');leftTwistAfter=Number(await leftTwist.inputValue());} // slider sat on its end
+ const leftTwistDoc=(await read(page)).doc;
+ assert(leftTwistAfter!==leftTwistBefore,`left wrist twist did not move after side switch: ${leftTwistBefore} → ${leftTwistAfter}`);
  assert.notDeepEqual(leftTwistDoc.keys[keyIndex].pose.handL.normal,leftNormalBefore,'left wrist slider did not write the selected key after side switch');
  checks.phoneWristAndElbowControls=true;
  await page.getByTestId('adjustment-tab-right').tap();

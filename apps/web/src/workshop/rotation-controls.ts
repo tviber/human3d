@@ -15,11 +15,20 @@ const ZERO_ARM:ArmRotationValues={lift:0,swing:0,twist:0};
 const ZERO_WRIST:WristRotationValues={flex:0,dev:0,twist:0};
 /** Readouts live in (−180°, 180°]: a raw YXZ decode can land on an equivalent
  * angle outside it (e.g. 360° next to the lift singularity), and a straight or
- * fully folded elbow reads exactly 180° — that is a real reading, not −180°. */
-const round1=(degrees:number)=>{
+ * fully folded elbow reads exactly 180° — that is a real reading, not −180°.
+ *
+ * ±180° is the one angle whose two representations sit at opposite ends of the
+ * slider track. A drag pressing against −180° decodes a fraction of a degree on
+ * either side of the seam (the solver leaves a residual), so it can round to
+ * +180 and snap the thumb to the far end. `reference` is the previously
+ * displayed value: when the readout rounds to one end and the drag came from
+ * the other, keep the end it came from. Anything that does not round to ±180°
+ * is a distinct angle and is never flipped. */
+const round1=(degrees:number,reference?:number)=>{
  const wrapped=(((degrees+180)%360)+360)%360-180;
- const value=Math.abs(wrapped+180)<.05?180:wrapped;
- return Number(value.toFixed(1));
+ let value=Number((Math.abs(wrapped+180)<.05?180:wrapped).toFixed(1));
+ if(Math.abs(value)===180&&reference!==undefined&&Math.sign(reference)===-Math.sign(value))value=-value;
+ return value;
 };
 const wrapRadians=(radians:number)=>Math.atan2(Math.sin(radians),Math.cos(radians));
 
@@ -67,11 +76,11 @@ function eulerNear(q:Quaternion,reference?:readonly number[]){
 }
 const radiansOf=(values:ArmRotationValues)=>[values.lift*DEG_TO_RAD,values.swing*DEG_TO_RAD,values.twist*DEG_TO_RAD] as const;
 const wristRadiansOf=(values:WristRotationValues)=>[values.flex*DEG_TO_RAD,values.dev*DEG_TO_RAD,values.twist*DEG_TO_RAD] as const;
-function valuesOf(euler:Euler):ArmRotationValues{
- return {lift:round1(euler.x*RAD_TO_DEG),swing:round1(euler.y*RAD_TO_DEG),twist:round1(euler.z*RAD_TO_DEG)};
+function valuesOf(euler:Euler,reference?:ArmRotationValues):ArmRotationValues{
+ return {lift:round1(euler.x*RAD_TO_DEG,reference?.lift),swing:round1(euler.y*RAD_TO_DEG,reference?.swing),twist:round1(euler.z*RAD_TO_DEG,reference?.twist)};
 }
-function wristValuesOf(euler:Euler):WristRotationValues{
- return {flex:round1(euler.x*RAD_TO_DEG),dev:round1(euler.y*RAD_TO_DEG),twist:round1(euler.z*RAD_TO_DEG)};
+function wristValuesOf(euler:Euler,reference?:WristRotationValues):WristRotationValues{
+ return {flex:round1(euler.x*RAD_TO_DEG,reference?.flex),dev:round1(euler.y*RAD_TO_DEG,reference?.dev),twist:round1(euler.z*RAD_TO_DEG,reference?.twist)};
 }
 function setChannel(euler:Euler,channel:keyof typeof AXIS,degrees:number){
  euler[AXIS[channel]]=degrees*DEG_TO_RAD;
@@ -90,13 +99,21 @@ function rotateBy(rig:HumanRig,pose:WorkshopKey['pose'],side:Side,joint:'upper'|
  rotateArmAbout(rig,pose,side,joint,axis,2*halfAngle*RAD_TO_DEG);
 }
 
+/** Whether the rotation sliders may be used: their readout is the pose solved
+ * at the playhead and their write target is the selected key, so the two must
+ * be the same instant. Editing from an interpolated preview would make the
+ * first drag jump (the number shows one pose, the write lands on another). */
+export function rotationControlsInSync(playhead:number,selectedKey:number){
+ return Math.abs(playhead-selectedKey)<=1e-6;
+}
+
 /** Read the solved upper arm relative to the shoulder. `reference` is the
  * previously displayed triple; it only selects between equivalent YXZ
  * branches, so a drag across the ±90° lift singularity stays continuous. */
 export function readUpperArmRotation(rig:HumanRig|null,side:Side,reference?:ArmRotationValues):ArmRotationValues{
  if(!rig)return {...ZERO_ARM};
  const relative=relativeQuaternion(rig,`shoulder01_${side}`,`upperarm01_${side}`);
- return valuesOf(eulerNear(relative,reference&&radiansOf(reference)));
+ return valuesOf(eulerNear(relative,reference&&radiansOf(reference)),reference);
 }
 
 /** Set one absolute shoulder-relative upper-arm angle while preserving the
@@ -148,7 +165,7 @@ export function setElbowAngle(rig:HumanRig,pose:WorkshopKey['pose'],side:Side,de
 export function readWristRotation(rig:HumanRig|null,side:Side,reference?:WristRotationValues):WristRotationValues{
  if(!rig)return {...ZERO_WRIST};
  const relative=relativeQuaternion(rig,`lowerarm01_${side}`,`wrist_${side}`);
- return wristValuesOf(eulerNear(relative,reference&&wristRadiansOf(reference)));
+ return wristValuesOf(eulerNear(relative,reference&&wristRadiansOf(reference)),reference);
 }
 
 /** Encode an absolute forearm-relative wrist orientation in the existing

@@ -245,6 +245,27 @@ try{
  assert(Math.hypot(...forearmAfter.elbow.map((v,i)=>v-armAfter.elbow[i]))<2e-5,'elbow rotation moved the elbow pivot');
  assert(Math.hypot(...forearmAfter.wrist.map((v,i)=>v-armAfter.wrist[i]))>.001,'elbow rotation did not move the wrist');
  assert(elbowRead>elbowBefore,`elbow flex slider did not increase (${elbowBefore} → ${elbowRead})`);
+ // The rotation sliders read the pose at the PLAYHEAD but write the SELECTED
+ // key. Off the selected key the readout would describe a pose the drag does
+ // not edit, so the controls must be disabled until the two are aligned — the
+ // note's button is the only way back, never a silent edit at the wrong time.
+ const onKey=await read(),nextTime=onKey.doc.keys.map(k=>k.time).filter(t=>t>onKey.time+1e-6).sort((a,b)=>a-b)[0];
+ const offTime=nextTime===undefined?Math.max(0,onKey.time-.2):(onKey.time+nextTime)/2;
+ assert(Math.abs(offTime-onKey.time)>1e-3,'could not pick an off-key preview instant');
+ await page.evaluate(t=>{const e=window.__WS__;e.setPlaying(false);e.seek(t);},offTime);
+ await page.waitForTimeout(120);
+ const offKeyNote=page.getByTestId('rotation-preview-offkey');
+ assert(await offKeyNote.isVisible(),'off-key preview note should be visible while the playhead is between keys');
+ assert(!(await swingSlider.isEnabled()),'upper-arm slider must be disabled while the playhead is off the selected key');
+ assert(!(await flexion.isEnabled()),'elbow slider must be disabled while the playhead is off the selected key');
+ const offKeyDoc=(await read()).doc;
+ await assert.rejects(swingSlider.press('PageUp',{timeout:500}),'a disabled upper-arm slider accepted keyboard input');
+ assert.deepEqual((await read()).doc,offKeyDoc,'a disabled rotation slider still wrote the document');
+ await offKeyNote.getByRole('button',{name:'跳到该关键帧'}).click();
+ await page.waitForTimeout(120);
+ assert.equal(await offKeyNote.count(),0,'jumping to the selected key should clear the off-key note');
+ assert(await swingSlider.isEnabled(),'upper-arm slider should be enabled back on the selected key');
+ assert.equal((await read()).time,onKey.time,'jump-to-key did not land on the selected key');
  const authored=(await read()).doc;
  await page.reload();await ready();
  assertRestoredDoc((await read()).doc,authored);

@@ -240,8 +240,17 @@ try{
  // Playback/seek is allowed; no direct document or engine edit writes.
  await page.evaluate(()=>{window.__WS__.setPlaying(false);window.__WS__.seek(0);});
  const restored=await read();
+ const idbActiveId=await page.evaluate(async()=>{
+  const db=await new Promise((resolve,reject)=>{const request=indexedDB.open('kinesis-workshop',1);request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
+  const text=await new Promise((resolve,reject)=>{
+   const tx=db.transaction('snapshots','readonly');const request=tx.objectStore('snapshots').get('kinesis-workshop-library');
+   tx.oncomplete=()=>resolve(request.result??null);tx.onabort=()=>reject(tx.error??new Error('idb read failed'));
+  });
+  return text?JSON.parse(text).activeId:null;
+ });
+ console.log('post-reload IDB activeId:',idbActiveId);
  assert.equal(restored.doc.id,edited.doc.id,
-  `reloaded active doc: storage.activeId=${restored.storage.activeId} preReload=${JSON.stringify(preReload)} docs=[${restored.storage.docs.map(d=>d.id).join(', ')}]`);
+  `reloaded active doc: storage.activeId=${restored.storage.activeId} idb.activeId=${idbActiveId} preReload=${JSON.stringify(preReload)} docs=[${restored.storage.docs.map(d=>d.id).join(', ')}]`);
  assert.deepEqual(restored.doc,saved.doc);
  assert.equal(restored.storage.quarantine.length,0);
  assertRestoredDoc(restored.storage.docs.find(d=>d.id===before.id),before);

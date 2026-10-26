@@ -107,9 +107,16 @@ try{
  assert.equal(created.playing,false);assert.equal(created.time,0);
  assert.deepEqual({...created.doc,id:preset.document.id,name:preset.document.name,
   keys:created.doc.keys.map((k,i)=>({...k,id:preset.document.keys[i].id}))},preset.document);
- assert.equal(created.storage.docs.length,2);
- assert.deepEqual(created.storage.docs.find(d=>d.id===before.id),before);
- assert.equal(created.storage.activeId,created.doc.id);
+ // The creation save is async — wait for it to reach storage, then compare a
+ // FRESH read (the snapshot above was taken before the flush).
+ await page.waitForFunction(id=>{
+  const stored=JSON.parse(localStorage.getItem('kinesis-workshop-library')??'null');
+  return stored?.docs?.length===2&&stored.docs.some(d=>d.id===id)&&stored.activeId===id;
+ },created.doc.id,{timeout:5000});
+ const createdStored=await read();
+ assert.equal(createdStored.storage.docs.length,2);
+ assert.deepEqual(createdStored.storage.docs.find(d=>d.id===before.id),before);
+ assert.equal(createdStored.storage.activeId,created.doc.id);
  assert(created.doc.keys.every(k=>!preset.document.keys.some(s=>s.id===k.id)));
  assert.equal(await page.locator('.ws-key.sel').count(),1);
  await page.getByRole('button',{name:'撤销',exact:true}).click();
@@ -205,7 +212,13 @@ try{
  assert.notEqual(repeated.doc.id,created.doc.id);
  assert.equal(repeated.doc.name,`${preset.name} 副本`);
  assert.deepEqual(repeated.doc.keys[0].pose.handL.target,targetBefore);
- assert.equal(repeated.storage.docs.length,3);
+ // The creation save is async — wait for the third document to reach storage,
+ // then assert on a fresh read.
+ await page.waitForFunction(id=>{
+  const stored=JSON.parse(localStorage.getItem('kinesis-workshop-library')??'null');
+  return stored?.docs?.length===3&&stored.docs.some(d=>d.id===id);
+ },repeated.doc.id,{timeout:5000});
+ assert.equal((await read()).storage.docs.length,3);
  await page.getByRole('button',{name:'撤销',exact:true}).click();
  const saved=await read();
  assert.equal(saved.doc.id,edited.doc.id);

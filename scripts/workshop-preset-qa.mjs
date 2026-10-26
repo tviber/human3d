@@ -5,12 +5,13 @@ import path from 'node:path';
 import {resolveOutputDir,assertTrackedWriteAllowed,atomicWriteFile,ensureOutputDir} from './lib/qa-output.mjs';
 import {verifyWebIdentity} from './lib/worktree-check.mjs';
 
-// Rehydration canonicalizes hand directions; allow only roundoff there,
-// while requiring all other stored document fields to survive exactly.
+// Rehydration canonicalizes hand directions and re-derives trig-written hand
+// vectors, which can move them by one ULP; every other stored document field
+// must survive exactly.
 function assertRestoredDoc(actual,expected){
  const copy=structuredClone(actual);
  copy.keys.forEach((key,i)=>{
-  for(const hand of ['handL','handR'])for(const field of ['forward','normal'])for(const axis of ['x','y','z']){
+  for(const hand of ['handL','handR'])for(const field of ['target','pole','forward','normal'])for(const axis of ['x','y','z']){
    const value=expected.keys[i].pose[hand][field][axis];
    assert(Math.abs(key.pose[hand][field][axis]-value)<1e-12,`${hand}.${field}.${axis} changed on reload`);
    key.pose[hand][field][axis]=value;
@@ -230,31 +231,16 @@ try{
  assert.equal(saved.doc.id,edited.doc.id);
  assert.deepEqual(saved.doc,finalEdited.doc);
  await awaitStoredActive(edited.doc.id);
- const preReload=await page.evaluate(()=>{
-  const stored=JSON.parse(localStorage.getItem('kinesis-workshop-library')??'null');
-  return {activeId:stored?.activeId,docs:stored?.docs?.map(d=>d.id),window:window.__WS__.getDoc().id};
- });
- console.log('pre-reload library state:',JSON.stringify(preReload));
  await page.reload();await ready();
  await reopenPanels(); // reload resets review mode and collapses the panels
  // Playback/seek is allowed; no direct document or engine edit writes.
  await page.evaluate(()=>{window.__WS__.setPlaying(false);window.__WS__.seek(0);});
  const restored=await read();
- const idbActiveId=await page.evaluate(async()=>{
-  const db=await new Promise((resolve,reject)=>{const request=indexedDB.open('kinesis-workshop',1);request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
-  const text=await new Promise((resolve,reject)=>{
-   const tx=db.transaction('snapshots','readonly');const request=tx.objectStore('snapshots').get('kinesis-workshop-library');
-   tx.oncomplete=()=>resolve(request.result??null);tx.onabort=()=>reject(tx.error??new Error('idb read failed'));
-  });
-  return text?JSON.parse(text).activeId:null;
- });
- console.log('post-reload IDB activeId:',idbActiveId);
  assert.equal(restored.doc.id,edited.doc.id,
-  `reloaded active doc: storage.activeId=${restored.storage.activeId} idb.activeId=${idbActiveId} preReload=${JSON.stringify(preReload)} docs=[${restored.storage.docs.map(d=>d.id).join(', ')}]`);
- assert.deepEqual(restored.doc,saved.doc);
+  `reloaded active doc: storage.activeId=${restored.storage.activeId} docs=[${restored.storage.docs.map(d=>d.id).join(', ')}]`);
+ assertRestoredDoc(restored.doc,saved.doc);
  assert.equal(restored.storage.quarantine.length,0);
  assertRestoredDoc(restored.storage.docs.find(d=>d.id===before.id),before);
- assertRestoredDoc(restored.doc,saved.doc);
  assert(restored.wrist.every((v,i)=>Math.abs(v-saved.wrist[i])<1e-9),'solved pose changed across reload');
  assert.deepEqual(await page.evaluate(async url=>{
   const {motionFileById}=await import(url);return motionFileById('forehand').document;

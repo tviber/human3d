@@ -30,6 +30,7 @@
 ## 持久化与隔离
 
 - `MotionLibrary`：JSON 损坏或 `schemaVersion` 未知时整体进隔离区、跳过自动保存、原文不覆盖（learning [14]）；隔离导出对字符串原文原样导出。
+- 双存储提交顺序（`webPlatform.storageLock`）：**IndexedDB 快照先提交，localStorage 镜像在后**。启动读取以快照为准，所以任何崩溃窗口下快照只能是旧值或新值、镜像滞后——顺序颠倒（镜像先写）时页面死在两写之间会让快照落后镜像一次保存，下次启动恢复出过期的 active 文档（workshop-preset-qa 的 reload 断言实测抓到）。中止不再回滚镜像：镜像根本没被碰过。
 - 生成预览（`generationPreview`）是易失覆盖，不落 localStorage、不进库字节；取消清空候选恢复源，保留才复制为新文档。
 
 ## 渲染导出

@@ -69,6 +69,12 @@ try{
   const sheetLeft=page.getByTestId('sheet-left');
   if(await sheetLeft.getAttribute('aria-expanded')!=='true')await sheetLeft.click();
  };
+ // Library saves are async; a reload rehydrates from storage, so every reload
+ // site first waits until storage carries the expected active document.
+ const awaitStoredActive=id=>page.waitForFunction(want=>{
+  const stored=JSON.parse(localStorage.getItem('kinesis-workshop-library')??'null');
+  return stored?.activeId===want;
+ },id,{timeout:5000});
  await reopenPanels();
  const read=()=>page.evaluate(()=>{
   const e=window.__WS__,doc=e.getDoc();
@@ -223,6 +229,7 @@ try{
  const saved=await read();
  assert.equal(saved.doc.id,edited.doc.id);
  assert.deepEqual(saved.doc,finalEdited.doc);
+ await awaitStoredActive(edited.doc.id);
  await page.reload();await ready();
  await reopenPanels(); // reload resets review mode and collapses the panels
  // Playback/seek is allowed; no direct document or engine edit writes.
@@ -311,6 +318,7 @@ try{
  assert(await swingSlider.isEnabled(),'upper-arm slider should be enabled back on the selected key');
  assert.equal((await read()).time,onKey.time,'jump-to-key did not land on the selected key');
  const authored=(await read()).doc;
+ await awaitStoredActive(authored.id);
  await page.reload();await ready();
  await reopenPanels(); // reload resets review mode and collapses the panels
  assertRestoredDoc((await read()).doc,authored);

@@ -75,8 +75,12 @@ try{
  await page.goto(new URL('/workshop.html',webBase).href);
  await page.waitForFunction(()=>window.__WS__?.ready,{timeout:60000});
  await page.evaluate(()=>window.__WS__.setPlaying(false));
- // Import through the real hidden file input of the 动作文档 card.
- await page.locator('input[type=file][accept*=".json"]').setInputFiles({
+ // Import through the real hidden file input behind 导入动作. The card has a
+ // second .json input (从备份恢复), so target the import one by position — the
+ // same ordering the library QA suites rely on — instead of accepting both.
+ const fileInputs=page.locator('input[type=file][accept=".json,application/json"]');
+ if(await fileInputs.count()!==2)throw new Error(`workshop import card changed: expected 2 JSON inputs, found ${await fileInputs.count()}`);
+ await fileInputs.first().setInputFiles({
   name:`${tag}.json`,mimeType:'application/json',buffer:Buffer.from(JSON.stringify(doc)),
  });
  await page.waitForFunction(id=>window.__WS__.getDoc()?.id===id,doc.id,{timeout:30000});

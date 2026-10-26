@@ -335,6 +335,9 @@ try{
  await page.reload();await ready();
  await reopenPanels(); // reload resets review mode and collapses the panels
  assertRestoredDoc((await read()).doc,authored);
+ // Closed <details> content is not exposed to the accessibility tree, so the
+ // preset select and the generator controls need their folds reopened.
+ await page.locator('[data-fold="preset"] summary').click();
  await page.getByTestId('adjustment-tab-right').click();
  await page.getByTestId('joint-R-upper-swing').scrollIntoViewIfNeeded();
  await page.screenshot({path:outputFile('free-arm-authoring.png')});

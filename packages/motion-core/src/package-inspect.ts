@@ -1,5 +1,6 @@
 import {POSE_PACKAGE_KIND,POSE_PACKAGE_SCHEMA_VERSION} from './package-const';
 import {RIG_ID} from './protocol';
+import {RACKET_BEVELS} from './props/racket';
 import type {PosePackage} from './pose-package';
 import type {MotionCapabilities} from './motion-file';
 import {motionFileById} from './motion-files';
@@ -187,9 +188,11 @@ export function posePackageSpec(p:PosePackage,id:MotionId,trust?:(actionId:strin
  // so a forged presentation channel cannot add a prop to a bundled id.
  const prop=envelope?envelope.capabilities?.prop
   :(pres.prop==='racket'?{kind:'racket' as const,trail:true,handView:true,
-    // Ad-hoc packages carry the document's grip side as a package-level
-    // constant (v2 has no per-frame grip channel); absent means 'R'.
-    ...(pres.gripSide==='L'?{side:'L' as const}:{})}:undefined);
+    // Ad-hoc packages carry the document's grip side and bevel as
+    // package-level constants (v2 has no per-frame prop channel); absent
+    // means 'R' and bevel 1.
+    ...(pres.gripSide==='L'?{side:'L' as const}:{}),
+    ...(typeof pres.bevel==='number'&&Number.isInteger(pres.bevel)&&pres.bevel>=1&&pres.bevel<=RACKET_BEVELS?{bevel:pres.bevel}:{})}:undefined);
  const capabilities:MotionCapabilities|undefined=envelope?envelope.capabilities:(prop?{prop}:undefined);
  // Loop semantics are authored in the document, not the package: bundled
  // envelopes carry the document, ad-hoc packages carry presentation.loop.

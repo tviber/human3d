@@ -25,7 +25,7 @@
 |---|---|---|
 | [engineering/](engineering/) | 流程约定：review-protocol（审查协议 + 模板）、task-protocol（owner lane/ledger）、review-gates（验证生命周期）、ci-lifecycle（Draft/Ready CI 矩阵）、test-matrix、worktree-policy | 接任务/提交前 |
 | [domain/](domain/) | 领域不变量：motion-model / solver / pose-package / workshop | 改对应代码前按需读 |
-| [decisions/](decisions/) | ADR：已确认方案、被否方案与依据（0001–0009） | 要改某个设计前提时 |
+| [decisions/](decisions/) | ADR：已确认方案、被否方案与依据（0001–0010） | 要改某个设计前提时 |
 | [history/](history/) | 冻结的完整调查史（investigate.md）与 PR 审查记录（issue-11-pr13-16-review.md） | 只在需要历史证据时，非默认必读 |
 | [learning.md](learning.md) | 17 条工程规则（Orders）+ 类别索引 | 改核心代码前 |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | npm workspaces 三包结构、迁移裁决、维护规则 | 改结构/边界前 |

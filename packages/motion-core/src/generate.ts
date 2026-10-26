@@ -121,6 +121,10 @@ export function subsampleDoc(doc:WorkshopDoc,times:number[],rest:ReadonlyMap<str
  if(doc.clavicleLift!==undefined)out.clavicleLift=doc.clavicleLift;
  if(doc.freeArms!==undefined)out.freeArms=doc.freeArms;
  if(doc.gripSide!==undefined)out.gripSide=doc.gripSide;
+ // The bevel is a document-level authoring property of the prop, so a
+ // subsampled copy has to keep the same facet in the palm. `handSpread` needs
+ // no carry: it lives in the keys' poses and sampleMotion returns it.
+ if(doc.gripBevel!==undefined)out.gripBevel=doc.gripBevel;
  const problems=validateDocShape(out);
  if(problems.length)throw new Error(`subsampleDoc 产出非法文档: ${problems.join('；')}`);
  return out;
@@ -251,13 +255,17 @@ export function applyGenMove(ctx:GenMoveContext,cand:WorkshopDoc,move:GenMove):W
  /* Source snapshot — the group slice of the flattened sampled pose replaces
   * the same slice of the key's current pose. Channel layout (document.ts
   * flattenPose): trunk 0–6 · handL 7–18 · handR 19–30 · footL 31–38 ·
-  * footR 39–46. */
+  * footR 39–46; each hand group also carries its appended spread channel
+  * (handL 47, handR 48). The foot ranges end at 47 so they never absorb the
+  * appended finger channels. */
  const RANGE:Record<ChannelGroup,[number,number]>={trunk:[0,7],handL:[7,19],handR:[19,31],footL:[31,39],footR:[39,47]};
+ const EXTRAS:Partial<Record<ChannelGroup,number[]>>={handL:[47],handR:[48]};
  const st=cand.loop?((t%cand.duration)+cand.duration)%cand.duration:t;
  const flat=flattenPose(k.pose),from=flattenPose(sampleMotion(ctx.compiled,st));
  const [a,b]=RANGE[g];
  let dirty=false;
  for(let c=a;c<b;c++){if(flat[c]!==from[c])dirty=true;flat[c]=from[c];}
+ for(const c of EXTRAS[g]??[]){if(flat[c]!==from[c])dirty=true;flat[c]=from[c];}
  if(!dirty)return null;
  const out=cloneDoc(cand);
  out.keys.find(x=>x.id===k.id)!.pose=unflattenPose(flat);
@@ -478,9 +486,10 @@ function docGates(ctx:GenMoveContext,src:WorkshopDoc,cand:WorkshopDoc):GenConstr
  rows.push({code:'key-set',ok:sk.length===ck.length&&sk.every((k,i)=>k.id===ck[i].id),
   detail:'关键帧 id 集合与排序一致'});
  rows.push({code:'doc-fields',ok:src.duration===cand.duration&&src.inbetweens===cand.inbetweens
-  &&src.loop===cand.loop&&src.gripSide===cand.gripSide&&src.clavicleLift===cand.clavicleLift&&src.freeArms===cand.freeArms
+  &&src.loop===cand.loop&&src.gripSide===cand.gripSide&&src.gripBevel===cand.gripBevel
+  &&src.clavicleLift===cand.clavicleLift&&src.freeArms===cand.freeArms
   &&src.handFrames.L===cand.handFrames.L&&src.handFrames.R===cand.handFrames.R,
-  detail:'duration/inbetweens/loop/handFrames/gripSide/clavicleLift/freeArms 原样'});
+  detail:'duration/inbetweens/loop/handFrames/gripSide/gripBevel/clavicleLift/freeArms 原样'});
  rows.push({code:'constraints-pattern',ok:sk.every((k,i)=>sameConstraints(k,ck[i])),
   detail:'逐键 plantL/plantR/grip/contact 深比较'});
  const pinned=sk.every((k,i)=>{

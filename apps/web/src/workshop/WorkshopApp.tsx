@@ -22,7 +22,7 @@ import {MAX_BACKUP_BYTES,RESTORE_POINT_KEY,backupText,mergeBackup,parseBackup,re
 import {HistoryBook,RecordGate} from './history';
 import {SemanticPanel,type SemanticHost} from './semantic-panel';
 import {copyKeyframe,keyframeInsertSlot,keyframeTimeProblem,moveKeyframe,removeKeyframe} from './keyframes';
-import {clampDuration,WORKSHOP_LIMITS} from '@human3d/motion-core';
+import {clampDuration,RACKET_BEVEL_DEFAULT,RACKET_BEVELS,RELAXED_SPREAD,WORKSHOP_LIMITS} from '@human3d/motion-core';
 import {ankleYForLift,footLift,type Side} from '@human3d/motion-core';
 import {rotateArmJoint,rotateHandFrame} from '@human3d/motion-core';
 import {unwrapMotionFile} from '@human3d/motion-core';
@@ -86,6 +86,27 @@ function WristPanel({k,side,free,edit}:{k:WorkshopKey;side:Side;free:boolean;edi
   <Slider label="屈 / 伸" value={v.flex} min={free?-180:-60} max={free?180:60} step={1} testId={`wrist-${side}-flex`} onChange={x=>turn('flex',x)}/>
   <Slider label="尺桡偏" value={v.dev} min={free?-180:-60} max={free?180:60} step={1} testId={`wrist-${side}-dev`} onChange={x=>turn('dev',x)}/>
   <Slider label="旋前 / 旋后" value={v.twist} min={-180} max={180} step={1} testId={`wrist-${side}-twist`} onChange={x=>turn('twist',x)}/>
+ </div>;
+}
+/** Finger shape: one slider per hand, fist (0) → relaxed (0.5) → spread open
+ * (1). Relaxed is the absent canonical form, so the readout says so instead of
+ * showing a written value that normalizeDoc would fold away again. The gripping
+ * hand's wrap blends FROM this shape, so a fist still closes around the handle
+ * and an open hand wraps from open. */
+function FingerShapePanel({k,side,edit}:{k:WorkshopKey;side:Side;edit:(fn:(key:WorkshopKey)=>void)=>void}){
+ const value=k.pose.handSpread?.[side]??RELAXED_SPREAD;
+ const label=value<=.01?'握拳':value>=.99?'张开':Math.abs(value-RELAXED_SPREAD)<.01?'自然放松':'过渡中';
+ return <div className="ws-sub"><h3>{side==='L'?'左':'右'}手指开合 <small>握拳 / 自然 / 张开</small></h3>
+  <Slider label={`手指开合（${label}）`} value={Math.round(value*100)} min={0} max={100} step={1} unit="%" testId={`finger-spread-${side}`}
+   onChange={pct=>edit(key=>{
+    const next=pct/100;
+    // Writing the relaxed value backs out the channel instead of storing half
+    // the default: an absent channel IS relaxed, and normalizeDoc folds it.
+    if(Math.abs(next-RELAXED_SPREAD)<.005){
+     if(key.pose.handSpread){delete key.pose.handSpread[side];if(key.pose.handSpread.L===undefined&&key.pose.handSpread.R===undefined)delete key.pose.handSpread;}
+    }else{(key.pose.handSpread??={})[side]=next;}
+   })}/>
+  <p className="ws-note">握拳时手指收拢到掌面；握拍手的手掌包裹从这个手型插值，所以握拳仍然握住拍柄。非握拍手直接采用该手型。</p>
  </div>;
 }
 function ArmJointPanel({side,joint,disabled,onTurn}:{side:Side;joint:'upper'|'forearm';disabled:boolean;onTurn:(kind:'lift'|'swing'|'twist',delta:number)=>void}){
@@ -202,7 +223,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
  const subtleOk=typeof globalThis.crypto?.subtle?.digest==='function';
  // Session-only display toggles (never persisted) — same convention as the
  // engine's WorkshopOptions defaults.
- const [opts,setOpts]=useState({handles:true,trajectories:false,balance:false,onion:false,onionCount:2,onionMode:'keys' as 'keys'|'step',onionStep:.1});
+ const [opts,setOpts]=useState({handles:true,trajectories:false,balance:false,onion:false,onionCount:2,onionMode:'keys' as 'keys'|'step',onionStep:.1,bevels:false});
  const [optsOpen,setOptsOpen]=useState(false);
  // Issue #23: phone layout = viewport + bottom sheets; Review mode blocks every
  // viewport write. Same query as the CSS breakpoint in workshop.css.
@@ -1208,6 +1229,14 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
          the racket mount — mirrors onto the selected side; 'R' stores the
          canonical absent value so serialized docs keep their legacy bytes. */}
      <label className="ws-field"><span>握拍侧</span><select value={d.gripSide??'R'} onChange={e=>edit(dd=>{dd.gripSide=e.target.value==='L'?'L':undefined;})}><option value="R">右手（默认）</option><option value="L">左手</option></select></label>
+     {/* 棱面：把拍柄转一个 45° 的整数倍，让选中的棱面贴住手掌。编号是手掌相对的
+         （1 = 默认贴掌的那面），所以换手后同一个号码是同一种握法。它不是求解输入
+         （拍头在中轴上、手指绕圆柄包裹、没有骨骼读取拍面朝向），轨迹不变；但作为
+         文档字段照常进入请求指纹与定义哈希——改棱面会得到新的 artifact id。 */}
+     <label className="ws-field"><span>棱面（贴掌面）</span><select data-testid="grip-bevel" value={d.gripBevel??RACKET_BEVEL_DEFAULT} onChange={e=>{const v=Number(e.target.value);edit(dd=>{if(v===RACKET_BEVEL_DEFAULT)delete dd.gripBevel;else dd.gripBevel=v;});}}>
+      {Array.from({length:RACKET_BEVELS},(_,i)=>i+1).map(n=><option key={n} value={n}>{n}{n===RACKET_BEVEL_DEFAULT?'（默认）':''}</option>)}
+     </select></label>
+     <p className="ws-note">转动球拍只会改变拍面朝向，握拍位置不变。开启「显示 → 拍柄棱面编号」可对照号码选择。</p>
      <Row label="抬肩辅助" detail="手高于胸口时锁骨与肩部随动上抬" checked={d.clavicleLift===true} onChange={v=>edit(dd=>{dd.clavicleLift=v||undefined;})}/>
      <div className="ws-row">
       {/* x=0 平面整档镜像：同一动作换边（右手正手→左手正手）。产出入库并选
@@ -1289,6 +1318,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
        <Row label="运动轨迹线" checked={opts.trajectories} onChange={v=>setOpt({trajectories:v})}/>
        <Row label="重心 / 支撑" checked={opts.balance} onChange={v=>setOpt({balance:v})}/>
        {!review?<Row label="编辑手柄" checked={opts.handles} onChange={v=>setOpt({handles:v})}/>:null}
+       <Row label="拍柄棱面编号" detail="在拍柄 8 个棱面上标出 1–8，用来选择贴掌面" checked={opts.bevels} onChange={v=>setOpt({bevels:v})}/>
        <Row label="洋葱皮" detail="叠加前后姿态的幽灵骨架" checked={opts.onion} onChange={v=>setOpt({onion:v})}/>
        {opts.onion?<>
         <label className="ws-field"><span>数量</span><input type="number" min={1} max={3} step={1} value={opts.onionCount} onChange={e=>{const v=Math.max(1,Math.min(3,Math.round(Number(e.target.value)||1)));setOpts(o=>({...o,onionCount:v}));engine.current?.setOptions({onionCount:v});}}/></label>
@@ -1362,6 +1392,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
       {adjustmentTab!=='common'?<>
        {!d.freeArms?<p className="ws-note">当前启用人体参考限位。在“通用调整”启用“自由手臂”可使用全方向旋转。</p>:null}
        <WristPanel key={`${d.id}:${sel.id}:${adjustmentSide}:${wristEpoch.current}:${d.freeArms}`} side={adjustmentSide} free={d.freeArms===true} k={sel} edit={editSelected}/>
+       <FingerShapePanel key={`${d.id}:${sel.id}:${adjustmentSide}`} side={adjustmentSide} k={sel} edit={editSelected}/>
        {(['upper','forearm'] as const).map(joint=><ArmJointPanel key={`${d.id}:${sel.id}:${adjustmentSide}:${joint}:${wristEpoch.current}`} side={adjustmentSide} joint={joint} disabled={!info} onTurn={(kind,delta)=>editSelected(k=>{const rig=engine.current?.rig;if(rig)rotateArmJoint(rig,k.pose,adjustmentSide,joint,kind,delta);})}/>)}
       </>:null}
       {(['L','R']as const).filter(side=>adjustmentTab==='left'?side==='L':adjustmentTab==='right'?side==='R':false).map(side=>{

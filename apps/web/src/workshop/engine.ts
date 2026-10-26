@@ -1,6 +1,6 @@
 import {webPlatform,type AppPlatform} from '../platform/platform';
-import {AmbientLight,BufferGeometry,Color,DirectionalLight,DoubleSide,Float32BufferAttribute,Group,HemisphereLight,Line,LineBasicMaterial,LineDashedMaterial,LineLoop,LineSegments,Mesh,MeshBasicMaterial,MeshStandardMaterial,PerspectiveCamera,Plane,PlaneGeometry,Raycaster,RingGeometry,Scene,SkinnedMesh,SphereGeometry,Vector2,Vector3,WebGLRenderer,PCFSoftShadowMap,SRGBColorSpace,ACESFilmicToneMapping,Clock,GridHelper} from 'three';
-import {RACKET_TIP_LOCAL} from '@human3d/motion-core';
+import {AmbientLight,BufferGeometry,CanvasTexture,Color,DirectionalLight,DoubleSide,Float32BufferAttribute,Group,HemisphereLight,Line,LineBasicMaterial,LineDashedMaterial,LineLoop,LineSegments,Mesh,MeshBasicMaterial,MeshStandardMaterial,PerspectiveCamera,Plane,PlaneGeometry,Raycaster,RingGeometry,Scene,SkinnedMesh,SphereGeometry,Sprite,SpriteMaterial,Vector2,Vector3,WebGLRenderer,PCFSoftShadowMap,SRGBColorSpace,ACESFilmicToneMapping,Clock,GridHelper} from 'three';
+import {RACKET_TIP_LOCAL,RACKET_BEVELS,bevelAnchor} from '@human3d/motion-core';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {HumanRig,skeletonSegments} from '@human3d/motion-core';
@@ -18,7 +18,11 @@ import {loadAnatomyAtlas} from '../theme/anatomy-skin';
 import {AnatomySelection} from '../theme/anatomy-selection';
 
 export interface WorkshopFrame{time:number;duration:number;playing:boolean;label:string;analysis?:Analysis}
-export interface WorkshopOptions{handles:boolean;trajectories:boolean;balance:boolean;onion:boolean;onionCount:number;onionMode:'keys'|'step';onionStep:number}
+export interface WorkshopOptions{handles:boolean;trajectories:boolean;balance:boolean;onion:boolean;onionCount:number;onionMode:'keys'|'step';onionStep:number;
+ /** Draw the handle's eight bevel numbers (1–8) as labels around the grip.
+  * Display-only: the authored bevel (doc.gripBevel) is what turns the racket,
+  * and this option never touches the document. */
+ bevels:boolean}
 /** Ghost cap per direction: ≤3 keeps even a maxKeys document cheap — keys mode
  * brackets only the ±N keys around the playhead, never the whole timeline. */
 export const ONION_MAX=3;
@@ -59,6 +63,21 @@ export function onionTimes(doc:WorkshopDoc,time:number,o:Pick<WorkshopOptions,'o
   before.forEach((k,i)=>out.push({time:k.time,dir:-1,dist:before.length-i}));
   afterN.forEach((k,i)=>out.push({time:k.time,dir:1,dist:i+1}));
   return out;
+}
+/** One bevel-number badge texture. A canvas glyph is exactly why this lives in
+ * apps/web and not in motion-core: the core is DOM-free by architecture test,
+ * so it publishes the anchor and the workshop draws the number. Round, opaque,
+ * high-contrast so a 26 mm sprite reads against both the dark grip and the
+ * bright floor; mipmaps on, since the badge is usually sub-screen-size. */
+function bevelTexture(bevel:number){
+ const c=document.createElement('canvas');c.width=c.height=64;
+ const g=c.getContext('2d')!;
+ g.fillStyle='#f7c948';g.beginPath();g.arc(32,32,30,0,Math.PI*2);g.fill();
+ g.lineWidth=3;g.strokeStyle='#1d2a3a';g.stroke();
+ g.fillStyle='#1d2a3a';g.font='700 40px "DM Sans",system-ui,sans-serif';
+ g.textAlign='center';g.textBaseline='middle';g.fillText(String(bevel),32,34);
+ const tex=new CanvasTexture(c);tex.colorSpace=SRGBColorSpace;tex.anisotropy=4;
+ return tex;
 }
 /* ---------- fixed-camera render export (WP-D) ---------- */
 /** Self-describing still contract: every exported frame is a
@@ -118,7 +137,7 @@ export class WorkshopEngine{
   /** Review mode (false) hides handles and refuses every pointer pick, so a
    * camera gesture can never write the document (issue #23 PR-A). */
   editable=true;
-  options:WorkshopOptions={handles:true,trajectories:false,balance:false,onion:false,onionCount:2,onionMode:'keys',onionStep:.1};
+  options:WorkshopOptions={handles:true,trajectories:false,balance:false,onion:false,onionCount:2,onionMode:'keys',onionStep:.1,bevels:false};
   private clock=new Clock();private raf=0;private lastNotify=0;private resizeObserver:ResizeObserver;private unbindTheme?:()=>void;
   private keyLight?:DirectionalLight;
   private handleGroup=new Group();private handles:Handle[]=[];private contactMarkers:Mesh[]=[];
@@ -128,6 +147,10 @@ export class WorkshopEngine{
   private onionLines:LineSegments[]=[];private onionSegs:{name:string;parent:string}[]=[];
   private onionSig='';private onionStale=true;
   private raycaster=new Raycaster();private pointer=new Vector2();
+  /** Bevel number labels (1–8), children of the racket group so they turn with
+   * the handle. Created once per side in makeBevelLabels; visibility follows
+   * options.bevels && the racket being on screen. */
+  private bevelLabels:Sprite[]=[];private bevelSide:'L'|'R'='R';
   private drag?:{h:Handle;plane:Plane;offset:Vector3;key:WorkshopKey};private docDirty=true;
   private deferPelvisSchedule=false;
   /* Compiled-snapshot cache (issue #10 PR-B): one slot, keyed by document
@@ -169,6 +192,9 @@ export class WorkshopEngine{
   /** The wrist the racket is currently mounted on — remounted when a solve
    * carries a different gripSide than the last mount (doc edits, doc switch). */
   private racketSide:'L'|'R'='R';
+  /** The bevel currently rolled into the palm — remounts on change the same way
+   * racketSide does. Undefined means the canonical bevel 1. */
+  private racketBevel:number|undefined;
   onFrame?:(f:WorkshopFrame)=>void;onReady?:(info:RigInfo)=>void;onError?:(e:Error)=>void;
   /** App hooks: begin edit = pick or auto-insert the key being dragged. */
   onBeginEdit?:(time:number,prefer?:string)=>WorkshopKey|null;
@@ -205,7 +231,9 @@ export class WorkshopEngine{
       this.anatomy=new AnatomySelection(this.host,this.renderer.domElement,this.camera,atlas,event=>this.capturing||!this.ready||!!this.drag||!!this.pick(event));
       this.model.traverse(o=>{if(o instanceof SkinnedMesh){o.castShadow=true;o.receiveShadow=true;o.frustumCulled=false;this.anatomy!.add(o);}});
       this.skinSwap=new SkinSwap(this.model,this.platform);await this.skinSwap.set(this.skin);if(this.disposed)return;
-      this.racket=attachProp(this.rig,'racket',this.getDoc().gripSide==='L'?'L':'R');this.racketSide=this.getDoc().gripSide==='L'?'L':'R';this.racket.visible=false;
+      this.racket=attachProp(this.rig,'racket',this.getDoc().gripSide==='L'?'L':'R',this.getDoc().gripBevel);
+      this.racketSide=this.getDoc().gripSide==='L'?'L':'R';this.racketBevel=this.getDoc().gripBevel;this.racket.visible=false;
+      this.makeBevelLabels(this.racketSide);
       this.footGeo={L:footGeometry(this.rig.rest,'L'),R:footGeometry(this.rig.rest,'R')};
       this.makeHandles();this.makeMarkers();this.makeOnion();
       this.ready=true;this.solveCurrent();this.setView('threeQuarter');this.onReady?.(info);
@@ -247,6 +275,24 @@ export class WorkshopEngine{
       const line=new LineSegments(geo,new LineBasicMaterial({color:dir<0?0x367cff:0xe2543a,depthTest:false,transparent:true,opacity:.4*(1-(dist-1)*.25)}));
       line.renderOrder=8;line.frustumCulled=false;line.visible=false;line.userData.onion={dir,dist};
       this.scene.add(line);this.onionLines.push(line);
+    }
+  }
+  /** Bevel number badges: one sprite per facet, parented to the racket group so
+   * they ride the handle (and follow the bevel roll for free). Core owns the
+   * anchors (bevelAnchor) but not the glyph: drawing text needs a canvas, and
+   * motion-core is DOM-free by test. Sprites always face the camera, so a
+   * number stays readable as the handle turns. The side is rebuilt on remount
+   * because the left numbering is mirrored. */
+  private makeBevelLabels(side:'L'|'R'){
+    for(const s of this.bevelLabels){s.parent?.remove(s);s.material.map?.dispose();s.material.dispose();}
+    this.bevelLabels=[];this.bevelSide=side;
+    if(!this.racket)return;
+    for(let bevel=1;bevel<=RACKET_BEVELS;bevel++){
+      const sprite=new Sprite(new SpriteMaterial({map:bevelTexture(bevel),depthTest:false,transparent:true}));
+      sprite.position.copy(bevelAnchor(side,bevel));
+      sprite.scale.setScalar(.026);sprite.renderOrder=19; // below handles (20), above the prop
+      sprite.visible=false;sprite.userData.bevel=bevel;
+      this.racket.add(sprite);this.bevelLabels.push(sprite);
     }
   }
   /** Foot geometry from the loaded rig (sole offsets for lift and clearance). */
@@ -377,12 +423,21 @@ export class WorkshopEngine{
       ?(this.pelvis?.doc===doc?this.pelvis.schedule:undefined)
       :this.scheduleFor(doc);
     solveEffectiveFrame(this.rig,f,schedule&&!schedule.passthrough?schedule.at(t):undefined);
-    /* Remount on side change — the frame carries the doc's gripSide, and the
-     * mount is a constant per document, so this fires at most once per edit
-     * (here, the one place every solve path funnels through, trajectory and
-     * ghost sampling included). */
+    /* Remount on side/bevel change — the frame carries the doc's gripSide and
+     * gripBevel, and both are constants per document, so this fires at most
+     * once per edit (here, the one place every solve path funnels through,
+     * trajectory and ghost sampling included). The bevel is a roll about the
+     * handle inside the wrist frame: it turns the string bed and nothing the
+     * solver reads, so a remount never changes the trajectory. */
     const side=f.gripSide==='L'?'L':'R';
-    if(this.racket&&side!==this.racketSide){mountRacket(this.rig,this.racket,side);this.racketSide=side;}
+    if(this.racket&&(side!==this.racketSide||f.gripBevel!==this.racketBevel)){
+      mountRacket(this.rig,this.racket,side,f.gripBevel);
+      this.racketSide=side;
+      // The label ring is per side (the left numbering mirrors), so the side
+      // change has to redraw it — a bevel-only change leaves the ring alone.
+      if(side!==this.bevelSide)this.makeBevelLabels(side);
+      this.racketBevel=f.gripBevel;
+    }
   }
   /** The pelvis shift the viewport solves time `t` with (undefined = argmin). */
   pelvisShiftAt(t:number){
@@ -402,6 +457,10 @@ export class WorkshopEngine{
     this.solveFrame(f,t);
     this.latestFrame=f;
     if(this.racket)this.racket.visible=f.gripAmount>0;
+    // A number floating over the grip where no racket is mounted would name a
+    // facet the user cannot see, so the labels follow the prop, not the option.
+    const showBevels=this.options.bevels&&f.gripAmount>0&&!this.capturing;
+    for(const s of this.bevelLabels)s.visible=showBevels;
     this.updateHandles(f);
   }
   private updateHandles(f:EffectiveFrame){

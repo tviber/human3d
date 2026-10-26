@@ -74,6 +74,21 @@ describe('combine saved motions through the production document sampler',()=>{
   expect(out.keys.every(k=>k.constraints.grip)).toBe(true);
   expect(()=>combineMotions(a,mirrorDoc(b),{kind:'append',transition:.3},origin())).toThrow(/持拍侧不同/);
  });
+ it('carries the grip source bevel and clears an inherited nondefault when that source uses the default facet',()=>{
+  const gripDoc=(bevel?:number)=>{const d=doc('grip');d.keys.forEach(k=>k.constraints.grip=true);if(bevel!==undefined)d.gripBevel=bevel;return d;};
+  // The bevel follows the doc whose grip survives (policy spreads itself onto
+  // the output first), so a shaped facet on the grip source wins even when the
+  // policy source carries a different one.
+  expect(combineMotions(doc('p'),gripDoc(6),{kind:'append',transition:.3},origin()).gripBevel).toBe(6);
+  expect(combineMotions(gripDoc(3),doc('n'),{kind:'blend',weight:.75},origin()).gripBevel).toBe(3);
+  // Absent — and an explicit 1, which normalizeDoc folds back to absent — is
+  // the canonical default facet: the nondefault bevel inherited from policy
+  // must be cleared, not silently kept.
+  const policy=doc('policy');policy.gripBevel=5;
+  expect(combineMotions(policy,gripDoc(),{kind:'append',transition:.3},origin()).gripBevel).toBeUndefined();
+  expect(combineMotions(gripDoc(1),policy,{kind:'blend',weight:.75},origin()).gripBevel).toBeUndefined();
+  expect(validateDocShape(combineMotions(policy,gripDoc(6),{kind:'append',transition:.3},origin()))).toEqual([]);
+ });
  it('rejects incompatible document policies and limits before touching either source',()=>{
   const a=doc('a',6),b=doc('b',5),before=serializeDoc(a);
   expect(()=>combineMotions(a,b,{kind:'append',transition:.3},origin())).toThrow(/10 秒上限/);

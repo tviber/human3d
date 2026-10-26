@@ -1,4 +1,5 @@
 import {VRM_SEMANTIC_MAP} from './semantic-map';
+import {RACKET_BEVEL_DEFAULT} from './props/racket';
 import type {WorkshopDoc} from './document';
 
 /** Wire-level protocol primitives shared by the Node service (src/server) and
@@ -18,11 +19,11 @@ import type {WorkshopDoc} from './document';
  * cannot alter a single solved frame (comments, renaming, extraction) do not
  * require a bump — but when in doubt, bump: a stale id is worse than a
  * gratuitous one. */
-export const SERVICE_VERSION='0.8.0';
+export const SERVICE_VERSION='0.9.0';
 export const RIG_ID='makehuman-body';
 /** Format revision of the ad-hoc workshop document contract. Bumped with the
  * schema, not per document; bundled actions get a content-derived revision. */
-export const WORKSHOP_REVISION='workshop-doc/v4';
+export const WORKSHOP_REVISION='workshop-doc/v5';
 /** Solver identity: carried into provenance.solver and the artifact hash.
  * A rewrite under a new algorithm deserves a new name; same-name semantic
  * changes bump SERVICE_VERSION (see its comment). */
@@ -106,17 +107,21 @@ export interface WorkshopMetaArgs{
  documentName?:string;
  /** Ad-hoc presentation hints: prop flags the racket (any key carries a grip
   * constraint), loop mirrors doc.loop, gripSide mirrors doc.gripSide ('L'
-  * only — 'R' is the absent default). `parameters` is an open object in the
-  * schema and never enters the artifact hash — the solve-affecting copy of
-  * the side already lives inside parameters.document for the fingerprint. */
- prop?:boolean;loop?:boolean;gripSide?:'L'|'R';
+  * only — 'R' is the absent default), bevel mirrors doc.gripBevel (1 only —
+  * the canonical facet is the absent default). `parameters` is an open object
+  * in the schema and never enters the artifact hash — the copy a consumer
+  * needs to display the held prop travels with the presentation hints, while
+  * the solve-affecting document stays inside parameters.document. */
+ prop?:boolean;loop?:boolean;gripSide?:'L'|'R';bevel?:number;
  source:string;license:string;requestFingerprint:string;
  fps:number;duration:number;keys:number;notes?:string[];
 }
 export function workshopMeta(a:WorkshopMetaArgs){
  const parameters=a.documentName===undefined?{}:
   {documentName:a.documentName,presentation:{...(a.prop?{prop:'racket' as const}:{}),
-   ...(a.prop&&a.gripSide==='L'?{gripSide:'L' as const}:{}),loop:a.loop===true}};
+   ...(a.prop&&a.gripSide==='L'?{gripSide:'L' as const}:{}),
+   ...(a.prop&&a.bevel!==undefined&&a.bevel!==RACKET_BEVEL_DEFAULT?{bevel:a.bevel}:{}),
+   loop:a.loop===true}};
  return {motionId:a.motionId,manifestSHA256:a.manifestSHA256,bones:a.bones,
   action:{id:a.actionId,revision:a.revision,parameters,definitionSHA256:a.definitionSHA256},
   provenance:{solver:SOLVER_NAME,solverRevision:SERVICE_VERSION,source:a.source,requestFingerprint:a.requestFingerprint,

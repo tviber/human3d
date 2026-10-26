@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import {Quaternion,Vector3} from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {HumanRig} from './rig';
-import {attachRacket} from './props/racket';
+import {attachRacket,bevelDirection,bevelRoll,RACKET_BEVELS} from './props/racket';
 import {gripFrame} from './grip';
 import {RACKET_HANDLE} from './props/racket';
 import {blankDocument,frameAt,parseDoc,serializeDoc,validateDocShape,type FootTarget,type HandTarget,type V3,type WorkshopDoc} from './document';
@@ -168,6 +168,33 @@ describe('gripSide — racket mount',()=>{
    expect(a.x).toBeCloseTo(-b.x,9);expect(a.y).toBeCloseTo(b.y,9);expect(a.z).toBeCloseTo(b.z,9);
   }
   expect(L.axis.x).toBeCloseTo(R.axis.x,9);expect(L.axis.y).toBeCloseTo(-R.axis.y,9);expect(L.axis.z).toBeCloseTo(-R.axis.z,9);
+ });
+ it('bevel rolls mirror and every palm-relative direction advances by one 45° facet',()=>{
+  expect(RACKET_BEVELS).toBe(8);
+  for(let bevel=1;bevel<=RACKET_BEVELS;bevel++){
+   const r=bevelDirection('R',bevel),l=bevelDirection('L',bevel);
+   expect(l.x).toBeCloseTo(-r.x,12);expect(l.y).toBeCloseTo(r.y,12);expect(l.z).toBeCloseTo(r.z,12);
+   expect(bevelRoll('L',bevel)).toBe(-bevelRoll('R',bevel));
+   if(bevel<RACKET_BEVELS){
+    // Azimuth maps θ→(sinθ,cosθ), so the plain (x,z) cross comes out NEGATED;
+    // swap the order to measure the +45° advance from one facet to the next.
+    const next=bevelDirection('R',bevel+1);
+    expect(Math.atan2(next.x*r.z-next.z*r.x,r.x*next.x+r.z*next.z)).toBeCloseTo(Math.PI/4,12);
+   }
+  }
+ });
+ it('mounts nondefault bevels as the exact left/right mirror',()=>{
+  const doc=symmetricDoc();
+  for(const bevel of [2,4,8]){
+   const rR=attachRacket(rig,'R',bevel),rL=attachRacket(rig,'L',bevel);
+   solved(doc,.5);const R={tip:rR.localToWorld(RACKET_TIP_LOCAL.clone()),q:rR.getWorldQuaternion(new Quaternion()),edge:rR.localToWorld(new Vector3(.03,.45,0))};
+   // The left mount is the conjugated transform, so a local probe with x≠0
+   // corresponds to the x-mirrored local point on the left racket.
+   solved({...doc,gripSide:'L'},.5);const L={tip:rL.localToWorld(RACKET_TIP_LOCAL.clone()),q:rL.getWorldQuaternion(new Quaternion()),edge:rL.localToWorld(new Vector3(-.03,.45,0))};
+   for(const k of ['tip','edge']as const)expect(L[k].distanceTo(new Vector3(-R[k].x,R[k].y,R[k].z)),`bevel ${bevel} ${k}`).toBeLessThan(1e-9);
+   expect(L.q.angleTo(mirrorQuat(R.q)),`bevel ${bevel} rotation`).toBeLessThan(1e-6);
+   rR.removeFromParent();rL.removeFromParent();
+  }
  });
  it('mounts on wrist_L with the mirrored transform',()=>{
   const doc=symmetricDoc();

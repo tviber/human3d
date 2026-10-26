@@ -91,7 +91,11 @@ try{
  await page.getByTestId('display-menu').tap();
  const onion=page.locator('.ws-optmenu .ws-check').filter({hasText:'洋葱皮'}).locator('input');
  await onion.check();assert(await onion.isChecked());
- await page.getByRole('button',{name:'关闭显示菜单'}).tap({position:{x:2,y:2}});
+ // Tap the scrim's left middle: its top edge sits under the sticky header,
+ // which would intercept the tap, and the center-right holds the open menu.
+ const closeMenu=page.getByRole('button',{name:'关闭显示菜单'});
+ const scrimBox=await closeMenu.boundingBox();
+ await closeMenu.tap({position:{x:2,y:Math.round(scrimBox.height/2)}});
  assert.equal((await read(page)).storage,before.storage);
  checks.quickToggles=true;
  await page.screenshot({path:outputFile('phone-review.png')});

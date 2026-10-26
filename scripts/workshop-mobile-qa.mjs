@@ -45,6 +45,14 @@ function sameDoc(actual,expected,label){
  assert.deepEqual(a,expected,label);
 }
 const noOverflow=page=>page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth&&document.documentElement.scrollHeight<=innerHeight+1);
+// Library saves are async (Web Locks + snapshot transaction); a reload
+// rehydrates from that store, so wait until storage carries the live document
+// before reloading.
+const awaitStoredDoc=page=>page.waitForFunction(()=>{
+ const stored=JSON.parse(localStorage.getItem('kinesis-workshop-library')??'null');
+ const doc=stored?.docs?.find(d=>d.id===window.__WS__.getDoc().id);
+ return !!doc&&JSON.stringify(doc)===JSON.stringify(window.__WS__.getDoc());
+},{timeout:5000});
 try{
  /* ---------- phone portrait 390×844 ---------- */
  const phone=await browser.newContext({viewport:{width:390,height:844},deviceScaleFactor:1,isMobile:true,hasTouch:true,permissions:['clipboard-read','clipboard-write']});
@@ -189,6 +197,7 @@ try{
  await undo.tap();sameDoc((await read(page)).doc,base.doc,'second undo is not the elbow step');
  await redo.tap();await redo.tap();
  sameDoc((await read(page)).doc,wristDoc.doc,'redo');
+ await awaitStoredDoc(page);
  await page.reload();await ready(page);
  sameDoc((await read(page)).doc,wristDoc.doc,'reload changed the document');
  const keyLabel=wristDoc.doc.keys[keyIndex].label;

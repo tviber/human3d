@@ -1,0 +1,173 @@
+{
+  "label": "ready-2d",
+  "category": "Ready_Position",
+  "keypoint_names": [
+    "nose",
+    "left_eye",
+    "right_eye",
+    "left_ear",
+    "right_ear",
+    "left_shoulder",
+    "right_shoulder",
+    "left_elbow",
+    "right_elbow",
+    "left_wrist",
+    "right_wrist",
+    "left_hip",
+    "right_hip",
+    "left_knee",
+    "right_knee",
+    "left_ankle",
+    "right_ankle",
+    "neck"
+  ],
+  "n_images": 500,
+  "n_annotations_used": 500,
+  "image_wh": [
+    [
+      1280,
+      720
+    ]
+  ],
+  "keypoints_outside_frame": 1,
+  "visibility_counts": {
+    "0": 2,
+    "1": 2521,
+    "2": 6477
+  },
+  "missing_rate_per_joint": {
+    "nose": 0.0,
+    "left_eye": 0.0,
+    "right_eye": 0.002,
+    "left_ear": 0.0,
+    "right_ear": 0.0,
+    "left_shoulder": 0.0,
+    "right_shoulder": 0.0,
+    "left_elbow": 0.0,
+    "right_elbow": 0.0,
+    "left_wrist": 0.002,
+    "right_wrist": 0.0,
+    "left_hip": 0.0,
+    "right_hip": 0.0,
+    "left_knee": 0.0,
+    "right_knee": 0.0,
+    "left_ankle": 0.0,
+    "right_ankle": 0.0,
+    "neck": 0.0
+  },
+  "temporal_order_verified": false,
+  "order_basis": "file_name_natural_sort",
+  "order_note": "ordered by natural sort of file_name: labels only, not verified as video time; no motion continuity is computed",
+  "sorted_neighbor_jumps": {
+    "definition": "consecutive pairs in the order used; median over joints of xy step, px",
+    "threshold_px": 80,
+    "count_over_threshold": 100,
+    "median_px": 30.45,
+    "p90_px": 245.11,
+    "sensitivity": [
+      {
+        "threshold_px": 40,
+        "count_over_threshold": 167
+      },
+      {
+        "threshold_px": 80,
+        "count_over_threshold": 100
+      },
+      {
+        "threshold_px": 120,
+        "count_over_threshold": 86
+      }
+    ]
+  },
+  "continuous_motion": null,
+  "bones_px": [
+    {
+      "bone": "left_shoulder-left_elbow",
+      "n": 500,
+      "mean_px": 48.05,
+      "cv": 0.25,
+      "torso_normalized_cv": 0.152
+    },
+    {
+      "bone": "left_elbow-left_wrist",
+      "n": 499,
+      "mean_px": 24.63,
+      "cv": 0.369,
+      "torso_normalized_cv": 0.308
+    },
+    {
+      "bone": "right_shoulder-right_elbow",
+      "n": 500,
+      "mean_px": 49.76,
+      "cv": 0.24,
+      "torso_normalized_cv": 0.116
+    },
+    {
+      "bone": "right_elbow-right_wrist",
+      "n": 500,
+      "mean_px": 20.75,
+      "cv": 0.396,
+      "torso_normalized_cv": 0.409
+    },
+    {
+      "bone": "left_hip-left_knee",
+      "n": 500,
+      "mean_px": 51.31,
+      "cv": 0.285,
+      "torso_normalized_cv": 0.236
+    },
+    {
+      "bone": "left_knee-left_ankle",
+      "n": 500,
+      "mean_px": 62.08,
+      "cv": 0.26,
+      "torso_normalized_cv": 0.118
+    },
+    {
+      "bone": "right_hip-right_knee",
+      "n": 500,
+      "mean_px": 53.43,
+      "cv": 0.289,
+      "torso_normalized_cv": 0.211
+    },
+    {
+      "bone": "right_knee-right_ankle",
+      "n": 500,
+      "mean_px": 61.62,
+      "cv": 0.269,
+      "torso_normalized_cv": 0.121
+    },
+    {
+      "bone": "left_shoulder-right_shoulder",
+      "n": 500,
+      "mean_px": 50.86,
+      "cv": 0.235,
+      "torso_normalized_cv": 0.125
+    },
+    {
+      "bone": "left_hip-right_hip",
+      "n": 500,
+      "mean_px": 44.9,
+      "cv": 0.258,
+      "torso_normalized_cv": 0.109
+    },
+    {
+      "bone": "left_shoulder-neck",
+      "n": 500,
+      "mean_px": 25.6,
+      "cv": 0.25,
+      "torso_normalized_cv": 0.166
+    },
+    {
+      "bone": "neck-nose",
+      "n": 500,
+      "mean_px": 14.26,
+      "cv": 0.322,
+      "torso_normalized_cv": 0.161
+    }
+  ],
+  "fps_assumed": null,
+  "image_file_check": null,
+  "ground_plane": false,
+  "units": "pixels"
+}

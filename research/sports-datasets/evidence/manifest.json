@@ -1,0 +1,536 @@
+{
+  "schema": "human3d.sports-dataset-evidence.v1",
+  "description": "Inputs and commands behind research/sports-datasets/REPORT.md. Input files are not committed (see research/sports-datasets/.gitignore). DATA means a local directory laid out as inputs[].local_path. No downloader is part of the repo.",
+  "script": {
+    "path": "research/sports-datasets/audit_pose.py",
+    "pre_fix_commit": "829eee0",
+    "post_fix_change": "adds --skeleton, topology gate, temporal gating, natural sort, sorted_neighbor_jumps",
+    "dependencies": [
+      "python3",
+      "numpy"
+    ]
+  },
+  "reproduction": {
+    "pre_fix_check": "with commit 829eee0's script and the inputs above, 14 of 14 reproducible outputs were byte-identical to the committed evidence (8 COCO, 4 side CSV, 2 Sinner)",
+    "post_fix_check": "with the current script on the same inputs: the 4 side CSV JSON files and the Sinner SVG are byte-identical to the pre-fix output; the Sinner JSON gains only topology fields (symmetry_confidence, ambiguous, source, heuristic_pick, margin_logerr, reason, warning) with all other values unchanged; the 4 COCO JSON files keep bones, missing rates, visibility and out-of-frame counts, drop the file-order motion-segment fields, and add temporal_order_verified, order_basis, order_note, sorted_neighbor_jumps and continuous_motion (null); the 4 COCO SVGs are regenerated as sorted samples",
+    "not_reproducible": [
+      "popyrin-srv1.*",
+      "zheng-srv1.*"
+    ]
+  },
+  "inputs": [
+    {
+      "id": "tpa-forehand-json",
+      "dataset": "Tennis Player Actions",
+      "local_path": "tpa/forehand.json",
+      "source": {
+        "platform": "Mendeley Data",
+        "dataset_id": "nv3rpsxhhk",
+        "dataset_version": 1,
+        "doi": "10.17632/nv3rpsxhhk.1",
+        "landing": "https://data.mendeley.com/datasets/nv3rpsxhhk/1",
+        "remote_name": "forehand.json",
+        "file_id": "0a15fd5e-ab84-4f5f-9c9c-93a61991c790",
+        "download_url": "https://data.mendeley.com/public-files/datasets/nv3rpsxhhk/files/0a15fd5e-ab84-4f5f-9c9c-93a61991c790/file_downloaded"
+      },
+      "licence": "CC BY 4.0",
+      "bytes": 314256,
+      "sha256": "a84e883d7fdb027344933adfad846d533544a4d96a9ca460b4379e1d3e614c9b",
+      "sha256_check": "local file == platform sha256_hash",
+      "joint_format": "COCO keypoints, 18 points (17 body + neck), v in {0,1,2}, pixels",
+      "used_by": [
+        "forehand-2d"
+      ]
+    },
+    {
+      "id": "tpa-backhand-json",
+      "dataset": "Tennis Player Actions",
+      "local_path": "tpa/backhand.json",
+      "source": {
+        "platform": "Mendeley Data",
+        "dataset_id": "nv3rpsxhhk",
+        "dataset_version": 1,
+        "doi": "10.17632/nv3rpsxhhk.1",
+        "landing": "https://data.mendeley.com/datasets/nv3rpsxhhk/1",
+        "remote_name": "backhand.json",
+        "file_id": "9a7da959-321e-49e8-81ee-5604a2b4a286",
+        "download_url": "https://data.mendeley.com/public-files/datasets/nv3rpsxhhk/files/9a7da959-321e-49e8-81ee-5604a2b4a286/file_downloaded"
+      },
+      "licence": "CC BY 4.0",
+      "bytes": 313224,
+      "sha256": "1e745b77452b5897e45d20b994cf5555bd0a73aa8872353e6f77c9210eea2612",
+      "sha256_check": "local file == platform sha256_hash",
+      "joint_format": "COCO keypoints, 18 points (17 body + neck), v in {0,1,2}, pixels",
+      "used_by": [
+        "backhand-2d"
+      ]
+    },
+    {
+      "id": "tpa-ready-json",
+      "dataset": "Tennis Player Actions",
+      "local_path": "tpa/ready_position.json",
+      "source": {
+        "platform": "Mendeley Data",
+        "dataset_id": "nv3rpsxhhk",
+        "dataset_version": 1,
+        "doi": "10.17632/nv3rpsxhhk.1",
+        "landing": "https://data.mendeley.com/datasets/nv3rpsxhhk/1",
+        "remote_name": "ready_position.json",
+        "file_id": "1f348f01-d6db-452d-a6a1-2e3a8fc53880",
+        "download_url": "https://data.mendeley.com/public-files/datasets/nv3rpsxhhk/files/1f348f01-d6db-452d-a6a1-2e3a8fc53880/file_downloaded"
+      },
+      "licence": "CC BY 4.0",
+      "bytes": 317528,
+      "sha256": "0382185490117adf4240c47875ab7c14c2bd5b81af0c96132a2ba8ad87534b14",
+      "sha256_check": "local file == platform sha256_hash",
+      "joint_format": "COCO keypoints, 18 points (17 body + neck), v in {0,1,2}, pixels",
+      "used_by": [
+        "ready-2d"
+      ]
+    },
+    {
+      "id": "tpa-serve-json",
+      "dataset": "Tennis Player Actions",
+      "local_path": "tpa/serve.json",
+      "source": {
+        "platform": "Mendeley Data",
+        "dataset_id": "nv3rpsxhhk",
+        "dataset_version": 1,
+        "doi": "10.17632/nv3rpsxhhk.1",
+        "landing": "https://data.mendeley.com/datasets/nv3rpsxhhk/1",
+        "remote_name": "serve.json",
+        "file_id": "317c871c-b233-4bfa-9da0-01bebc87c4a3",
+        "download_url": "https://data.mendeley.com/public-files/datasets/nv3rpsxhhk/files/317c871c-b233-4bfa-9da0-01bebc87c4a3/file_downloaded"
+      },
+      "licence": "CC BY 4.0",
+      "bytes": 311992,
+      "sha256": "aeb356d4c2a4801a22ff5819d852a903b2a5b33fbfc913c597abdd4f74d3e589",
+      "sha256_check": "local file == platform sha256_hash",
+      "joint_format": "COCO keypoints, 18 points (17 body + neck), v in {0,1,2}, pixels",
+      "used_by": [
+        "serve-2d"
+      ]
+    },
+    {
+      "id": "tpa-F_001-jpeg",
+      "dataset": "Tennis Player Actions",
+      "local_path": "tpa/F_001.jpeg",
+      "source": {
+        "platform": "Mendeley Data",
+        "dataset_id": "nv3rpsxhhk",
+        "dataset_version": 1,
+        "doi": "10.17632/nv3rpsxhhk.1",
+        "landing": "https://data.mendeley.com/datasets/nv3rpsxhhk/1",
+        "remote_name": "F_001.jpeg",
+        "file_id": "f5775c89-94e3-4833-8525-1369877035c8",
+        "download_url": "https://data.mendeley.com/public-files/datasets/nv3rpsxhhk/files/f5775c89-94e3-4833-8525-1369877035c8/file_downloaded"
+      },
+      "licence": "CC BY 4.0",
+      "bytes": 221014,
+      "sha256": "5e6ee924fb54747a790d56892b113082936a0b17cf61a87be3721d956409b4af",
+      "sha256_check": "local file == platform sha256_hash",
+      "joint_format": "COCO keypoints, 18 points (17 body + neck), v in {0,1,2}, pixels",
+      "used_by": [
+        "forehand-2d (image size check)"
+      ]
+    },
+    {
+      "id": "side-indoor-cross",
+      "dataset": "Side and overhead landing-point CSV",
+      "local_path": "side/indoor_cross.csv",
+      "source": {
+        "platform": "Mendeley Data",
+        "dataset_id": "75m8vz7jr2",
+        "dataset_version": 4,
+        "doi": "10.17632/75m8vz7jr2.4",
+        "landing": "https://data.mendeley.com/datasets/75m8vz7jr2/4",
+        "remote_name": "Indoor Field - Crosscourt Shot.csv",
+        "file_id": "6beae1a9-e768-45e2-8a8c-23904c4bded4",
+        "download_url": "https://data.mendeley.com/public-files/datasets/75m8vz7jr2/files/6beae1a9-e768-45e2-8a8c-23904c4bded4/file_downloaded",
+        "note": null
+      },
+      "licence": "CC BY 4.0",
+      "bytes": 1422,
+      "sha256": "afba12cef98cfa8f76fb516055caa142bc3fcb4f20d9ac8cd3288efe6cc466ee",
+      "sha256_check": "local file == platform sha256_hash",
+      "joint_format": "none (landing-point CSV)",
+      "used_by": [
+        "indoor_cross"
+      ]
+    },
+    {
+      "id": "side-indoor-straight",
+      "dataset": "Side and overhead landing-point CSV",
+      "local_path": "side/indoor_straight.csv",
+      "source": {
+        "platform": "Mendeley Data",
+        "dataset_id": "75m8vz7jr2",
+        "dataset_version": 4,
+        "doi": "10.17632/75m8vz7jr2.4",
+        "landing": "https://data.mendeley.com/datasets/75m8vz7jr2/4",
+        "remote_name": "Indoor Field - Straight Shot.csv",
+        "file_id": "9991b6fc-1eea-476e-83ac-a0af8ef424e5",
+        "download_url": "https://data.mendeley.com/public-files/datasets/75m8vz7jr2/files/9991b6fc-1eea-476e-83ac-a0af8ef424e5/file_downloaded",
+        "note": null
+      },
+      "licence": "CC BY 4.0",
+      "bytes": 1411,
+      "sha256": "6ea7649134718c692f31aacf55095e1797aec673b2905a7e1215aae21ba3b53d",
+      "sha256_check": "local file == platform sha256_hash",
+      "joint_format": "none (landing-point CSV)",
+      "used_by": [
+        "indoor_straight"
+      ]
+    },
+    {
+      "id": "side-outdoor-cross",
+      "dataset": "Side and overhead landing-point CSV",
+      "local_path": "side/outdoor_cross.csv",
+      "source": {
+        "platform": "Mendeley Data",
+        "dataset_id": "75m8vz7jr2",
+        "dataset_version": 4,
+        "doi": "10.17632/75m8vz7jr2.4",
+        "landing": "https://data.mendeley.com/datasets/75m8vz7jr2/4",
+        "remote_name": "Outdoot Field - Crosscourt Shot.csv",
+        "file_id": "e6f94976-6db0-4f76-9881-500ea9e53b19",
+        "download_url": "https://data.mendeley.com/public-files/datasets/75m8vz7jr2/files/e6f94976-6db0-4f76-9881-500ea9e53b19/file_downloaded",
+        "note": "remote name copied as published (typo 'Outdoot' is in the source)"
+      },
+      "licence": "CC BY 4.0",
+      "bytes": 344,
+      "sha256": "ce085aed73d935ab75188f4834646c24af7dad6328d09cdda36c15dae586c30b",
+      "sha256_check": "local file == platform sha256_hash",
+      "joint_format": "none (landing-point CSV)",
+      "used_by": [
+        "outdoor_cross"
+      ]
+    },
+    {
+      "id": "side-outdoor-straight",
+      "dataset": "Side and overhead landing-point CSV",
+      "local_path": "side/outdoor_straight.csv",
+      "source": {
+        "platform": "Mendeley Data",
+        "dataset_id": "75m8vz7jr2",
+        "dataset_version": 4,
+        "doi": "10.17632/75m8vz7jr2.4",
+        "landing": "https://data.mendeley.com/datasets/75m8vz7jr2/4",
+        "remote_name": "Outdoor Field - Straight Shot.csv",
+        "file_id": "3e99c0c9-b943-4ad2-8bfa-69d04c421dac",
+        "download_url": "https://data.mendeley.com/public-files/datasets/75m8vz7jr2/files/3e99c0c9-b943-4ad2-8bfa-69d04c421dac/file_downloaded",
+        "note": null
+      },
+      "licence": "CC BY 4.0",
+      "bytes": 316,
+      "sha256": "2d4d4b4e16be6ce6f8f9ba4046434847b0cf4b1e2a0e199f253d21fca17e3e17",
+      "sha256_check": "local file == platform sha256_hash",
+      "joint_format": "none (landing-point CSV)",
+      "used_by": [
+        "outdoor_straight"
+      ]
+    },
+    {
+      "id": "tsd-sinner-npy",
+      "dataset": "Tennis Serve Dataset",
+      "local_path": "tsd/2024-usopen-1101_pt0001_srv1.npy",
+      "source": {
+        "platform": "Google Drive",
+        "file_id": "17m74ud1_NerhKbxDvpSpB5LPycAxvBRA",
+        "repo": "https://github.com/jasnwag/tennis_serve_dataset",
+        "repo_commit": "7cfd523c2c3c16bef1bc438584283b989d219202",
+        "drive_root_folder_id": "1Wr7UjMvgLwgqCQ09wSaw94ozvRYRO8fB",
+        "drive_keypoints_folder_id": "1_iUkBGbuqR5BDdZ2nHXEUec8M8sGFx6-"
+      },
+      "licence": "CC BY 4.0 (repo README)",
+      "bytes": 18080,
+      "sha256": "ef3577ce8befc2ff09e9b0de89c72b4aa8fbbb61d48da84bc8ff1121f5a3a445",
+      "sha256_check": "no platform hash; local hash only",
+      "joint_format": "(T, 17, 3). README says COCO-17 lifted by MotionBERT; measured layout h36m17 (auto, symmetry_confidence high). Source labels joints only in README.",
+      "used_by": [
+        "sinner-srv1"
+      ]
+    },
+    {
+      "id": "tsd-metadata-parquet",
+      "dataset": "Tennis Serve Dataset",
+      "local_path": "tsd/metadata.parquet",
+      "source": {
+        "platform": "Google Drive",
+        "file_id": "1rBJH3qZbp1ln5vlxUMc0QRx18LiPqvXK",
+        "repo": "https://github.com/jasnwag/tennis_serve_dataset",
+        "repo_commit": "7cfd523c2c3c16bef1bc438584283b989d219202",
+        "drive_root_folder_id": "1Wr7UjMvgLwgqCQ09wSaw94ozvRYRO8fB",
+        "drive_keypoints_folder_id": "1_iUkBGbuqR5BDdZ2nHXEUec8M8sGFx6-"
+      },
+      "licence": "CC BY 4.0 (repo README)",
+      "bytes": 108777,
+      "sha256": "4ed608b4a47ff5c2c1b8571bc955761440218e612861a8863c1f973baba90615",
+      "sha256_check": "no platform hash; local hash only",
+      "joint_format": "none (metadata: player height, speed, match ids). Used only for --height-cm values and the REPORT table.",
+      "used_by": [
+        "height-cm arguments (191, 196, 178)"
+      ]
+    },
+    {
+      "id": "tsd-popyrin-npy",
+      "dataset": "Tennis Serve Dataset",
+      "local_path": "tsd/2024-usopen-1408_pt0182_srv1.npy",
+      "source": {
+        "platform": "Google Drive",
+        "file_id": null,
+        "repo": "https://github.com/jasnwag/tennis_serve_dataset",
+        "repo_commit": "7cfd523c2c3c16bef1bc438584283b989d219202",
+        "drive_root_folder_id": "1Wr7UjMvgLwgqCQ09wSaw94ozvRYRO8fB",
+        "drive_keypoints_folder_id": "1_iUkBGbuqR5BDdZ2nHXEUec8M8sGFx6-",
+        "note": "file ID not located: keypoints folder listing is paginated beyond the first 50 entries"
+      },
+      "licence": "CC BY 4.0 (repo README)",
+      "bytes": 17468,
+      "sha256": null,
+      "sha256_check": "not available: file not present in this workspace",
+      "joint_format": "(T, 17, 3), same family as tsd-sinner-npy",
+      "used_by": [
+        "popyrin-srv1"
+      ],
+      "status": "not re-fetched; byte count recorded in the original session"
+    },
+    {
+      "id": "tsd-zheng-npy",
+      "dataset": "Tennis Serve Dataset",
+      "local_path": "tsd/2024-usopen-2407_pt0201_srv1.npy",
+      "source": {
+        "platform": "Google Drive",
+        "file_id": null,
+        "repo": "https://github.com/jasnwag/tennis_serve_dataset",
+        "repo_commit": "7cfd523c2c3c16bef1bc438584283b989d219202",
+        "drive_root_folder_id": "1Wr7UjMvgLwgqCQ09wSaw94ozvRYRO8fB",
+        "drive_keypoints_folder_id": "1_iUkBGbuqR5BDdZ2nHXEUec8M8sGFx6-",
+        "note": "file ID not located: keypoints folder listing is paginated beyond the first 50 entries"
+      },
+      "licence": "CC BY 4.0 (repo README)",
+      "bytes": 20324,
+      "sha256": null,
+      "sha256_check": "not available: file not present in this workspace",
+      "joint_format": "(T, 17, 3), same family as tsd-sinner-npy",
+      "used_by": [
+        "zheng-srv1"
+      ],
+      "status": "not re-fetched; byte count recorded in the original session"
+    }
+  ],
+  "outputs": [
+    {
+      "path": "research/sports-datasets/evidence/forehand-2d.json",
+      "bytes": 3702,
+      "sha256": "c75567518febed7ebab2317084f3c608f980add7d6c17ef437559538bfc5eedc",
+      "regenerated_with_current_script": true,
+      "identical_to_pre_fix_output": false,
+      "command": "python3 research/sports-datasets/audit_pose.py coco DATA/tpa/forehand.json --fps 30 --image DATA/tpa/F_001.jpeg --label forehand-2d --out research/sports-datasets/evidence",
+      "inputs": [
+        "tpa-forehand-json",
+        "tpa-F_001-jpeg"
+      ]
+    },
+    {
+      "path": "research/sports-datasets/evidence/forehand-2d.svg",
+      "bytes": 8391,
+      "sha256": "37df0d888b6045ae4eefcd778ff92a4ae4744bf058a3c8e4f17db9accd441d27",
+      "regenerated_with_current_script": true,
+      "identical_to_pre_fix_output": false,
+      "command": "(same run as forehand-2d.json)",
+      "inputs": [
+        "tpa-forehand-json",
+        "tpa-F_001-jpeg"
+      ]
+    },
+    {
+      "path": "research/sports-datasets/evidence/backhand-2d.json",
+      "bytes": 3641,
+      "sha256": "42cffba2bc090ea7b26f863c7831b650905a13da52d9a4f9ae38794b4a52d3a9",
+      "regenerated_with_current_script": true,
+      "identical_to_pre_fix_output": false,
+      "command": "python3 research/sports-datasets/audit_pose.py coco DATA/tpa/backhand.json --label backhand-2d --out research/sports-datasets/evidence",
+      "inputs": [
+        "tpa-backhand-json"
+      ]
+    },
+    {
+      "path": "research/sports-datasets/evidence/backhand-2d.svg",
+      "bytes": 8353,
+      "sha256": "8326c0ba873d405e1023bf937ff68576052d98c10a9c5b077c21645d4450ef8b",
+      "regenerated_with_current_script": true,
+      "identical_to_pre_fix_output": false,
+      "command": "(same run as backhand-2d.json)",
+      "inputs": [
+        "tpa-backhand-json"
+      ]
+    },
+    {
+      "path": "research/sports-datasets/evidence/ready-2d.json",
+      "bytes": 3637,
+      "sha256": "8a9020eb71933602524374a42103745ed65b97543b3ee318f58993a4f62e64d6",
+      "regenerated_with_current_script": true,
+      "identical_to_pre_fix_output": false,
+      "command": "python3 research/sports-datasets/audit_pose.py coco DATA/tpa/ready_position.json --label ready-2d --out research/sports-datasets/evidence",
+      "inputs": [
+        "tpa-ready-json"
+      ]
+    },
+    {
+      "path": "research/sports-datasets/evidence/ready-2d.svg",
+      "bytes": 8365,
+      "sha256": "ce16a060e5da2b3aafd1be00b79d447d2660dd634dbe80e336aa054e2e1ddc5a",
+      "regenerated_with_current_script": true,
+      "identical_to_pre_fix_output": false,
+      "command": "(same run as ready-2d.json)",
+      "inputs": [
+        "tpa-ready-json"
+      ]
+    },
+    {
+      "path": "research/sports-datasets/evidence/serve-2d.json",
+      "bytes": 3629,
+      "sha256": "c7d2872fc36906b0f1a3b85d2941a482f2ca7101d985bc458c6b3de93c6ad150",
+      "regenerated_with_current_script": true,
+      "identical_to_pre_fix_output": false,
+      "command": "python3 research/sports-datasets/audit_pose.py coco DATA/tpa/serve.json --label serve-2d --out research/sports-datasets/evidence",
+      "inputs": [
+        "tpa-serve-json"
+      ]
+    },
+    {
+      "path": "research/sports-datasets/evidence/serve-2d.svg",
+      "bytes": 8357,
+      "sha256": "ede85b626411a43d1a352d68b1e85fc43a3bda2be0ecd89443508118fb0f80ec",
+      "regenerated_with_current_script": true,
+      "identical_to_pre_fix_output": false,
+      "command": "(same run as serve-2d.json)",
+      "inputs": [
+        "tpa-serve-json"
+      ]
+    },
+    {
+      "path": "research/sports-datasets/evidence/indoor_cross.json",
+      "bytes": 359,
+      "sha256": "3915f6a2c5ee687ec33e806cce5a50c432f2d023b64f6ba915ff295af3483949",
+      "regenerated_with_current_script": true,
+      "identical_to_pre_fix_output": true,
+      "command": "python3 research/sports-datasets/audit_pose.py csv DATA/side/indoor_cross.csv --out research/sports-datasets/evidence",
+      "inputs": [
+        "side-indoor-cross"
+      ]
+    },
+    {
+      "path": "research/sports-datasets/evidence/indoor_straight.json",
+      "bytes": 360,
+      "sha256": "cfda3cd100816e2a720e2d5ecc001d977b9490c24ca191a5874fa0bfd18a0193",
+      "regenerated_with_current_script": true,
+      "identical_to_pre_fix_output": true,
+      "command": "python3 research/sports-datasets/audit_pose.py csv DATA/side/indoor_straight.csv --out research/sports-datasets/evidence",
+      "inputs": [
+        "side-indoor-straight"
+      ]
+    },
+    {
+      "path": "research/sports-datasets/evidence/outdoor_cross.json",
+      "bytes": 358,
+      "sha256": "26cee26924f43ff69abbe6aec34d7ebb2562e42d738afbb4eed72f2c15d96ecc",
+      "regenerated_with_current_script": true,
+      "identical_to_pre_fix_output": true,
+      "command": "python3 research/sports-datasets/audit_pose.py csv DATA/side/outdoor_cross.csv --out research/sports-datasets/evidence",
+      "inputs": [
+        "side-outdoor-cross"
+      ]
+    },
+    {
+      "path": "research/sports-datasets/evidence/outdoor_straight.json",
+      "bytes": 363,
+      "sha256": "bfd6fc64065ab517003cc49d5a3e70d1dfd30715e99b734b55ac2f1959908f13",
+      "regenerated_with_current_script": true,
+      "identical_to_pre_fix_output": true,
+      "command": "python3 research/sports-datasets/audit_pose.py csv DATA/side/outdoor_straight.csv --out research/sports-datasets/evidence",
+      "inputs": [
+        "side-outdoor-straight"
+      ]
+    },
+    {
+      "path": "research/sports-datasets/evidence/sinner-srv1.json",
+      "bytes": 4594,
+      "sha256": "7d867070fc174d6f6ca791ccf27622a5e0b822ae970470c0dc25379c464184ad",
+      "regenerated_with_current_script": true,
+      "identical_to_pre_fix_output": false,
+      "command": "python3 research/sports-datasets/audit_pose.py npy DATA/tsd/2024-usopen-1101_pt0001_srv1.npy --fps 60 --height-cm 191 --label sinner-srv1 --out research/sports-datasets/evidence",
+      "inputs": [
+        "tsd-sinner-npy",
+        "tsd-metadata-parquet"
+      ]
+    },
+    {
+      "path": "research/sports-datasets/evidence/sinner-srv1.svg",
+      "bytes": 7700,
+      "sha256": "c6192d969b5e37c694479df7acab3386a0379a5ce1f91d1317632595a0b3f90b",
+      "regenerated_with_current_script": true,
+      "identical_to_pre_fix_output": true,
+      "command": "(same run as sinner-srv1.json)",
+      "inputs": [
+        "tsd-sinner-npy"
+      ]
+    },
+    {
+      "path": "research/sports-datasets/evidence/popyrin-srv1.json",
+      "bytes": 4415,
+      "sha256": "e7a000f51d3d6c75d86b7e66d58317bb05ea558b037c5fadaccda5910511b4cb",
+      "regenerated_with_current_script": false,
+      "identical_to_pre_fix_output": null,
+      "command": "python3 research/sports-datasets/audit_pose.py npy DATA/tsd/2024-usopen-1408_pt0182_srv1.npy --fps 60 --height-cm 196 --label popyrin-srv1 --out research/sports-datasets/evidence",
+      "inputs": [
+        "tsd-popyrin-npy"
+      ],
+      "note": "kept from pre-fix script 829eee0; input not available. Lacks topology.symmetry_confidence / ambiguous / source fields."
+    },
+    {
+      "path": "research/sports-datasets/evidence/popyrin-srv1.svg",
+      "bytes": 7698,
+      "sha256": "e9d5417f877e510aaaabf2b02221c593da72b5d1d5480a8ccd04a2139da3af81",
+      "regenerated_with_current_script": false,
+      "identical_to_pre_fix_output": null,
+      "command": "(same run as popyrin-srv1.json)",
+      "inputs": [
+        "tsd-popyrin-npy"
+      ],
+      "note": "kept from pre-fix script 829eee0; input not available."
+    },
+    {
+      "path": "research/sports-datasets/evidence/zheng-srv1.json",
+      "bytes": 4396,
+      "sha256": "75eed166de425db88c4a12951a6173cd9a7d82fc8fd6f3c1eb27e62833c6b6a3",
+      "regenerated_with_current_script": false,
+      "identical_to_pre_fix_output": null,
+      "command": "python3 research/sports-datasets/audit_pose.py npy DATA/tsd/2024-usopen-2407_pt0201_srv1.npy --fps 60 --height-cm 178 --label zheng-srv1 --out research/sports-datasets/evidence",
+      "inputs": [
+        "tsd-zheng-npy"
+      ],
+      "note": "kept from pre-fix script 829eee0; input not available. Lacks topology.symmetry_confidence / ambiguous / source fields."
+    },
+    {
+      "path": "research/sports-datasets/evidence/zheng-srv1.svg",
+      "bytes": 7689,
+      "sha256": "5db2deca01afc38bf6c37e2e8e98781e4ec746ddf16587414639f3c107f3f1e2",
+      "regenerated_with_current_script": false,
+      "identical_to_pre_fix_output": null,
+      "command": "(same run as zheng-srv1.json)",
+      "inputs": [
+        "tsd-zheng-npy"
+      ],
+      "note": "kept from pre-fix script 829eee0; input not available."
+    }
+  ],
+  "not_fetched": [
+    "SportsPose (academic request required; no data retrieved)",
+    "AthletePose3D data.zip (35 GB), pose_2d.zip (29 GB), pose_3d.zip (1.4 GB); cam_param.json was read in the original session only, not used by any output",
+    "Tennis Player Actions: 1999 of 2000 JPEG images (not needed by committed evidence)",
+    "Tennis Serve Dataset: other .npy files (keypoints folder lists 5500 entries)",
+    "Side and overhead: 472 mp4 videos (about 2.42 GB)"
+  ]
+}

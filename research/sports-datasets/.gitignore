@@ -1,0 +1,11 @@
+# Downloaded dataset files stay on the machine that fetched them.
+# Commit the audit script and the derived evidence/ summaries only.
+samples/
+*.npy
+*.npz
+*.parquet
+*.jpeg
+*.jpg
+*.mp4
+*.zip
+cam_param.json

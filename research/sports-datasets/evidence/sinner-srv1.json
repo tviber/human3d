@@ -1,0 +1,254 @@
+{
+  "label": "sinner-srv1",
+  "shape": [
+    88,
+    17,
+    3
+  ],
+  "dtype_note": "parsed as float",
+  "coord_min": -0.5331,
+  "coord_max": 1.3785,
+  "fps": 60.0,
+  "duration_s": 1.4667,
+  "topology": {
+    "chosen": "h36m17",
+    "source": "auto",
+    "symmetry_confidence": "high",
+    "ambiguous": false,
+    "heuristic_pick": "h36m17",
+    "reason": null,
+    "warning": null,
+    "margin_logerr": 0.3011,
+    "h36m_symmetry_logerr": 0.0541,
+    "coco17_symmetry_logerr": 0.3551,
+    "h36m_median_cv": 0.1688,
+    "coco17_median_cv": 0.1494
+  },
+  "joint0_xy_abs_max": 0.0,
+  "up_axis": 2,
+  "up_sign": 1.0,
+  "head_minus_ankle": [
+    -0.0419,
+    -0.3118,
+    1.1435
+  ],
+  "lower_ankle_up_abs_max": 0.0,
+  "lower_ankle_pinned_near_zero": true,
+  "pelvis_up_min": 0.4312,
+  "pelvis_up_max": 0.8629,
+  "pelvis_up_range": 0.4317,
+  "other_ankle_clearance_max": 0.6663,
+  "skeleton_height": 1.17,
+  "scale_vs_metadata": {
+    "metadata_height_m": 1.91,
+    "skeleton_head_to_lower_ankle_m": 1.17,
+    "ratio_metadata_over_skeleton": 1.633
+  },
+  "bones": [
+    {
+      "bone": "pelvis-rhip",
+      "mean": 0.0998,
+      "min": 0.0141,
+      "max": 0.1176,
+      "cv": 0.1741
+    },
+    {
+      "bone": "rhip-rknee",
+      "mean": 0.3567,
+      "min": 0.2632,
+      "max": 0.4756,
+      "cv": 0.1189
+    },
+    {
+      "bone": "rknee-rank",
+      "mean": 0.3329,
+      "min": 0.2513,
+      "max": 0.4535,
+      "cv": 0.1364
+    },
+    {
+      "bone": "pelvis-lhip",
+      "mean": 0.0992,
+      "min": 0.0113,
+      "max": 0.1197,
+      "cv": 0.2072
+    },
+    {
+      "bone": "lhip-lknee",
+      "mean": 0.3756,
+      "min": 0.2726,
+      "max": 0.4544,
+      "cv": 0.1224
+    },
+    {
+      "bone": "lknee-lank",
+      "mean": 0.3527,
+      "min": 0.2686,
+      "max": 0.4283,
+      "cv": 0.119
+    },
+    {
+      "bone": "pelvis-spine",
+      "mean": 0.208,
+      "min": 0.1484,
+      "max": 0.2445,
+      "cv": 0.0777
+    },
+    {
+      "bone": "spine-thorax",
+      "mean": 0.2183,
+      "min": 0.1481,
+      "max": 0.2568,
+      "cv": 0.0752
+    },
+    {
+      "bone": "thorax-neck",
+      "mean": 0.1583,
+      "min": 0.0739,
+      "max": 0.239,
+      "cv": 0.1634
+    },
+    {
+      "bone": "neck-head",
+      "mean": 0.0454,
+      "min": 0.0253,
+      "max": 0.1951,
+      "cv": 0.4016
+    },
+    {
+      "bone": "thorax-lsho",
+      "mean": 0.1052,
+      "min": 0.0151,
+      "max": 0.1557,
+      "cv": 0.2546
+    },
+    {
+      "bone": "lsho-lelb",
+      "mean": 0.2405,
+      "min": 0.1297,
+      "max": 0.3228,
+      "cv": 0.1563
+    },
+    {
+      "bone": "lelb-lwri",
+      "mean": 0.2054,
+      "min": 0.0816,
+      "max": 0.4422,
+      "cv": 0.2039
+    },
+    {
+      "bone": "thorax-rsho",
+      "mean": 0.1089,
+      "min": 0.0088,
+      "max": 0.1569,
+      "cv": 0.304
+    },
+    {
+      "bone": "rsho-relb",
+      "mean": 0.2473,
+      "min": 0.0529,
+      "max": 0.4626,
+      "cv": 0.1794
+    },
+    {
+      "bone": "relb-rwri",
+      "mean": 0.2224,
+      "min": 0.1153,
+      "max": 0.417,
+      "cv": 0.2473
+    }
+  ],
+  "bone_median_cv": 0.1688,
+  "symmetry": [
+    {
+      "left_right": [
+        "rhip-rknee",
+        "lhip-lknee"
+      ],
+      "ratio": 0.95
+    },
+    {
+      "left_right": [
+        "rknee-rank",
+        "lknee-lank"
+      ],
+      "ratio": 0.944
+    },
+    {
+      "left_right": [
+        "rsho-relb",
+        "lsho-lelb"
+      ],
+      "ratio": 1.028
+    },
+    {
+      "left_right": [
+        "relb-rwri",
+        "lelb-lwri"
+      ],
+      "ratio": 1.083
+    }
+  ],
+  "angles_deg": {
+    "rknee": {
+      "interior_min": 35.2,
+      "interior_max": 173.9,
+      "flexion_max": 144.8
+    },
+    "lknee": {
+      "interior_min": 87.6,
+      "interior_max": 176.1,
+      "flexion_max": 92.4
+    },
+    "relbow": {
+      "interior_min": 6.8,
+      "interior_max": 173.2,
+      "flexion_max": 173.2
+    },
+    "lelbow": {
+      "interior_min": 38.4,
+      "interior_max": 174.7,
+      "flexion_max": 141.6
+    }
+  },
+  "shoulder_yaw": {
+    "span_deg": 366.8,
+    "max_step_deg": 170.3
+  },
+  "frame_steps": {
+    "pelvis_or_j0": {
+      "median": 0.0116,
+      "p95": 0.0703,
+      "max": 0.1049
+    },
+    "joint_r_wrist": {
+      "median": 0.0698,
+      "p95": 0.6018,
+      "max": 0.7311
+    },
+    "joint_r_ankle": {
+      "median": 0.0135,
+      "p95": 0.1331,
+      "max": 0.7052
+    }
+  },
+  "joint_names_if_h36m": [
+    "pelvis",
+    "rhip",
+    "rknee",
+    "rank",
+    "lhip",
+    "lknee",
+    "lank",
+    "spine",
+    "thorax",
+    "neck",
+    "head",
+    "lsho",
+    "lelb",
+    "lwri",
+    "rsho",
+    "relb",
+    "rwri"
+  ]
+}

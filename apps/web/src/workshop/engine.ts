@@ -8,7 +8,7 @@ import {attachProp,mountRacket} from '@human3d/motion-core';
 import type {RigInfo,ViewId} from '@human3d/motion-core';
 import type {CompiledMotion,EffectiveFrame,PoseParams,WorkshopDoc,WorkshopKey} from '@human3d/motion-core';
 import {buildPelvisSchedule,compileMotion,contactStartKey,frameAtCompiled,isReleaseKey,parseDoc,serializeDoc,sortedKeys,toV} from '@human3d/motion-core';
-import {analyzePose,solveEffectiveFrame,type Analysis} from '@human3d/motion-core';
+import {analyzePose,solveEffectiveFrame,rotateLegAbout,boundLegTurnForClearance,type Analysis} from '@human3d/motion-core';
 import type {PelvisSchedule} from '@human3d/motion-core';
 import {ankleYForLift,footGeometry,type FootGeometry,type Side} from '@human3d/motion-core';
 import {bindSceneBackground} from '../theme/scene-background';
@@ -23,7 +23,11 @@ export interface WorkshopOptions{handles:boolean;trajectories:boolean;balance:bo
  /** Draw the handle's eight bevel numbers (1–8) as labels around the grip.
   * Display-only: the authored bevel (doc.gripBevel) is what turns the racket,
   * and this option never touches the document. */
- bevels:boolean}
+ bevels:boolean;
+ /** Show the raw leg pole floats. The knee handle is the everyday control, so
+  * these stay off unless the author opts in — the knee handle itself is
+  * unaffected. */
+ legPole:boolean}
 /** Ghost cap per direction: ≤3 keeps even a maxKeys document cheap — keys mode
  * brackets only the ±N keys around the playhead, never the whole timeline. */
 export const ONION_MAX=3;
@@ -122,7 +126,7 @@ export class CaptureMutex{
   return Promise.resolve().then(fn).finally(()=>{this.busy=false;});
  }
 }
-type DragKind='root'|'hand'|'foot'|'swing'|'poleArm'|'poleLeg'|'tip'|'contact';
+type DragKind='root'|'hand'|'foot'|'swing'|'poleArm'|'poleLeg'|'knee'|'tip'|'contact';
 /** `passive` handles render but never start a drag — used for the actual foot
  * during a release interval, where the editable control is the swing point. */
 interface Handle{kind:DragKind;side?:'L'|'R';mesh:Mesh;keyId?:string;passive?:boolean}
@@ -138,7 +142,7 @@ export class WorkshopEngine{
   /** Review mode (false) hides handles and refuses every pointer pick, so a
    * camera gesture can never write the document (issue #23 PR-A). */
   editable=true;
-  options:WorkshopOptions={handles:true,trajectories:false,balance:false,onion:false,onionCount:2,onionMode:'keys',onionStep:.1,bevels:false};
+  options:WorkshopOptions={handles:true,trajectories:false,balance:false,onion:false,onionCount:2,onionMode:'keys',onionStep:.1,bevels:false,legPole:false};
   private clock=new Clock();private raf=0;private lastNotify=0;private resizeObserver:ResizeObserver;private unbindTheme?:()=>void;
   private keyLight?:DirectionalLight;
   private handleGroup=new Group();private handles:Handle[]=[];private contactMarkers:Mesh[]=[];
@@ -252,6 +256,7 @@ export class WorkshopEngine{
     mk('swing','L',0x0891b2,.02);mk('swing','R',0x0891b2,.02);
     mk('poleArm','L',0x4a9e6b,.018);mk('poleArm','R',0x4a9e6b,.018);
     mk('poleLeg','L',0x4a9e6b,.018);mk('poleLeg','R',0x4a9e6b,.018);
+    mk('knee','L',0x9ccc65,.02);mk('knee','R',0x9ccc65,.02);
     mk('tip',undefined,0xd23c3c,.024);
   }
   private makeMarkers(){
@@ -396,6 +401,36 @@ export class WorkshopEngine{
       case 'swing':{const side=this.drag.h.side!;const f=side==='L'?k.footL:k.footR;f.target={x:pos.x,y:this.minAnkleY(side,f,pos.y),z:pos.z};break;}
       case 'poleArm':{(this.drag.h.side==='L'?k.handL:k.handR).pole={x:pos.x,y:pos.y,z:pos.z};break;}
       case 'poleLeg':{(this.drag.h.side==='L'?k.footL:k.footR).pole={x:pos.x,y:pos.y,z:pos.z};break;}
+      case 'knee':{
+        const side=this.drag.h.side!,f=side==='L'?k.footL:k.footR,hip=this.rig.point(`upperleg01_${side}`);
+        const doc=this.getDoc(),i=sortedKeys(doc).findIndex(x=>x.id===this.drag!.key.id);
+        /* A foot held at its contact (planted, or a release key still drawn at
+         * the contact) leaves the knee one DOF — swivel about the hip→ankle
+         * axis — so the drag re-aims the pole toward the pointer while keeping
+         * the pole's distance from the hip (the poleLeg float stays a usable
+         * second control instead of collapsing onto the joint). A free leg has
+         * two DOFs: the whole leg turns rigidly about the hip so the knee
+         * tracks the pointer's direction, carrying ankle target, pole and foot
+         * orientation together — every joint angle below the hip unchanged. */
+        const fixed=this.drag.key.constraints[side==='L'?'plantL':'plantR']||isReleaseKey(doc,i,side);
+        const dir=pos.clone().sub(hip);
+        if(dir.lengthSq()<1e-10)break;
+        if(fixed){
+          const len=Math.max(toV(f.pole).distanceTo(hip),.01);
+          const np=hip.clone().addScaledVector(dir.normalize(),len);
+          f.pole={x:np.x,y:np.y,z:np.z};
+        }else{
+          const thigh=this.rig.point(`lowerleg01_${side}`).sub(hip);
+          if(thigh.lengthSq()<1e-10)break;
+          const turn=new Quaternion().setFromUnitVectors(thigh.normalize(),dir.normalize());
+          const geo=this.footGeo?.[side];
+          // Bound the turn instead of truncating the rotated ankle: clipping
+          // y afterwards would break the rigid-FK joint-angle invariant.
+          const bounded=geo?boundLegTurnForClearance(this.rig,k,side,hip,turn,geo):turn;
+          rotateLegAbout(this.rig,k,side,hip,bounded);
+        }
+        break;
+      }
       case 'tip':case 'contact':{
         if(!this.racket)break;this.solveCurrent();
         const tip=this.racket.localToWorld(RACKET_TIP_LOCAL.clone());
@@ -498,7 +533,8 @@ export class WorkshopEngine{
     put('hand','L',this.rig.point('wrist_L'));put('hand','R',this.rig.point('wrist_R'));
     put('foot','L',this.rig.point('foot_L'));put('foot','R',this.rig.point('foot_R'));
     put('poleArm','L',toV(p.handL.pole));put('poleArm','R',toV(p.handR.pole));
-    put('poleLeg','L',toV(p.footL.pole));put('poleLeg','R',toV(p.footR.pole));
+    put('poleLeg','L',toV(p.footL.pole),this.options.legPole);put('poleLeg','R',toV(p.footR.pole),this.options.legPole);
+    put('knee','L',this.rig.point('lowerleg01_L'));put('knee','R',this.rig.point('lowerleg01_R'));
     put('tip',undefined,this.racket?this.racket.localToWorld(RACKET_TIP_LOCAL.clone()):new Vector3(),f.gripAmount>0);
     // Swing waypoint split: during a release interval the visible foot sits ON
     // the path contact→waypoint→landing, so the bone handle becomes display

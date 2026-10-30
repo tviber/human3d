@@ -52,6 +52,8 @@ jobs:
         run: node scripts/library-concurrency-browser-qa.mjs >"$RUNNER_TEMP/qa/concurrency.log" 2>&1 || { cat "$RUNNER_TEMP/qa/concurrency.log"; exit 1; }
       - name: Racket bevels and finger shape (real UI controls)
         run: node scripts/bevel-hand-qa.mjs --out-dir "$RUNNER_TEMP/qa/bevel-hand"
+      - name: Knee handle, per-key grip toggle, leg-pole opt-in (real UI)
+        run: node scripts/workshop-knee-qa.mjs --out-dir "$RUNNER_TEMP/qa/workshop-knee"
       - name: Capture and review the real issue-32 bundle
         run: |
           mkdir -p "$RUNNER_TEMP/qa/review-bundle"

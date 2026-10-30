@@ -1,4 +1,4 @@
-import {Quaternion,Vector3,MathUtils} from 'three';
+import {Euler,Quaternion,Vector3,MathUtils} from 'three';
 import {HumanRig} from './rig';
 import {blendGrip} from './grip';
 import {applyHandShape} from './hand-shape';
@@ -6,7 +6,7 @@ import {PROPS} from './props';
 import {DEG,LIMITS,angleAt,pelvisDorsiCorrection,solveTwoBone,type DorsiLeg} from './kinematics';
 import type {EffectiveFrame,PoseParams,KeyConstraints,SupportWeights} from './document';
 import {toV} from './document';
-import {FOOT_CLEARANCE_M,footDepth,footGeometry,footRotation,type Side} from './foot';
+import {FOOT_CLEARANCE_M,footDepth,footGeometry,footLift,footRotation,type FootGeometry,type Side} from './foot';
 import {handFrame} from './hand-frame';
 
 /** Kinematic stage of the pipeline: task-space pose → skeleton, with joint
@@ -195,6 +195,50 @@ export function rotateArmAbout(rig:HumanRig,p:PoseParams,side:Side,joint:'upper'
   const rest=handFrame(rig.rest,side),world=rig.bone(`wrist_${side}`).getWorldQuaternion(new Quaternion());
   hand.forward=store(rest.forward.applyQuaternion(world).applyQuaternion(turn));
   hand.normal=store(rest.normal.applyQuaternion(world).applyQuaternion(turn));
+}
+
+/** Rigid FK of one leg about a world pivot (hip for thigh turns, knee for
+ * shank turns): ankle target, knee pole and foot orientation rotate together,
+ * so every joint angle below the pivot is unchanged. Same encoding pattern as
+ * rotateArmAbout: the rig must be solved at the edited pose — the ankle
+ * position and foot frame are read live — and the solver still owns all final
+ * bone writes. The yaw·pitch foot storage drops the turn's roll component,
+ * the same trade-off every foot-orientation write makes. */
+export function rotateLegAbout(rig:HumanRig,p:PoseParams,side:Side,pivot:Vector3,turn:Quaternion){
+  const f=side==='L'?p.footL:p.footR,ankle=rig.point(`foot_${side}`),footQ=rig.bone(`foot_${side}`).getWorldQuaternion(new Quaternion());
+  const about=(v:Vector3)=>v.clone().sub(pivot).applyQuaternion(turn).add(pivot);
+  const a=about(ankle),pole=about(toV(f.pole));
+  f.target={x:a.x,y:a.y,z:a.z};f.pole={x:pole.x,y:pole.y,z:pole.z};
+  const e=new Euler().setFromQuaternion(turn.clone().multiply(footQ),'YXZ');f.pitch=e.x/DEG;f.yaw=e.y/DEG;
+}
+
+/** Bound a rigid leg turn so the rotated foot's sole stays within the
+ * analyzer's own contact band: a pointer-driven knee drag can request a turn
+ * whose rotated ankle target and foot orientation would bury the sole.
+ * Truncating the ankle height afterwards would break the rigid rotation's
+ * joint-angle invariant, so the turn itself is bisected toward identity until
+ * footLift stays at the limit — the knee still follows as far as clearance
+ * allows. The limit is min(baseline, −FOOT_CLEARANCE_M): a sole at ground
+ * (baseline 0) may tilt into the same 2 cm band `foot-depth-*` tolerates, so
+ * dragging stays alive instead of deadlocking on an exact-0 floor; a sole
+ * buried deeper than the band is only allowed back up, never deeper. Returns
+ * the full turn whenever it stays at the limit. `p` is only probed. */
+export function boundLegTurnForClearance(rig:HumanRig,p:PoseParams,side:Side,pivot:Vector3,turn:Quaternion,geo:FootGeometry,iterations=12):Quaternion{
+  const foot=side==='L'?'footL':'footR';
+  const liftAt=(q:Quaternion)=>{
+    const probe:PoseParams={...p,[foot]:{...p[foot]}};
+    rotateLegAbout(rig,probe,side,pivot,q);
+    const f=probe[foot];
+    return footLift(geo,f.target.y,f.yaw,f.pitch);
+  };
+  const id=new Quaternion(),limit=Math.min(liftAt(id),-FOOT_CLEARANCE_M);
+  if(liftAt(turn)>=limit)return turn;
+  let lo=0,hi=1;
+  for(let i=0;i<iterations;i++){
+    const m=(lo+hi)/2;
+    if(liftAt(id.clone().slerp(turn,m))>=limit)lo=m;else hi=m;
+  }
+  return id.clone().slerp(turn,lo);
 }
 
 /** One check. `ok` is decided from `value` against `limit` in `unit`; the

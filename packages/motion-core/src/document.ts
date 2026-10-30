@@ -1,6 +1,6 @@
 import {Matrix4,Quaternion,Vector3} from 'three';
 import {DEG,smoothstep} from './kinematics';
-import {WORKSHOP_LIMITS} from './limits';
+import {HEAD_ROTATION_LIMITS,WORKSHOP_LIMITS} from './limits';
 import {RELAXED_SPREAD} from './hand-shape';
 import {RACKET_BEVEL_DEFAULT} from './props/racket';
 import type {Side} from './foot';
@@ -27,6 +27,8 @@ export interface PoseParams{
   root:V3;
   /** Engineering joint coordinates: yaw of the pelvis, then spine bend/twist/side in degrees. */
   yaw:number;lean:number;chest:number;side:number;
+  /** Head-only turn relative to the neck: yaw about local +Y and pitch about local +X, in degrees. */
+  headYaw?:number;headPitch?:number;
   handL:HandTarget;handR:HandTarget;
   footL:FootTarget;footR:FootTarget;
   /** Optional per-hand finger shape; an absent side is relaxed (.5). */
@@ -119,12 +121,10 @@ export const TANGENT_SECANT_CAP=2;
 const ZERO_V3=new Vector3();
 
 /** Deterministic flatten/unflatten so Hermite runs over every numeric field.
- * `handSpread` occupies the two TAIL channels (47 = L, 48 = R) so every
- * pre-existing channel index keeps its meaning — generate.ts's group ranges,
- * the property sweep's channel lists and any external reader stay valid. An
- * absent side flattens to RELAXED_SPREAD, and unflatten re-omits exactly that
- * value, so a document without hand shapes round-trips to the identical pose
- * object (no `handSpread` key appears out of nowhere). */
+ * Appended authoring channels keep every pre-existing index stable:
+ * handSpread (47 = L, 48 = R), headYaw (49), and headPitch (50). An absent
+ * hand shape flattens to RELAXED_SPREAD; absent head angles flatten to zero.
+ * Unflatten omits those defaults so legacy poses keep their object shape. */
 export function flattenPose(p:PoseParams):number[]{
   const out:number[]=[];
   const push=(v:V3)=>{out.push(v.x,v.y,v.z);};
@@ -132,6 +132,7 @@ export function flattenPose(p:PoseParams):number[]{
   for(const h of [p.handL,p.handR]){push(h.target);push(h.pole);push(h.forward);push(h.normal);}
   for(const f of [p.footL,p.footR]){push(f.target);push(f.pole);out.push(f.yaw,f.pitch);}
   out.push(p.handSpread?.L??RELAXED_SPREAD,p.handSpread?.R??RELAXED_SPREAD);
+  out.push(p.headYaw??0,p.headPitch??0);
   return out;
 }
 export function unflattenPose(a:number[]):PoseParams{
@@ -143,8 +144,8 @@ export function unflattenPose(a:number[]):PoseParams{
     handR:{target:vec(),pole:vec(),forward:vec(),normal:vec()},
     footL:{target:vec(),pole:vec(),yaw:num(),pitch:num()},
     footR:{target:vec(),pole:vec(),yaw:num(),pitch:num()}};
-  /* Short arrays come from callers that flattens predate the tail channels
-   * (a stored pose handed straight to unflattenPose); they mean relaxed. */
+  /* Short arrays predate optional tail channels; handSpread means relaxed,
+   * while missing head angles mean zero. */
   const spread=(value:number|undefined)=>(Number.isFinite(value)?value:RELAXED_SPREAD) as number;
   const l=spread(a[i]),r=spread(a[i+1]);
   if(l!==RELAXED_SPREAD||r!==RELAXED_SPREAD){
@@ -152,6 +153,9 @@ export function unflattenPose(a:number[]):PoseParams{
    if(l!==RELAXED_SPREAD)pose.handSpread.L=l;
    if(r!==RELAXED_SPREAD)pose.handSpread.R=r;
   }
+  const headYaw=a[i+2],headPitch=a[i+3];
+  if(Number.isFinite(headYaw)&&headYaw!==0)pose.headYaw=headYaw;
+  if(Number.isFinite(headPitch)&&headPitch!==0)pose.headPitch=headPitch;
   return pose;
 }
 
@@ -174,8 +178,8 @@ const clonePose=(p:PoseParams):PoseParams=>unflattenPose(flattenPose(p));
 /* ---- Channel layout (flattenPose): root 0–2 · yaw 3 · lean 4 · chest 5 · side 6
  * handL target 7–9, pole 10–12, forward 13–15, normal 16–18 · handR 19–21, 22–24, 25–27, 28–30
  * footL target 31–33, pole 34–36, yaw 37, pitch 38 · footR 39–41, 42–44, 45, 46
- * handSpread L 47, R 48 (finger shape — appended, so no old index moved) */
-const ANGLE_CHANNELS=[3,4,5,6,37,38,45,46];
+ * handSpread L 47, R 48 · headYaw 49 · headPitch 50 (all appended) */
+const ANGLE_CHANNELS=[3,4,5,6,37,38,45,46,49,50];
 const FOOT_CH:Record<Side,number>={L:31,R:39};
 const HAND_CH:Record<Side,number>={L:7,R:19};
 /** Finger-shape channels, in the same L/R order as HAND_CH. */
@@ -729,6 +733,10 @@ export function validateDocShape(d:unknown):string[]{
   if(!p||typeof p!=='object'){e.push(`keys[${idx}].pose 缺失`);return;}
   vec(p.root,`keys[${idx}].pose.root`);
   for(const a of ['yaw','lean','chest','side']as const)if(!Number.isFinite(p[a]))e.push(`keys[${idx}].pose.${a} 不是有限数`);
+  for(const [a,limits] of [['headYaw',HEAD_ROTATION_LIMITS.yaw],['headPitch',HEAD_ROTATION_LIMITS.pitch]] as const){
+   const v=p[a];
+   if(v!==undefined&&(!(typeof v==='number'&&Number.isFinite(v))||v<limits[0]||v>limits[1]))e.push(`keys[${idx}].pose.${a} 必须是 ${limits[0]}–${limits[1]}° 的有限数`);
+  }
   hand(p.handL,`keys[${idx}].pose.handL`);hand(p.handR,`keys[${idx}].pose.handR`);
   foot(p.footL,`keys[${idx}].pose.footL`);foot(p.footR,`keys[${idx}].pose.footR`);
   if(p.handSpread!==undefined){
@@ -775,6 +783,8 @@ export function normalizeDoc(raw:unknown):WorkshopDoc{
   if(d.gripBevel===RACKET_BEVEL_DEFAULT)delete d.gripBevel;
   for(const k of d.keys)canonicalizeHands(k.pose);
   for(const k of d.keys){
+   if(k.pose.headYaw===0)delete k.pose.headYaw;
+   if(k.pose.headPitch===0)delete k.pose.headPitch;
    const spread=k.pose.handSpread;
    if(!spread)continue;
    for(const side of ['L','R']as const)if(spread[side]===RELAXED_SPREAD)delete spread[side];
@@ -814,6 +824,7 @@ export function parseDoc(text:string):WorkshopDoc{return normalizeDoc(JSON.parse
  *                                 bit-for-bit and parseDoc stays a no-op)
  *   footL ⇄ footR                 swapped; target/pole x→−x, yaw→−yaw,
  *                                 pitch kept (footRotation YXZ)
+ *   headYaw / headPitch           yaw→−yaw, pitch kept (local head YXZ)
  *   constraints.plantL ⇄ plantR   swapped — contact intervals move to the
  *                                 other foot: run-start contact points,
  *                                 release swings' mid-waypoints and landing
@@ -859,7 +870,7 @@ export function mirrorKey(key:WorkshopKey):WorkshopKey{
   const foot=(f:FootTarget):FootTarget=>({target:mv(f.target),pole:mv(f.pole),yaw:-f.yaw,pitch:f.pitch});
   const c=key.constraints,p=key.pose;
   const out:WorkshopKey={id:key.id,time:key.time,label:key.label,
-    pose:{root:mv(p.root),yaw:-p.yaw,lean:p.lean,chest:-p.chest,side:-p.side,
+   pose:{root:mv(p.root),yaw:-p.yaw,lean:p.lean,chest:-p.chest,side:-p.side,
       handL:hand(p.handR),handR:hand(p.handL),footL:foot(p.footR),footR:foot(p.footL)},
     constraints:{plantL:c.plantR,plantR:c.plantL,grip:c.grip,contact:c.contact}};
   if(c.replant!==undefined)out.constraints.replant=c.replant;
@@ -873,6 +884,8 @@ export function mirrorKey(key:WorkshopKey):WorkshopKey{
    if(p.handSpread.L!==undefined)swapped.R=p.handSpread.L;
    if(swapped.L!==undefined||swapped.R!==undefined)out.pose.handSpread=swapped;
   }
+  if(p.headYaw!==undefined)out.pose.headYaw=-p.headYaw;
+  if(p.headPitch!==undefined)out.pose.headPitch=p.headPitch;
   if(key.interpolation!==undefined)out.interpolation=key.interpolation;
   if(key.videoTime!==undefined)out.videoTime=key.videoTime;
   return out;
@@ -888,8 +901,9 @@ export function mirrorDoc(doc:WorkshopDoc):WorkshopDoc{
    *     inbetweens · loop · handFrames · clavicleLift · freeArms · gripSide ·
    *     gripBevel · keys
    *   WorkshopKey: id · time · label · pose · constraints · interpolation · videoTime
-   *   PoseParams:  root · yaw · lean · chest · side · handL · handR ·
-   *     footL · footR · handSpread   (hand: target/pole/forward/normal; foot: +yaw/pitch)
+   *   PoseParams:  root · yaw · lean · chest · side · headYaw · headPitch ·
+   *     handL · handR · footL · footR · handSpread
+   *     (hand: target/pole/forward/normal; foot: +yaw/pitch; headYaw flips and headPitch stays)
    *   KeyConstraints: plantL · plantR · grip · contact · replant             */
   const keys=doc.keys.map(mirrorKey);
   return {schemaVersion:2,id:toggle(doc.id,'.mirrored'),name:toggle(doc.name,' · 镜像'),english:toggle(doc.english,' · MIRRORED'),

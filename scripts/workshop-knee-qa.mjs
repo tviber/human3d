@@ -50,6 +50,36 @@ try{
  await page.waitForFunction(()=>window.__WS__.getDoc().name==='QA 膝盖与持拍',null,{timeout:10000});
  await page.evaluate(()=>{const e=window.__WS__;e.setPlaying(false);e.seek(0);e.solveCurrent();});
 
+ // ---- 0. toe/heel pitch through the real foot slider and solve path
+ await page.locator('.ws-key').first().click();
+ await page.getByTestId('adjustment-tab-left').click();
+ const footPitch=page.locator('.ws-slider').filter({hasText:'左脚俯仰'}).locator('input');
+ const footPitchState=()=>page.evaluate(async url=>{
+  const e=window.__WS__,k=[...e.getDoc().keys].sort((a,b)=>a.time-b.time)[0];
+  const {footLift}=await import(url),geo=e.footGeometry('L');
+  e.setPlaying(false);e.seek(k.time);e.solveCurrent();
+  return {pitch:k.pose.footL.pitch,lift:footLift(geo,k.pose.footL.target.y,k.pose.footL.yaw,k.pose.footL.pitch),
+   rootY:e.rig.bone('root').position.y};
+ },coreModule('foot.ts'));
+ const pitchBase=await footPitchState();
+ const movePitch=async(direction,count)=>{for(let i=0;i<count;i++)await footPitch.press(direction);};
+ await movePitch('ArrowRight',12);
+ await page.waitForTimeout(100);
+ const toeState=await footPitchState();
+ check('脚俯仰滑块写入支撑帧并保持脚底高度',toeState.pitch===12&&Math.abs(toeState.lift)<.001,
+  `pitch=${toeState.pitch}°, lift=${(toeState.lift*1000).toFixed(1)}mm`);
+ check('踮脚通过真实求解抬高身体约 25mm',toeState.rootY-pitchBase.rootY>.024&&toeState.rootY-pitchBase.rootY<=.025001,
+  `ΔrootY=${((toeState.rootY-pitchBase.rootY)*1000).toFixed(1)}mm`);
+ await movePitch('ArrowLeft',24);
+ await page.waitForTimeout(100);
+ const heelState=await footPitchState();
+ check('后跟支撑保持脚底高度且不改变身体高度',heelState.pitch===-12&&Math.abs(heelState.lift)<.001&&
+  Math.abs(heelState.rootY-pitchBase.rootY)<1e-6,
+  `pitch=${heelState.pitch}°, lift=${(heelState.lift*1000).toFixed(1)}mm, ΔrootY=${((heelState.rootY-pitchBase.rootY)*1000).toFixed(2)}mm`);
+ await movePitch('ArrowRight',12);
+ await page.waitForTimeout(100);
+ check('脚俯仰回到平放时身体恢复原高度',Math.abs((await footPitchState()).rootY-pitchBase.rootY)<1e-6);
+
  const kneeSpot=()=>page.evaluate(()=>{
   const e=window.__WS__,h=e.handles.find(x=>x.kind==='knee'&&x.side==='L');
   const p=h.mesh.position.clone().project(e.camera),r=e.renderer.domElement.getBoundingClientRect();

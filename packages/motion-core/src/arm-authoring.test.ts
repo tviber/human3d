@@ -1,6 +1,6 @@
 import {beforeAll,describe,expect,it} from 'vitest';
 import fs from 'node:fs';
-import {Quaternion,Vector3} from 'three';
+import {Euler,Quaternion,Vector3} from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {HumanRig} from './rig';
 import {blankDocument,compileMotion,frameAt,frameAtCompiled,mirrorDoc,parseDoc,serializeDoc,toV,validateDocShape} from './document';
@@ -19,6 +19,14 @@ beforeAll(async()=>{
 const solve=(doc:ReturnType<typeof blankDocument>)=>solveEffectiveFrame(rig,frameAt(doc,0,rig.rest.get('root')!));
 
 describe('free arm authoring through the production sampler and solver',()=>{
+ it('turns the head relative to the solved neck without moving its pivot',()=>{
+  const doc=blankDocument(rig.rest,'头部朝向','head-turn');solve(doc);
+  const pivot=rig.point('head');
+  doc.keys[0].pose.headYaw=27;doc.keys[0].pose.headPitch=-13;solve(doc);
+  const expected=new Quaternion().setFromEuler(new Euler(-13*DEG,27*DEG,0,'YXZ'));
+  expect(rig.bone('head').quaternion.angleTo(expected)).toBeLessThan(1e-7);
+  expect(rig.point('head').distanceTo(pivot)).toBeLessThan(1e-9);
+ });
  it('preserves the policy through storage, mirror, compilation and subsampling',()=>{
   const doc=blankDocument(rig.rest,'自由关节','free-arms');doc.freeArms=true;
   const restored=parseDoc(serializeDoc(doc));

@@ -5,8 +5,8 @@ import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {HumanRig} from './rig';
 import {attachRacket} from './props/racket';
 import {blankDocument,contactStartKey,flattenPose,frameAt,isReleaseKey,mirrorKey,normalizeDoc,samplePose,validateDocShape,type WorkshopDoc,type WorkshopKey} from './document';
-import {ankleYForLift,footGeometry,footLift,type Side} from './foot';
-import {analyzePose,solveEffectiveFrame} from './solver';
+import {ankleYForLift,footGeometry,footLift,footLowestY,soleOffset,toeSupportRise,type Side} from './foot';
+import {analyzePose,measurePelvisCorrection,solveEffectiveFrame} from './solver';
 import {mulberry32} from './random-document';
 
 /** Regression tests for issue #2 P1-1..P1-5. Every case runs through the same
@@ -107,11 +107,55 @@ describe('P1-4 foot height is the sole, measured on the solved rig',()=>{
     k.pose.footL.target.y=ankleYForLift(g,lift,yaw,pitch);
    },2);
    solveAt(d,0);
-   const lowest=Math.min(...g.names.map(n=>rig.point(n).y));
+   const named=Math.min(...g.names.map(n=>rig.point(n).y)),ankle=rig.point('foot_L');
+   const lowest=footLowestY(g,named,ankle.y,rig.bone('foot_L').getWorldQuaternion(new Quaternion()));
    expect(Math.abs((lowest-g.groundY)-lift)).toBeLessThan(.003);
-   const ankle=rig.point('foot_L').y;
-   expect(Math.abs(footLift(g,ankle,yaw,pitch)-lift)).toBeLessThan(.003);
+   expect(Math.abs(footLift(g,ankle.y,yaw,pitch)-lift)).toBeLessThan(.003);
   }
+ });
+});
+
+describe('supported foot pitch resolves toe and heel support without ground penetration',()=>{
+ it.each(['L','R']as const)('%s toe support raises and lowers the body with foot pitch',side=>{
+  const geo=footGeometry(rig.rest,side),pitch=12;
+  const doc=docWith([0,1],(_,k)=>{k.constraints={plantL:true,plantR:true,grip:false,contact:false};},1);
+  const baseline=solveAt(doc,0);void baseline;
+  const flatRootY=rig.bone('root').position.y;
+  const foot=side==='L'?doc.keys[0].pose.footL:doc.keys[0].pose.footR;
+  const expectedRise=toeSupportRise(pitch);
+  expect(expectedRise).toBeGreaterThan(0);
+  for(const k of doc.keys)(side==='L'?k.pose.footL:k.pose.footR).pitch=pitch;
+  const frame=frameAt(doc,.25,origin());
+  measurePelvisCorrection(rig,frame.pose,frame.constraints,{support:frame.support});
+  const measuredRootY=rig.bone('root').position.y;
+  expect(measuredRootY).toBeCloseTo(flatRootY,8);
+  solveEffectiveFrame(rig,frame);
+  expect(rig.bone('root').position.y).toBeCloseTo(measuredRootY+expectedRise,8);
+  expect(rig.bone('root').position.y-flatRootY).toBeCloseTo(expectedRise,6);
+  const ankle=rig.point(`foot_${side}`),lowestNamed=Math.min(...geo.names.map(n=>rig.point(n).y));
+  const lowestToe=footLowestY(geo,lowestNamed,ankle.y,rig.bone(`foot_${side}`).getWorldQuaternion(new Quaternion()));
+  expect(Math.abs(lowestToe-geo.groundY)).toBeLessThan(.002);
+
+  for(const k of doc.keys)(side==='L'?k.pose.footL:k.pose.footR).pitch=0;
+  solveAt(doc,.25);
+  expect(rig.bone('root').position.y).toBeCloseTo(flatRootY,8);
+ });
+
+ it.each(['L','R']as const)('%s heel support keeps body height unchanged and lifts the heel to the floor',side=>{
+  const geo=footGeometry(rig.rest,side),doc=docWith([0,1],(_,k)=>{
+   k.constraints={plantL:true,plantR:true,grip:false,contact:false};
+   (side==='L'?k.pose.footL:k.pose.footR).pitch=-12;
+  },1);
+  const flat=clone(doc);for(const k of flat.keys)(side==='L'?k.pose.footL:k.pose.footR).pitch=0;
+  solveAt(flat,0);const flatRootY=rig.bone('root').position.y;
+  solveAt(doc,0);
+  expect(rig.bone('root').position.y).toBeCloseTo(flatRootY,8);
+  const ankle=rig.point(`foot_${side}`),lowestNamed=Math.min(...geo.names.map(n=>rig.point(n).y));
+  const lowest=footLowestY(geo,lowestNamed,ankle.y,rig.bone(`foot_${side}`).getWorldQuaternion(new Quaternion()));
+  const foot=side==='L'?doc.keys[0].pose.footL:doc.keys[0].pose.footR;
+  expect(lowest,`ankle ${rig.point(`foot_${side}`).y}, target ${foot.target.y}, pitch ${foot.pitch}, lift ${footLift(geo,foot.target.y,foot.yaw,foot.pitch)}`)
+   .toBeCloseTo(geo.groundY,4);
+  expect(soleOffset(geo,0,-12)).toBeLessThan(soleOffset(geo,0,0));
  });
 });
 

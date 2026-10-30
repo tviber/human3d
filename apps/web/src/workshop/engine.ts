@@ -1,6 +1,6 @@
 import {webPlatform,type AppPlatform} from '../platform/platform';
 import {AmbientLight,BufferGeometry,CanvasTexture,Color,DirectionalLight,DoubleSide,Float32BufferAttribute,Group,HemisphereLight,Line,LineBasicMaterial,LineDashedMaterial,LineLoop,LineSegments,Mesh,MeshBasicMaterial,MeshStandardMaterial,PerspectiveCamera,Plane,PlaneGeometry,Quaternion,Raycaster,RingGeometry,Scene,SkinnedMesh,SphereGeometry,Sprite,SpriteMaterial,Vector2,Vector3,WebGLRenderer,PCFSoftShadowMap,SRGBColorSpace,ACESFilmicToneMapping,Clock,GridHelper} from 'three';
-import {RACKET_TIP_LOCAL,RACKET_BEVELS,RACKET_BEVEL_DEFAULT,bevelAnchor} from '@human3d/motion-core';
+import {HEAD_ROTATION_LIMITS,RACKET_TIP_LOCAL,RACKET_BEVELS,RACKET_BEVEL_DEFAULT,bevelAnchor} from '@human3d/motion-core';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {HumanRig,skeletonSegments} from '@human3d/motion-core';
@@ -27,7 +27,7 @@ export interface WorkshopOptions{handles:boolean;trajectories:boolean;balance:bo
  /** Show the raw leg pole floats. The knee handle is the everyday control, so
   * these stay off unless the author opts in — the knee handle itself is
   * unaffected. */
- legPole:boolean}
+ legPole:boolean;headHandle:boolean}
 /** Ghost cap per direction: ≤3 keeps even a maxKeys document cheap — keys mode
  * brackets only the ±N keys around the playhead, never the whole timeline. */
 export const ONION_MAX=3;
@@ -126,7 +126,7 @@ export class CaptureMutex{
   return Promise.resolve().then(fn).finally(()=>{this.busy=false;});
  }
 }
-type DragKind='root'|'hand'|'foot'|'swing'|'poleArm'|'poleLeg'|'knee'|'tip'|'contact';
+type DragKind='root'|'hand'|'foot'|'swing'|'poleArm'|'poleLeg'|'knee'|'head'|'tip'|'contact';
 /** `passive` handles render but never start a drag — used for the actual foot
  * during a release interval, where the editable control is the swing point. */
 interface Handle{kind:DragKind;side?:'L'|'R';mesh:Mesh;keyId?:string;passive?:boolean}
@@ -142,7 +142,7 @@ export class WorkshopEngine{
   /** Review mode (false) hides handles and refuses every pointer pick, so a
    * camera gesture can never write the document (issue #23 PR-A). */
   editable=true;
-  options:WorkshopOptions={handles:true,trajectories:false,balance:false,onion:false,onionCount:2,onionMode:'keys',onionStep:.1,bevels:false,legPole:false};
+  options:WorkshopOptions={handles:true,trajectories:false,balance:false,onion:false,onionCount:2,onionMode:'keys',onionStep:.1,bevels:false,legPole:false,headHandle:false};
   private clock=new Clock();private raf=0;private lastNotify=0;private resizeObserver:ResizeObserver;private unbindTheme?:()=>void;
   private keyLight?:DirectionalLight;
   private handleGroup=new Group();private handles:Handle[]=[];private contactMarkers:Mesh[]=[];
@@ -257,6 +257,7 @@ export class WorkshopEngine{
     mk('poleArm','L',0x4a9e6b,.018);mk('poleArm','R',0x4a9e6b,.018);
     mk('poleLeg','L',0x4a9e6b,.018);mk('poleLeg','R',0x4a9e6b,.018);
     mk('knee','L',0x9ccc65,.02);mk('knee','R',0x9ccc65,.02);
+    mk('head',undefined,0x7757d6,.026);
     mk('tip',undefined,0xd23c3c,.024);
   }
   private makeMarkers(){
@@ -431,6 +432,19 @@ export class WorkshopEngine{
         }
         break;
       }
+      case 'head':{
+        const parent=this.rig.bone('head').parent;
+        if(!parent)break;
+        const direction=pos.sub(this.rig.point('head')).applyQuaternion(parent.getWorldQuaternion(new Quaternion()).invert());
+        if(direction.lengthSq()<1e-10)break;
+        const yaw=Math.atan2(direction.x,direction.z)*180/Math.PI;
+        const pitch=Math.atan2(-direction.y,Math.hypot(direction.x,direction.z))*180/Math.PI;
+        k.headYaw=Math.max(HEAD_ROTATION_LIMITS.yaw[0],Math.min(HEAD_ROTATION_LIMITS.yaw[1],yaw));
+        k.headPitch=Math.max(HEAD_ROTATION_LIMITS.pitch[0],Math.min(HEAD_ROTATION_LIMITS.pitch[1],pitch));
+        if(k.headYaw===0)delete k.headYaw;
+        if(k.headPitch===0)delete k.headPitch;
+        break;
+      }
       case 'tip':case 'contact':{
         if(!this.racket)break;this.solveCurrent();
         const tip=this.racket.localToWorld(RACKET_TIP_LOCAL.clone());
@@ -535,6 +549,7 @@ export class WorkshopEngine{
     put('poleArm','L',toV(p.handL.pole));put('poleArm','R',toV(p.handR.pole));
     put('poleLeg','L',toV(p.footL.pole),this.options.legPole);put('poleLeg','R',toV(p.footR.pole),this.options.legPole);
     put('knee','L',this.rig.point('lowerleg01_L'));put('knee','R',this.rig.point('lowerleg01_R'));
+    put('head',undefined,this.rig.bone('head').localToWorld(new Vector3(0,0,.22)),this.options.headHandle);
     put('tip',undefined,this.racket?this.racket.localToWorld(RACKET_TIP_LOCAL.clone()):new Vector3(),f.gripAmount>0);
     // Swing waypoint split: during a release interval the visible foot sits ON
     // the path contact→waypoint→landing, so the bone handle becomes display

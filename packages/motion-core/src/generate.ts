@@ -256,10 +256,10 @@ export function applyGenMove(ctx:GenMoveContext,cand:WorkshopDoc,move:GenMove):W
   * the same slice of the key's current pose. Channel layout (document.ts
   * flattenPose): trunk 0–6 · handL 7–18 · handR 19–30 · footL 31–38 ·
   * footR 39–46; each hand group also carries its appended spread channel
-  * (handL 47, handR 48). The foot ranges end at 47 so they never absorb the
-  * appended finger channels. */
+  * (handL 47, handR 48); trunk also carries head angles (49–50). The foot
+  * ranges end at 47 so they never absorb appended channels. */
  const RANGE:Record<ChannelGroup,[number,number]>={trunk:[0,7],handL:[7,19],handR:[19,31],footL:[31,39],footR:[39,47]};
- const EXTRAS:Partial<Record<ChannelGroup,number[]>>={handL:[47],handR:[48]};
+ const EXTRAS:Partial<Record<ChannelGroup,number[]>>={trunk:[49,50],handL:[47],handR:[48]};
  const st=cand.loop?((t%cand.duration)+cand.duration)%cand.duration:t;
  const flat=flattenPose(k.pose),from=flattenPose(sampleMotion(ctx.compiled,st));
  const [a,b]=RANGE[g];

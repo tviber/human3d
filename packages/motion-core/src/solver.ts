@@ -6,7 +6,7 @@ import {PROPS} from './props';
 import {DEG,LIMITS,angleAt,pelvisDorsiCorrection,solveTwoBone,type DorsiLeg} from './kinematics';
 import type {EffectiveFrame,PoseParams,KeyConstraints,SupportWeights} from './document';
 import {toV} from './document';
-import {FOOT_CLEARANCE_M,footDepth,footGeometry,footLift,footRotation,type FootGeometry,type Side} from './foot';
+import {FOOT_CLEARANCE_M,footDepth,footGeometry,footLift,footLowestY,footRotation,toeSupportRise,type FootGeometry,type Side} from './foot';
 import {handFrame} from './hand-frame';
 
 /** Kinematic stage of the pipeline: task-space pose → skeleton, with joint
@@ -23,6 +23,26 @@ export interface SolveState{support?:SupportWeights;gripAmount?:number;clavicleL
  pelvisShift?:number}
 export interface SolveReport{pelvisShift:number;pelvisSaturated:boolean}
 
+/** Resolve the floor-facing ankle targets and the shared body rise before FK.
+ * A negative sole lift is raised to the floor. Positive pitch on a supported
+ * foot also raises the body's root by the measured toe rise; heel support only
+ * adjusts the ankle target, leaving body height unchanged. */
+function resolveFootHeight(rig:HumanRig,p:PoseParams,support:SupportWeights){
+ const targets={} as Record<Side,Vector3>,toeRise={} as Record<Side,number>;
+ for(const side of ['L','R']as const){
+  const f=side==='L'?p.footL:p.footR,geo=footGeometry(rig.rest,side),target=toV(f.target);
+  const lift=footLift(geo,target.y,f.yaw,f.pitch),supported=Math.max(0,support[side]);
+  // A supported contact owns the floor constraint. Swing targets remain
+  // untouched so semantic FK edits keep their exact task-space endpoint.
+  if(supported>0&&lift<0)target.y-=lift;
+  const contactBlend=MathUtils.clamp((FOOT_CLEARANCE_M-lift)/FOOT_CLEARANCE_M,0,1);
+  const contactWeight=contactBlend*contactBlend*(3-2*contactBlend);
+  targets[side]=target;toeRise[side]=contactWeight*toeSupportRise(f.pitch);
+ }
+ const rootRise=Math.max(Math.max(0,support.L)*toeRise.L,Math.max(0,support.R)*toeRise.R);
+ return {targets,rootRise};
+}
+
 /** The per-frame dorsiflexion argmin. Stops before leg IK and the arms: the
  * shift is fixed once the spine and the support-weighted ankle targets exist,
  * and that is the number `solvePose` applies when no override is passed.
@@ -31,6 +51,8 @@ export interface SolveReport{pelvisShift:number;pelvisSaturated:boolean}
 export function measurePelvisCorrection(rig:HumanRig,p:PoseParams,c:KeyConstraints,state:SolveState={}){
  const {pelvisShift:_drop,...rest}=state;
  void _drop;
+ const support=rest.support??{L:c.plantL?1:0,R:c.plantR?1:0};
+ const footHeight=resolveFootHeight(rig,p,support);
  return rig.batch(()=>{
   rig.reset();
   const root=rig.bone('root'),origin=rig.rest.get('root')!;
@@ -41,10 +63,9 @@ export function measurePelvisCorrection(rig:HumanRig,p:PoseParams,c:KeyConstrain
   rig.rotate('root',0,p.yaw,0);
   for(const n of ['spine05','spine04','spine03','spine02','spine01'])rig.rotate(n,p.lean/5,p.chest/5,p.side/5);
   rig.rotate('neck01',-p.lean*.22,-p.chest*.15,-p.side*.2);rig.rotate('neck02',-p.lean*.22,0,0);rig.rotate('head',-p.lean*.12,0,0);
-  const support=rest.support??{L:c.plantL?1:0,R:c.plantR?1:0};
   const legs=(['L','R'] as const).map(side=>{
     const f=side==='L'?p.footL:p.footR;
-    return {side,target:toV(f.target),pole:toV(f.pole),footQ:footRotation(f.yaw,f.pitch),
+    return {side,target:footHeight.targets[side],pole:toV(f.pole),footQ:footRotation(f.yaw,f.pitch),
       a:rig.rest.get(`upperleg01_${side}`)!.distanceTo(rig.rest.get(`lowerleg01_${side}`)!),
       b:rig.rest.get(`lowerleg01_${side}`)!.distanceTo(rig.rest.get(`foot_${side}`)!)};
   });
@@ -65,6 +86,8 @@ export function solvePose(rig:HumanRig,p:PoseParams,c:KeyConstraints,state:Solve
   * (a fully-flushed rig) that callers/tests reading .matrixWorld rely on. */
  return rig.batch(()=>{
   rig.reset();
+  const support=state.support??{L:c.plantL?1:0,R:c.plantR?1:0};
+  const footHeight=resolveFootHeight(rig,p,support);
   const root=rig.bone('root'),origin=rig.rest.get('root')!;
   root.position.copy(origin).add(new Vector3(
     MathUtils.clamp(p.root.x,-.6,.6),
@@ -74,12 +97,11 @@ export function solvePose(rig:HumanRig,p:PoseParams,c:KeyConstraints,state:Solve
   for(const n of ['spine05','spine04','spine03','spine02','spine01'])rig.rotate(n,p.lean/5,p.chest/5,p.side/5);
   rig.rotate('neck01',-p.lean*.22,-p.chest*.15,-p.side*.2);rig.rotate('neck02',-p.lean*.22,0,0);rig.rotate('head',-p.lean*.12,0,0);
 
-  const support=state.support??{L:c.plantL?1:0,R:c.plantR?1:0};
   const gripAmount=state.gripAmount??(c.grip?1:0);
   const gripSide=state.gripSide??'R';
   const legs=(['L','R'] as const).map(side=>{
     const f=side==='L'?p.footL:p.footR;
-    return {side,target:toV(f.target),pole:toV(f.pole),footQ:footRotation(f.yaw,f.pitch),
+    return {side,target:footHeight.targets[side],pole:toV(f.pole),footQ:footRotation(f.yaw,f.pitch),
       a:rig.rest.get(`upperleg01_${side}`)!.distanceTo(rig.rest.get(`lowerleg01_${side}`)!),
       b:rig.rest.get(`lowerleg01_${side}`)!.distanceTo(rig.rest.get(`foot_${side}`)!)};
   });
@@ -96,6 +118,9 @@ export function solvePose(rig:HumanRig,p:PoseParams,c:KeyConstraints,state:Solve
   // an absent override subtracts `correction.shift` exactly as before.
   if(useOverride){if(applied>0){root.position.z-=applied;rig.syncWorld();}}
   else if(correction.shift>0){root.position.z-=correction.shift;rig.syncWorld();}
+  // Keep the posterior correction schedule tied to its base-pose argmin;
+  // toe rise is a separate, smooth vertical response applied before leg IK.
+  root.position.y+=footHeight.rootRise;rig.syncWorld();
   for(const l of legs){rig.limb(l.side,'leg',l.target,l.pole);rig.worldRotation(`foot_${l.side}`,l.footQ);}
 
   // Clavicle assist (doc flag): the GRIPPING shoulder girdle rides up with a
@@ -125,6 +150,10 @@ export function solvePose(rig:HumanRig,p:PoseParams,c:KeyConstraints,state:Solve
   blendGrip(rig,gripSide,gripAmount,PROPS.racket.handle,()=>spread(gripSide));
   spread(other);
   rig.syncWorld();
+  // Keep the solver's existing lean compensation, then add authored head
+  // angles relative to the solved neck. Zero-valued head channels therefore
+  // preserve legacy poses exactly.
+  rig.rotate('head',-p.lean*.12+(p.headPitch??0),p.headYaw??0,0);
   return {pelvisShift:applied,pelvisSaturated:correction.saturated||applied+1e-9<correction.shift};
  });
 }
@@ -322,7 +351,8 @@ function limitItems(rig:HumanRig):CheckItem[]{
     const dorsi=ankleDorsiflexion(rig,side);
     items.push({...deg(`ankle-dorsiflexion-${side}`,`${label}踝背屈`,dorsi,DORSI_LIMIT_DEG)});
     const geo=footGeometry(rig.rest,side);
-    const lowest=Math.min(...geo.names.map(n=>P(n).y));
+    const lowestNamed=Math.min(...geo.names.map(n=>P(n).y));
+    const lowest=footLowestY(geo,lowestNamed,P(`foot_${side}`).y,rig.bone(`foot_${side}`).getWorldQuaternion(new Quaternion()));
     const depth=footDepth(geo,lowest);
     items.push({code:`foot-depth-${side}`,ok:depth<=FOOT_CLEARANCE_M+NUMERIC_EPS,label:`${label}脚入地`,
       detail:depth<=FOOT_CLEARANCE_M?`脚底最低点高于地面平面 · 入地 ${(depth*1000).toFixed(1)}mm`:`脚底入地 ${(depth*100).toFixed(1)}cm`,

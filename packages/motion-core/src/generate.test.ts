@@ -97,6 +97,18 @@ describe('subsampled interval curves',()=>{
   expect(left.keys.find(k=>k.id==='k-back')!.pose.handSpread?.L).toBeCloseTo(src.handSpread!.L!,7);
   expect(left.keys.find(k=>k.id==='k-back')!.pose.handSpread?.R).toBe(.85);
  });
+ it('phase-shifts trunk head angles along with the selected trunk channels',()=>{
+  const doc=defaultDocument(rig.rest);
+  doc.keys[1].pose.headYaw=18;doc.keys[1].pose.headPitch=-9;
+  const ctx=buildGenContext(rig,doc,{bounds:{maxPhaseShiftS:.1}});
+  const offset=.1,t=doc.keys[1].time+offset;
+  const src=sampleMotion(ctx.compiled,t);
+  const shifted=applyGenMove(ctx,doc,{kind:'phase',keyId:'k-back',group:'trunk',offset});
+  if(!shifted)throw new Error('expected a legal trunk phase move');
+  const pose=shifted.keys.find(k=>k.id==='k-back')!.pose;
+  expect(pose.headYaw).toBeCloseTo(src.headYaw??0,7);
+  expect(pose.headPitch).toBeCloseTo(src.headPitch??0,7);
+ });
 });
 
 describe('integrated jerk metrics use time-aware finite differences',()=>{

@@ -1,5 +1,5 @@
 import type {FootTarget,PoseParams,V3,WorkshopDoc,WorkshopKey} from '@human3d/motion-core';
-import {ensureKey,nearestKey,sortedKeys,WORKSHOP_LIMITS} from '@human3d/motion-core';
+import {ensureKey,HEAD_ROTATION_LIMITS,nearestKey,sortedKeys,WORKSHOP_LIMITS} from '@human3d/motion-core';
 import type {Vector3} from 'three';
 import type {StorageLock} from '../platform/platform';
 
@@ -27,7 +27,10 @@ export const isPoseShape=(v:unknown):v is PoseParams=>{
   const spread=p.handSpread;
   const validSpread=spread===undefined||!!spread&&typeof spread==='object'&&!Array.isArray(spread)
    &&Object.entries(spread as Record<string,unknown>).every(([side,value])=>(side==='L'||side==='R')&&typeof value==='number'&&Number.isFinite(value)&&value>=0&&value<=1);
+  const head=(name:'headYaw'|'headPitch',limits:readonly [number,number])=>p[name]===undefined
+   ||typeof p[name]==='number'&&Number.isFinite(p[name])&&p[name]>=limits[0]&&p[name]<=limits[1];
   return validSpread&&isV3(p.root)&&Number.isFinite(p.yaw)&&Number.isFinite(p.lean)&&Number.isFinite(p.chest)&&Number.isFinite(p.side)
+   &&head('headYaw',HEAD_ROTATION_LIMITS.yaw)&&head('headPitch',HEAD_ROTATION_LIMITS.pitch)
    &&hand(p.handL)&&hand(p.handR)&&foot(p.footL)&&foot(p.footR);
 };
 
@@ -162,6 +165,8 @@ export function stampPoseIntoKey(doc:WorkshopDoc,key:WorkshopKey,pose:PoseParams
   // preset with no handSpread must relax a shaped key, not leave its old fist
   // or open hand behind (the inverse of materializing an absent value).
   if(stamped.handSpread===undefined)delete merged.handSpread;
+  if(stamped.headYaw===undefined)delete merged.headYaw;
+  if(stamped.headPitch===undefined)delete merged.headPitch;
   key.pose=merged;
   return {heldFoot,liftoffFoot};
 }

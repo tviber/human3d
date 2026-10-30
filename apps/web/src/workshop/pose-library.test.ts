@@ -111,7 +111,7 @@ describe('applyPoseAt',()=>{
   const report=applyPoseAt(doc,legacy,key.time,origin);
   expect(report?.result).toBe('replaced');
   expect(key.pose.handSpread).toBeUndefined();
-  expect(flattenPose(key.pose).slice(-2)).toEqual([RELAXED_SPREAD,RELAXED_SPREAD]);
+  expect(flattenPose(key.pose).slice(47,49)).toEqual([RELAXED_SPREAD,RELAXED_SPREAD]);
  });
  it('inserts a new key carrying the pose when the playhead is between keys',()=>{
   const doc=docOf('idle');

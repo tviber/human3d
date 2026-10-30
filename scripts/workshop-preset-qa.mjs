@@ -143,10 +143,46 @@ try{
  await page.getByRole('button',{name:'重做',exact:true}).click();
  assert.equal((await read()).doc.name,'重命名后的预设副本');
 
+ // Head turns are written by the common-tab sliders and the matching canvas
+ // point. Keep these on the selected key and exercise the point with pointer
+ // events so the persisted document follows the control the user drags.
+ const headBase=(await read()).doc.keys[0].pose;
+ await page.getByTestId('head-yaw').focus();await page.getByTestId('head-yaw').press('ArrowRight');
+ await page.getByTestId('head-pitch').focus();await page.getByTestId('head-pitch').press('ArrowRight');
+ const headSliders=(await read()).doc.keys[0].pose;
+ assert.notEqual(headSliders.headYaw??0,headBase.headYaw??0,'head yaw slider did not update the selected key');
+ assert.notEqual(headSliders.headPitch??0,headBase.headPitch??0,'head pitch slider did not update the selected key');
+ assert.deepEqual((await read()).doc.keys[1].pose.headYaw,headBase.headYaw,'head slider changed a different key');
+ await page.getByRole('button',{name:'撤销',exact:true}).click();
+ assert.equal((await read()).doc.keys[0].pose.headYaw,headBase.headYaw);
+ await page.getByRole('button',{name:'重做',exact:true}).click();
+ assert.equal((await read()).doc.keys[0].pose.headYaw,headSliders.headYaw);
+
  // Drag the visible LEFT wrist on the copied player motion (right hand has
  // a racket/tip handle). Screen coordinates come from the actual handle.
  await page.locator('.ws-cameras').getByRole('button',{name:'正面',exact:true}).click();
  await page.waitForFunction(()=>window.__WS__.view==='front');
+ await page.waitForFunction(()=>window.__WS__.handles.find(h=>h.kind==='head')?.mesh.visible===true);
+ const headBeforeDrag=(await read()).doc.keys[0].pose;
+ const headSpot=await page.evaluate(()=>{
+  const e=window.__WS__,h=e.handles.find(h=>h.kind==='head');
+  if(!h)return {visible:false,x:0,y:0};
+  const p=h.mesh.position.clone().project(e.camera),r=e.renderer.domElement.getBoundingClientRect();
+  return {visible:h?.mesh.visible,x:r.left+(p.x+1)*r.width/2,y:r.top+(1-p.y)*r.height/2};
+ });
+ assert(headSpot.visible,'head control point is hidden on the common tab');
+ await page.mouse.move(headSpot.x,headSpot.y);await page.mouse.down();
+ await page.mouse.move(headSpot.x+40,headSpot.y-28,{steps:8});await page.mouse.up();
+ const headDragged=(await read()).doc.keys[0].pose;
+ assert(Math.abs((headDragged.headYaw??0)-(headBeforeDrag.headYaw??0))>.5,'head drag did not change yaw');
+ assert(Math.abs((headDragged.headPitch??0)-(headBeforeDrag.headPitch??0))>.5,'head drag did not change pitch');
+ await page.getByRole('button',{name:'撤销',exact:true}).click();
+ assert.equal((await read()).doc.keys[0].pose.headYaw,headBeforeDrag.headYaw);
+ await page.getByRole('button',{name:'重做',exact:true}).click();
+ assert.equal((await read()).doc.keys[0].pose.headYaw,headDragged.headYaw);
+
+ // Drag the visible LEFT wrist on the copied player motion (right hand has
+ // a racket/tip handle). Screen coordinates come from the actual handle.
  const targetBefore=(await read()).doc.keys[0].pose.handL.target;
  const spot=await page.evaluate(()=>{
   const e=window.__WS__,h=e.handles.find(h=>h.kind==='hand'&&h.side==='L');

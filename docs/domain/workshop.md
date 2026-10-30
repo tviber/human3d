@@ -19,6 +19,7 @@
 - 编号手掌相对且左右镜像（`bevelSign` 右 +1 / 左 −1）：`mirrorDoc` 原样保留 `gripBevel`，镜像后球拍是源的精确 x 镜像（grip-side.test.ts 逐点钉死；探针 x≠0 时左右对应点是**局部 x 取反**的点）。
 - 缺省即规范：显式 1 被 `normalizeDoc` 折叠、未写旧文档字节不变；导出仅在非 1 时写 `presentation.bevel`。
 - **handSpread 的 0.5 是缺省规范形态**：写 0.5 = 删通道；`applyHandShape` 在 0.5 走与旧 `relaxHand` **逐位相同**的快速路径（articulateHand 会引入 −0 分量泄漏进包字节）——改 hand-shape/solver 时不得破坏该等价（hand-shape.test.ts 钉死）。通道追加在 `flattenPose` 尾部（L=47/R=48），旧索引不动；生成器 handL/handR 相位移动必须捎带自己的 spread 通道（`EXTRAS`）。
+- **头部朝向是每键姿态通道**：`headYaw`/`headPitch` 缺省为 0，限位分别为 ±80°/±45°；求解相对已解出的颈部转动 head 骨。`flattenPose` 将其追加到 49/50，旧通道索引不动；躯干相位移动必须同时移动两条头部通道。工作台「通用」页提供滑块，紫色头前控制点经真实拖动写入所选关键帧；Review 或离开「通用」页时控制点隐藏。左右镜像时 yaw 变号、pitch 保持。求解语义变化需 bump `SERVICE_VERSION`（本切片 0.11.0→0.12.0，`WORKSHOP_REVISION` v6→v7）。
 - 手型移动指节骨骼 = 运动语义变化，必须 bump `SERVICE_VERSION`（本切片 0.8.0→0.9.0，`WORKSHOP_REVISION` v4→v5）。
 
 ## 撤销与文档生命周期

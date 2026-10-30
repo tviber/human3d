@@ -22,7 +22,7 @@ import {DORSI_LIMIT_DEG,analyzePose,solveEffectiveFrame} from './solver';
 import {buildPelvisSchedule} from './pelvis-schedule';
 import {compileMotion,frameAtCompiled,sortedKeys,toV,type WorkshopDoc} from './document';
 import {sampleTimes} from './pose-package';
-import {footGeometry,type Side} from './foot';
+import {footGeometry,footLowestY,type Side} from './foot';
 
 export type Vec3=[number,number,number];
 export type Quat=[number,number,number,number];
@@ -67,7 +67,7 @@ export interface ProbeFrame{
  pos:Record<string,Vec3>;
  /** Racket tip world position — null when the probe ran without a tip object. */
  tip:Vec3|null;
- /** Lowest solved foot point per side (over ankle + toe joints). */
+ /** Lowest solved foot point per side (over toe joints + virtual heel). */
  lowestFootY:{L:number;R:number};
  plant:{L:boolean;R:boolean};
  footTarget:{L:Vec3;R:Vec3};
@@ -262,7 +262,10 @@ export function probeFrames(rig:HumanRig,doc:WorkshopDoc,fps:number,tip?:ProbeTi
    t,key:f.keyIndex,
    root:v3a(rig.point('root')),quat,pos,
    tip:tip?v3a(tip.localToWorld(RACKET_TIP_LOCAL.clone())):null,
-   lowestFootY:{L:Math.min(...geoL.names.map(nm=>rig.point(nm).y)),R:Math.min(...geoR.names.map(nm=>rig.point(nm).y))},
+   lowestFootY:{
+    L:footLowestY(geoL,Math.min(...geoL.names.map(nm=>rig.point(nm).y)),rig.point('foot_L').y,rig.bone('foot_L').getWorldQuaternion(new Quaternion())),
+    R:footLowestY(geoR,Math.min(...geoR.names.map(nm=>rig.point(nm).y)),rig.point('foot_R').y,rig.bone('foot_R').getWorldQuaternion(new Quaternion())),
+   },
    plant:{L:f.constraints.plantL,R:f.constraints.plantR},
    footTarget:{L:v3a(toV(f.pose.footL.target)),R:v3a(toV(f.pose.footR.target))},
    handTarget:{L:v3a(toV(f.pose.handL.target)),R:v3a(toV(f.pose.handR.target))},

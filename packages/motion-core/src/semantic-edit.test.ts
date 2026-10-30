@@ -1,9 +1,9 @@
 import {beforeAll,describe,expect,it} from 'vitest';
 import fs from 'node:fs';
-import {Vector3} from 'three';
+import {Quaternion,Vector3} from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {HumanRig} from './rig';
-import {footGeometry} from './foot';
+import {footGeometry,footLowestY} from './foot';
 import {blankDocument,defaultDocument,frameAt,mirrorDoc,serializeDoc,type WorkshopDoc} from './document';
 import {solveEffectiveFrame} from './solver';
 import {applySemanticEdit,groundFoot,measureSemantic,SEMANTIC_MOTIONS,type SemanticEdit,type SemanticPart} from './semantic-edit';
@@ -128,13 +128,16 @@ function swingDoc(side:'L'|'R'){
  it('落地: a lifted foot comes back to the floor by translating the body; moved joint angles hold, other keys never move',()=>{
   const doc=blankDocument(rig.rest,'三帧','three');
   doc.keys.splice(1,0,{...JSON.parse(JSON.stringify(doc.keys[0])),id:'three-m',time:.5,label:'中间'});
-  const sole=(x:'L'|'R')=>{const g=footGeometry(rig.rest,x);return Math.min(...g.names.map(n=>rig.point(n).y))-g.groundY;};
+  const sole=(x:'L'|'R')=>{
+   const g=footGeometry(rig.rest,x),ankle=rig.point(`foot_${x}`),named=Math.min(...g.names.map(n=>rig.point(n).y));
+   return footLowestY(g,named,ankle.y,rig.bone(`foot_${x}`).getWorldQuaternion(new Quaternion()))-g.groundY;
+  };
   // Small thigh moves only: grounding a 20° flexion would need a 13 cm drop,
   // which folds the planted ankle past its range (asserted separately below).
   for(const deg of [8,5]){
    const lifted=applySemanticEdit(rig,doc,'three-m',{part:'hip',side:'L',motion:'flexion',degrees:deg}).doc;
    solveAt(lifted,.5);const s0=sole('L'),hip0=measureSemantic(rig,'hip','flexion','L'),knee0=measureSemantic(rig,'knee','flexion','L'),ankle0=measureSemantic(rig,'ankle','flexion','L');
-   expect(Math.abs(s0)).toBeGreaterThan(.01); // the thigh edit really left the floor (or dug in)
+   expect(Math.abs(s0)).toBeGreaterThan(.002); // the thigh edit really left the floor (or dug in)
    const {doc:g,report}=groundFoot(rig,lifted,'three-m','L');
    expect(report.ok,report.reason).toBe(true);
    expect(report.dropMm).toBeCloseTo(s0*1000,6);

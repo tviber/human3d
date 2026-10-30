@@ -1,5 +1,5 @@
 import {
-  frameAt,keyAt,nearestKey,sortedKeys,WORKSHOP_LIMITS,
+  frameAt,HEAD_ROTATION_LIMITS,keyAt,nearestKey,sortedKeys,WORKSHOP_LIMITS,
   type FootTarget,type KeyConstraints,type PoseParams,type V3,type WorkshopDoc,type WorkshopKey,
 } from '@human3d/motion-core';
 import type {Vector3} from 'three';
@@ -18,7 +18,7 @@ interface FootDelta{target:V3;pole:V3;yaw:number;pitch:number}
  * the hand reaches, but the wrist orientation stays as the playhead had it. */
 interface HandDelta{target:V3;pole:V3}
 /** A basic action is a relative motion: every key is an offset from its first key. */
-interface PoseDelta{root:V3;yaw:number;lean:number;chest:number;side:number;footL:FootDelta;footR:FootDelta;
+interface PoseDelta{root:V3;yaw:number;lean:number;chest:number;side:number;headYaw:number;headPitch:number;footL:FootDelta;footR:FootDelta;
  handL:HandDelta;handR:HandDelta}
 
 const EPS=1e-9;
@@ -40,6 +40,7 @@ const footMoves=(d:FootDelta)=>!isZero(d.target)||!isZero(d.pole)||Math.abs(d.ya
 function poseDelta(from:PoseParams,to:PoseParams):PoseDelta{
   const hand=(a:{target:V3;pole:V3},b:{target:V3;pole:V3}):HandDelta=>({target:sub(b.target,a.target),pole:sub(b.pole,a.pole)});
   return {root:sub(to.root,from.root),yaw:to.yaw-from.yaw,lean:to.lean-from.lean,chest:to.chest-from.chest,side:to.side-from.side,
+   headYaw:(to.headYaw??0)-(from.headYaw??0),headPitch:(to.headPitch??0)-(from.headPitch??0),
    footL:footDelta(from.footL,to.footL),footR:footDelta(from.footR,to.footR),
    handL:hand(from.handL,to.handL),handR:hand(from.handR,to.handR)};
 }
@@ -52,6 +53,9 @@ function applyDelta(base:PoseParams,d:PoseDelta,carryHands=false):PoseParams{
   const hand=(f:{target:V3;pole:V3;forward:V3;normal:V3},e:HandDelta)=>({target:add(f.target,rotY(e.target,base.yaw)),pole:add(f.pole,rotY(e.pole,base.yaw)),forward:f.forward,normal:f.normal});
   const pose=structuredClone(base);
   pose.root=add(base.root,rotY(d.root,base.yaw));pose.yaw=base.yaw+d.yaw;pose.lean=base.lean+d.lean;pose.chest=base.chest+d.chest;pose.side=base.side+d.side;
+  pose.headYaw=Math.max(HEAD_ROTATION_LIMITS.yaw[0],Math.min(HEAD_ROTATION_LIMITS.yaw[1],(base.headYaw??0)+d.headYaw));
+  pose.headPitch=Math.max(HEAD_ROTATION_LIMITS.pitch[0],Math.min(HEAD_ROTATION_LIMITS.pitch[1],(base.headPitch??0)+d.headPitch));
+  if(pose.headYaw===0)delete pose.headYaw;if(pose.headPitch===0)delete pose.headPitch;
   pose.footL=foot(base.footL,d.footL);pose.footR=foot(base.footR,d.footR);
   if(carryHands){pose.handL=hand(base.handL,d.handL);pose.handR=hand(base.handR,d.handR);}
   return pose;

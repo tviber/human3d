@@ -7,6 +7,7 @@
 - `frameAt → solveEffectiveFrame` 是唯一的真实求解路径：测试、质量探针（`quality-probe.ts`）、优化器（`generate.ts` 经 `probeFrames → analyzeProbeFrames → evalDetail`）、工作台渲染共用同一路径——测试/度量不得另写一套求解（learning [4]）。
 - 骨盆后移（`SERVICE_VERSION` 0.5.0）：`pelvisDorsiCorrection` 仍是逐帧 argmin。会断开可行集的文档由 `buildPelvisSchedule`（`pelvis-schedule.ts`）先持住盆地跳变，再按速度 / 加速度上限跟随；`solveEffectiveFrame` 的可选第三参是这一帧实际使用的后移。`passthrough === true` 时调用方必须省略该参数，以保持历史浮点路径。姿态包求解（`solveWorkshop`）、质量探针（`probeFrames`）、`DocumentSource` 与工作台 `WorkshopEngine` 都走这一条。竖直方向够不着的踝目标不是这条日程能修的，见 [../validation.md](../validation.md) 第 5 节。
 - IK 为双骨解析解（肩–肘–腕、髋–膝–踝定长链），含弯曲提示方向；不是迭代 CCD。
+- 脚俯仰按脚底最低点约束地面：脚模型没有后跟骨，因此后跟接触点以脚踝后方的虚拟点表示；求解时把穿地脚踝目标抬到地面。正 pitch（脚尖向下）是踮脚，支撑脚带动 root 平滑上升，身体升幅不超过 25mm；负 pitch（脚尖向上）是后跟支撑，只抬脚踝目标，root 高度不变。`measurePelvisCorrection` 与正式 `solvePose` 使用相同的脚目标、先计算基准姿态下的骨盆后移，再单独加踮脚高度，避免高度变化扭曲后移日程。
 - 求解是确定性的：同一文档 + 同一 rig 逐位重解（`property.test.ts`/`solver-baseline.test.ts` 钉死）。
 
 ## 限位与合理性

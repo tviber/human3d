@@ -22,7 +22,7 @@ import {MAX_BACKUP_BYTES,RESTORE_POINT_KEY,backupText,mergeBackup,parseBackup,re
 import {HistoryBook,RecordGate} from './history';
 import {SemanticPanel,type SemanticHost} from './semantic-panel';
 import {copyKeyframe,keyframeInsertSlot,keyframeTimeProblem,moveKeyframe,removeKeyframe} from './keyframes';
-import {clampDuration,RACKET_BEVEL_DEFAULT,RACKET_BEVELS,RELAXED_SPREAD,WORKSHOP_LIMITS} from '@human3d/motion-core';
+import {clampDuration,HEAD_ROTATION_LIMITS,RACKET_BEVEL_DEFAULT,RACKET_BEVELS,RELAXED_SPREAD,WORKSHOP_LIMITS} from '@human3d/motion-core';
 import {ankleYForLift,footLift,type Side} from '@human3d/motion-core';
 import {LIMITS} from '@human3d/motion-core';
 import {WRIST_BEND_LIMIT_DEG} from '@human3d/motion-core';
@@ -1407,7 +1407,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
     {review?<p className="ws-review-lock">审阅模式：姿态控件已锁定。<button type="button" data-testid="unlock-edit" onClick={()=>switchMode('edit')}><Hand size={13}/>切换到编辑</button></p>:null}
     <section className="ws-card ws-key-card" inert={review}><h2>选中关键帧 {sel?<small>@{sel.time.toFixed(2)}s</small>:null}</h2>
      {sel?<div className="ws-adjustment-tabs" role="group" aria-label="关键帧调整分类">
-      {([['semantic','语义'],['left','左侧'],['right','右侧'],['common','通用']] as const).map(([tab,label])=><button key={tab} type="button" data-testid={`adjustment-tab-${tab}`} aria-pressed={adjustmentTab===tab} onClick={()=>{if(tab==='left'||tab==='right'){engine.current?.setPlaying(false);if(sel)engine.current?.seek(sel.time);}setAdjustmentTab(tab);}}>{label}</button>)}
+      {([['semantic','语义'],['left','左侧'],['right','右侧'],['common','通用']] as const).map(([tab,label])=><button key={tab} type="button" data-testid={`adjustment-tab-${tab}`} aria-pressed={adjustmentTab===tab} onClick={()=>{if(tab==='left'||tab==='right'){engine.current?.setPlaying(false);if(sel)engine.current?.seek(sel.time);}engine.current?.setOptions({headHandle:tab==='common'});setAdjustmentTab(tab);}}>{label}</button>)}
      </div>:null}
      <div className="ws-key-panel scroll-region" data-testid={`adjustment-panel-${adjustmentTab}`}>
      {sel?<>
@@ -1456,6 +1456,11 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
        <Slider label="骨盆升降" value={sel.pose.root.y} min={-.45} max={.15} step={.005} unit="m" onChange={v=>editSelected(k=>{k.pose.root.y=v;})}/>
        <Slider label="骨盆前后" value={sel.pose.root.z} min={-.4} max={.4} step={.005} unit="m" onChange={v=>editSelected(k=>{k.pose.root.z=v;})}/>
        <Slider label="骨盆左右" value={sel.pose.root.x} min={-.4} max={.4} step={.005} unit="m" onChange={v=>editSelected(k=>{k.pose.root.x=v;})}/>
+      </div>
+      <div className="ws-sub"><h3>头部朝向 <small>相对颈部转动</small></h3>
+       <Slider label="左右转头" value={sel.pose.headYaw??0} min={HEAD_ROTATION_LIMITS.yaw[0]} max={HEAD_ROTATION_LIMITS.yaw[1]} step={.5} testId="head-yaw" onChange={v=>editSelected(k=>{if(v===0)delete k.pose.headYaw;else k.pose.headYaw=v;})}/>
+       <Slider label="俯仰" value={sel.pose.headPitch??0} min={HEAD_ROTATION_LIMITS.pitch[0]} max={HEAD_ROTATION_LIMITS.pitch[1]} step={.5} testId="head-pitch" onChange={v=>editSelected(k=>{if(v===0)delete k.pose.headPitch;else k.pose.headPitch=v;})}/>
+       <p className="ws-note">也可拖动画布中头部前方的紫色控制点；左右转头范围 ±80°，俯仰范围 ±45°。</p>
       </div>
       </>:null}
       {adjustmentTab!=='common'?<>
@@ -1512,10 +1517,16 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
         else if(isReleaseKey(d,si,side)){const p=si>0?si-1:ks.length-1;owner=contactStartKey(d,side,ks[p].time)??ks[p];}
         owner??=sel;
         const foot=side==='L'?owner.pose.footL:owner.pose.footR;
+        const setFootOrientation=(yaw:number,pitch:number)=>{
+         const geo=engine.current?.footGeometry(side);
+         const lift=geo?Math.max(0,footLift(geo,foot.target.y,foot.yaw,foot.pitch)):0;
+         foot.yaw=yaw;foot.pitch=pitch;
+         if(geo)foot.target.y=ankleYForLift(geo,lift,yaw,pitch);
+        };
         return <div key={side}>
          <Slider label={`${cn}脚抬升高度（脚底离地）`} value={liftOf(side,planted?owner:sel)} min={0} max={.8} step={.005} unit="m" disabled={planted} onChange={v=>setLift(side,v)}/>
-         <Slider label={`${cn}脚俯仰`} value={foot.pitch} min={-40} max={40} step={1} onChange={v=>editAtKey(sel,()=>{foot.pitch=v;})}/>
-         <Slider label={`${cn}脚朝向`} value={foot.yaw} min={-90} max={90} step={1} onChange={v=>editAtKey(sel,()=>{foot.yaw=v;})}/>
+         <Slider label={`${cn}脚俯仰`} value={foot.pitch} min={-40} max={40} step={1} onChange={v=>editAtKey(sel,()=>setFootOrientation(foot.yaw,v))}/>
+         <Slider label={`${cn}脚朝向`} value={foot.yaw} min={-90} max={90} step={1} onChange={v=>editAtKey(sel,()=>setFootOrientation(v,foot.pitch))}/>
          {owner!==sel?<p className="ws-note" style={{color:'var(--amber)'}}>{cn}脚此帧由 {owner.time.toFixed(2)}s 的支撑开始帧锁定：俯仰与朝向的修改写入该帧。</p>:null}
         </div>;
        })}

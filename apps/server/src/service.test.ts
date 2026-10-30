@@ -118,6 +118,23 @@ describe('POST /v1/motions — workshop-doc action',()=>{
   expect(pkg.quality.checks.some(c=>c.code.startsWith('com-support'))).toBe(true);
   expect(validatePosePackage(pkg,ctx.manifest)).toEqual([]);
  });
+ it('keeps toe support slightly higher and heel support at the same body height',()=>{
+  const flat=blankDocument(ctx.rig.rest,'脚部基准','foot-flat');
+  const toe=JSON.parse(JSON.stringify(flat));
+  for(const key of toe.keys)key.pose.footL.pitch=12;
+  const heel=JSON.parse(JSON.stringify(flat));
+  for(const key of heel.keys)key.pose.footL.pitch=-12;
+  const sample=(doc:unknown)=>post({action:{id:'workshop-doc',parameters:{document:doc}},sample:{fps:10}});
+  const flatResponse=sample(flat),toeResponse=sample(toe),heelResponse=sample(heel);
+  for(const r of [flatResponse,toeResponse,heelResponse])expect(r.status).toBe(200);
+  const packages=[flatResponse.body,toeResponse.body,heelResponse.body] as PosePackage[];
+  for(const pkg of packages)expect(validatePosePackage(pkg,ctx.manifest)).toEqual([]);
+  const rootY=(pkg:PosePackage)=>pkg.tracks.translation.values[1];
+  expect(rootY(packages[1])-rootY(packages[0])).toBeCloseTo(.025,6);
+  expect(rootY(packages[2])).toBeCloseTo(rootY(packages[0]),8);
+  const heelDepth=packages[2].quality.checks.find(check=>check.code==='foot-depth-L');
+  expect(heelDepth?.ok).toBe(true);
+ });
  it('solves the selected linear curve and versions its artifact',()=>{
   const doc=JSON.parse(JSON.stringify(motionFileById('forehand')!.document!));
   const smooth=post({action:{id:'workshop-doc',parameters:{document:doc}},sample:{fps:10}});

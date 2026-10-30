@@ -5,7 +5,7 @@ import {contactStartKey,frameAt,isReleaseKey,keyAt,sortedKeys} from './document'
 import {rotateArmAbout,rotateHandFrame,rotateLegAbout,solveEffectiveFrame} from './solver';
 import {handFrame} from './hand-frame';
 import {DEG,angleAt,WRIST_BEND_LIMIT_DEG,LIMITS} from './kinematics';
-import {footDepth,footGeometry,type Side} from './foot';
+import {footDepth,footGeometry,footLowestY,type Side} from './foot';
 
 /** Whitelisted semantic pose commands (issue #23 PR-B). Each motion has an
  * anatomical positive direction; `degrees` is signed along it. A command is
@@ -308,7 +308,12 @@ export function applySemanticEdit(rig:HumanRig,doc:WorkshopDoc,keyId:string,edit
  // Swing-foot checks: the solver does not clamp a swing sole or the ankle angle.
  let soleMm=0,ankleOut=false;
  if(leg){
-  for(const s of legSides){const g=footGeometry(rig.rest,s);soleMm=Math.max(soleMm,footDepth(g,Math.min(...g.names.map(n=>rig.point(n).y)))*1000);}
+  for(const s of legSides){
+   const g=footGeometry(rig.rest,s),ankle=rig.point(`foot_${s}`);
+   const named=Math.min(...g.names.map(n=>rig.point(n).y));
+   const lowest=footLowestY(g,named,ankle.y,rig.bone(`foot_${s}`).getWorldQuaternion(new Quaternion()));
+   soleMm=Math.max(soleMm,footDepth(g,lowest)*1000);
+  }
   // Only an edit that pushes the ankle out of (or further out of) its range is flagged.
   ankleOut=ankleExcess()>Math.max(ankleExcess0,0)+SEMANTIC_TOLERANCE_DEG;
   if(soleMm>5)reason=`${edit.part==='legs'?'':cn}脚底低于地面 ${soleMm.toFixed(0)} mm`;
@@ -349,7 +354,10 @@ export function groundFoot(rig:HumanRig,doc:WorkshopDoc,keyId:string,side:Side|'
  const frame=solve(),ks=sortedKeys(next),i=ks.findIndex(k=>k.id===key.id);
  // A planted foot, or a release key still drawn at its contact, is already on its contact.
  const held=(x:Side)=>frame.constraints[x==='L'?'plantL':'plantR']||isReleaseKey(next,i,x);
- const sole=(x:Side)=>{const g=footGeometry(rig.rest,x);return Math.min(...g.names.map(n=>rig.point(n).y))-g.groundY;};
+ const sole=(x:Side)=>{
+  const g=footGeometry(rig.rest,x),ankle=rig.point(`foot_${x}`),named=Math.min(...g.names.map(n=>rig.point(n).y));
+  return footLowestY(g,named,ankle.y,rig.bone(`foot_${x}`).getWorldQuaternion(new Quaternion()))-g.groundY;
+ };
  const free=(side==='both'?(['L','R'] as const):[side]).filter(x=>!held(x));
  const nothing=(why:string)=>({doc:JSON.parse(JSON.stringify(doc)) as WorkshopDoc,report:{ok:false,dropMm:0,reason:why,detail:'',plantedKneeDeg:0}});
  if(!free.length)return nothing('该脚在此帧已是支撑（贴在接触点上），无需落地');

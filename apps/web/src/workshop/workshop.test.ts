@@ -5,7 +5,7 @@ import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {HumanRig} from '@human3d/motion-core';
 import {attachRacket,gripFrame,RACKET_HANDLE} from '@human3d/motion-core';
 import {angleAt,DEG} from '@human3d/motion-core';
-import {blankDocument,defaultDocument,ensureKey,flattenPose,frameAt,parseDoc,retimeKeys,samplePose,serializeDoc,setKeyTime,sortedKeys,TANGENT_SECANT_CAP,toV,unflattenPose,validateDocShape,type PoseParams,type WorkshopDoc,type WorkshopKey} from '@human3d/motion-core';
+import {blankDocument,defaultDocument,ensureKey,flattenPose,frameAt,HEAD_ROTATION_LIMITS,mirrorDoc,parseDoc,retimeKeys,samplePose,serializeDoc,setKeyTime,sortedKeys,TANGENT_SECANT_CAP,toV,unflattenPose,validateDocShape,type PoseParams,type WorkshopDoc,type WorkshopKey} from '@human3d/motion-core';
 import {DRAFT_PREFIX,LIBRARY_KEY,MotionLibrary,SAVED_MOTION_PREFIX,savedMotionSpec,WORKSHOP_PRESETS,type StorageLike} from './library';
 import {DocHistory,HistoryBook,RecordGate} from './history';
 import {WORKSHOP_LIMITS} from '@human3d/motion-core';
@@ -42,6 +42,23 @@ describe('workshop document',()=>{
   expect(back.keys[2].constraints.contact).toBe(true);
   expect(back.keys[2].pose.handR.target.x).toBeCloseTo(doc.keys[2].pose.handR.target.x,10);
   expect(back.keys[0].interpolation).toBe('linear');
+ });
+ it('samples, serializes, validates and mirrors the optional head turns',()=>{
+  const doc=blankDocument(rig.rest,'头部朝向','head-turn');
+  doc.keys[0].pose.headYaw=-24;doc.keys[0].pose.headPitch=10;
+  doc.keys[1].pose.headYaw=32;doc.keys[1].pose.headPitch=-14;
+  doc.keys[0].interpolation='linear';
+  expect(samplePose(doc,.5).headYaw).toBeCloseTo(4,8);
+  expect(samplePose(doc,.5).headPitch).toBeCloseTo(-2,8);
+  const restored=parseDoc(serializeDoc(doc));
+  expect(restored.keys[0].pose.headYaw).toBe(-24);
+  expect(restored.keys[1].pose.headPitch).toBe(-14);
+  const mirrored=mirrorDoc(doc);
+  expect(mirrored.keys[0].pose.headYaw).toBe(24);
+  expect(mirrored.keys[0].pose.headPitch).toBe(10);
+  expect(mirrorDoc(mirrored)).toEqual(doc);
+  const invalid=structuredClone(doc);invalid.keys[0].pose.headYaw=HEAD_ROTATION_LIMITS.yaw[1]+1;
+  expect(validateDocShape(invalid).some(e=>e.includes('headYaw'))).toBe(true);
  });
  it('selects linear or smooth Hermite interpolation per outgoing key',()=>{
   const doc=blankDocument(rig.rest,'曲线选择','curve-choice');

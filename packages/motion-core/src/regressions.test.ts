@@ -204,6 +204,24 @@ describe('loop seam, grip ramp, and random documents',()=>{
   expect(frameAt(d,1.125,origin()).gripAmount).toBeLessThan(.7);
   expect(frameAt(d,1.5,origin()).gripAmount).toBeCloseTo(1,5);
  });
+ it('hands a sub-transition hold over without jumping to full grip',()=>{
+  /* false→true→false with a .1 s hold (the 本帧持拍 use case): the rise is
+   * bounded by the NEXT interval too, so it finishes inside the held
+   * interval and the releasing key's own ramp continues from there. Without
+   * the bound the rise was still at ~35% when the release key took over and
+   * the amount popped to 1 for an instant. */
+  const d=docWith([0,1,1.1],(i,k)=>{k.constraints={plantL:true,plantR:true,grip:i===1,contact:false};},1.6);
+  expect(frameAt(d,1.0999,origin()).gripAmount).toBeGreaterThan(.99);
+  // The release interval is monotone decreasing — no upward pop at the key.
+  let prev=Infinity;
+  for(let i=0;i<=80;i++){
+   const g=frameAt(d,1.1+i/400,origin()).gripAmount;
+   expect(g).toBeLessThanOrEqual(prev+1e-9);prev=g;
+  }
+  // The same bound on the release side: a rise clipped by the hold starts
+  // its fall at the amount the rise reached, continuous through the key.
+  expect(frameAt(d,1.1,origin()).gripAmount).toBeCloseTo(1,5);
+ });
  it('keeps random valid documents finite and valid through the solver',()=>{
   const rnd=mulberry32(20240607);
   const r=(a:number,b:number)=>a+(b-a)*rnd();

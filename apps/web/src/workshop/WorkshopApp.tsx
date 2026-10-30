@@ -269,7 +269,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
  const subtleOk=typeof globalThis.crypto?.subtle?.digest==='function';
  // Session-only display toggles (never persisted) — same convention as the
  // engine's WorkshopOptions defaults.
- const [opts,setOpts]=useState({handles:true,trajectories:false,balance:false,onion:false,onionCount:2,onionMode:'keys' as 'keys'|'step',onionStep:.1,bevels:false});
+ const [opts,setOpts]=useState({handles:true,trajectories:false,balance:false,onion:false,onionCount:2,onionMode:'keys' as 'keys'|'step',onionStep:.1,bevels:false,legPole:false});
  const [optsOpen,setOptsOpen]=useState(false);
  // Issue #23: phone layout = viewport + bottom sheets; Review mode blocks every
  // viewport write. Same query as the CSS breakpoint in workshop.css.
@@ -706,13 +706,15 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
   });
   setHint(side?`已切换为${side==='L'?'左':'右'}手持拍：所有关键帧显示球拍，可撤销。`:'已卸下球拍：所有关键帧不再握拍，可撤销。');
  };
- /** Per-key racket: only the SELECTED key grips — the empty-handed run ends
-  * here and the next key's own flag decides when the racket goes back. The
-  * all-keys 持拍 buttons cover the whole-motion case. One undo step. */
- const gripSelectedKey=()=>{
-  const k=sel;if(!k||generationLocked.current||k.constraints.grip)return;
-  editAtKey(k,()=>{const key=keyAt(d,k.id);if(key)key.constraints.grip=true;});
-  setHint(`只把「${k.label||'关键帧'}」设为握拍：球拍从该帧区间出现，其他关键帧不变（可撤销）。`);
+ /** Per-key racket toggle: only the SELECTED key's grip flag flips — an
+  * empty-handed run picks the racket up here and a gripping key hands it
+  * back. editKeyStructure so one click is one undo step even in rapid
+  * succession; the seek keeps the flag's effect visible. */
+ const toggleKeyGrip=(on:boolean)=>{
+  const k=sel;if(!k||generationLocked.current||k.constraints.grip===on)return;
+  const e=engine.current;e?.setPlaying(false);e?.seek(k.time);
+  editKeyStructure(doc=>{const key=keyAt(doc,k.id);if(key)key.constraints.grip=on;});
+  setHint(on?`只把「${k.label||'关键帧'}」设为握拍：球拍从该帧区间出现，其他关键帧不变（可撤销）。`:`已取消「${k.label||'关键帧'}」的握拍：该帧恢复空手，其他关键帧不变（可撤销）。`);
  };
  /** 我的姿态：capture the selected key's full pose (arms included) as a
   * reusable one-click preset, Blender/Houdini pose-library style. */
@@ -1145,7 +1147,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
       <span className="ws-quick-label">球拍</span>
       <button type="button" data-testid="racket-right" disabled={!info} title="所有关键帧改为右手握拍并显示球拍，可撤销" onClick={()=>setGrip('R')}>右手持拍</button>
       <button type="button" data-testid="racket-left" disabled={!info} title="所有关键帧改为左手握拍并显示球拍，可撤销" onClick={()=>setGrip('L')}>左手持拍</button>
-      <button type="button" data-testid="racket-key" disabled={!info||!sel||sel.constraints.grip===true} title="空手状态插入球拍：仅选中关键帧握拍，下一关键帧恢复（可撤销）" onClick={gripSelectedKey}>本帧持拍</button>
+      <button type="button" data-testid="racket-key" disabled={!info||!sel} title={sel?.constraints.grip?'取消该帧握拍：恢复空手（可撤销）':'空手状态插入球拍：仅选中关键帧握拍，下一关键帧恢复（可撤销）'} onClick={()=>toggleKeyGrip(!(sel?.constraints.grip))}>{sel?.constraints.grip?'本帧放下':'本帧持拍'}</button>
       <button type="button" data-testid="racket-off" disabled={!info} title="所有关键帧不再握拍，可撤销" onClick={()=>setGrip(null)}>卸下球拍</button>
      </div>
      <div className="ws-quick-poses" role="group" aria-label="我的姿态（自建快速姿态）">
@@ -1356,7 +1358,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
      <p><i style={{background:'#ec8c39'}}/>手腕（IK 末端）</p>
      <p><i style={{background:'#e2543a'}}/>脚踝（支撑贴地 · 离地可三维拖动）</p>
      <p><i style={{background:'#0891b2'}}/>摆动路径点（离地帧存储的脚位，摆动中点）</p>
-     <p><i style={{background:'#4a9e6b'}}/>肘 / 膝极点</p>
+     <p><i style={{background:'#4a9e6b'}}/>肘 / 膝极点（膝极点默认隐藏，「显示」可开）</p>
      <p><i style={{background:'#9ccc65'}}/>膝盖（落地脚转朝向 · 离地整腿跟随）</p>
      <p><i style={{background:'#d23c3c'}}/>拍头 · <em style={{color:'#f0b429'}}>触球点</em></p>
      <p className="ws-note">直接拖动末端，IK 自动解算整条链；在空白处拖动仍是旋转视角。</p>
@@ -1384,6 +1386,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
        <Row label="运动轨迹线" checked={opts.trajectories} onChange={v=>setOpt({trajectories:v})}/>
        <Row label="重心 / 支撑" checked={opts.balance} onChange={v=>setOpt({balance:v})}/>
        {!review?<Row label="编辑手柄" checked={opts.handles} onChange={v=>setOpt({handles:v})}/>:null}
+       {!review?<Row label="膝极点（高级）" detail="显示腿弯曲方向的原始极点手柄；通常直接拖膝盖点即可" checked={opts.legPole} onChange={v=>setOpt({legPole:v})}/>:null}
        <Row label="拍柄棱面编号" detail="在拍柄 8 个棱面上标出 1–8，用来选择贴掌面" checked={opts.bevels} onChange={v=>setOpt({bevels:v})}/>
        <Row label="洋葱皮" detail="叠加前后姿态的幽灵骨架" checked={opts.onion} onChange={v=>setOpt({onion:v})}/>
        {opts.onion?<>

@@ -375,12 +375,15 @@ function governingIndex(chain:Entry[],time:number){
   return k;
 }
 /** Grip amount at `time`. A key whose grip flag differs from its predecessor
- * starts a ramp at its own time, over min(GRIP_TRANSITION_S, the interval
- * before it), so the fingers never snap. Times after the last key hold it. */
+ * starts a ramp at its own time, over min(GRIP_TRANSITION_S, the intervals on
+ * both sides), so the fingers never snap. The next interval bounds the rise
+ * too: a grip toggled back off before the ramp could finish must hand over at
+ * the value the rise reached — otherwise the releasing key restarts its own
+ * ramp from a full 1 and the amount jumps. Times after the last key hold it. */
 function gripAmountAt(chain:Entry[],k:number,time:number){
   const e=chain[k],prev=chain[k-1];
   if(!prev||prev.grip===e.grip)return e.grip?1:0;
-  const w=Math.min(GRIP_TRANSITION_S,e.time-prev.time);
+  const w=Math.min(GRIP_TRANSITION_S,e.time-prev.time,(chain[k+1]?.time??Infinity)-e.time);
   if(w<=1e-9)return e.grip?1:0;
   const s=smoothstep(Math.max(0,Math.min(1,(time-e.time)/w)));
   return e.grip?s:1-s;

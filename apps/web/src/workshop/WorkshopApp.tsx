@@ -706,6 +706,14 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
   });
   setHint(side?`已切换为${side==='L'?'左':'右'}手持拍：所有关键帧显示球拍，可撤销。`:'已卸下球拍：所有关键帧不再握拍，可撤销。');
  };
+ /** Per-key racket: only the SELECTED key grips — the empty-handed run ends
+  * here and the next key's own flag decides when the racket goes back. The
+  * all-keys 持拍 buttons cover the whole-motion case. One undo step. */
+ const gripSelectedKey=()=>{
+  const k=sel;if(!k||generationLocked.current||k.constraints.grip)return;
+  editAtKey(k,()=>{const key=keyAt(d,k.id);if(key)key.constraints.grip=true;});
+  setHint(`只把「${k.label||'关键帧'}」设为握拍：球拍从该帧区间出现，其他关键帧不变（可撤销）。`);
+ };
  /** 我的姿态：capture the selected key's full pose (arms included) as a
   * reusable one-click preset, Blender/Houdini pose-library style. */
  const capturePose=async()=>{
@@ -1137,6 +1145,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
       <span className="ws-quick-label">球拍</span>
       <button type="button" data-testid="racket-right" disabled={!info} title="所有关键帧改为右手握拍并显示球拍，可撤销" onClick={()=>setGrip('R')}>右手持拍</button>
       <button type="button" data-testid="racket-left" disabled={!info} title="所有关键帧改为左手握拍并显示球拍，可撤销" onClick={()=>setGrip('L')}>左手持拍</button>
+      <button type="button" data-testid="racket-key" disabled={!info||!sel||sel.constraints.grip===true} title="空手状态插入球拍：仅选中关键帧握拍，下一关键帧恢复（可撤销）" onClick={gripSelectedKey}>本帧持拍</button>
       <button type="button" data-testid="racket-off" disabled={!info} title="所有关键帧不再握拍，可撤销" onClick={()=>setGrip(null)}>卸下球拍</button>
      </div>
      <div className="ws-quick-poses" role="group" aria-label="我的姿态（自建快速姿态）">
@@ -1348,6 +1357,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
      <p><i style={{background:'#e2543a'}}/>脚踝（支撑贴地 · 离地可三维拖动）</p>
      <p><i style={{background:'#0891b2'}}/>摆动路径点（离地帧存储的脚位，摆动中点）</p>
      <p><i style={{background:'#4a9e6b'}}/>肘 / 膝极点</p>
+     <p><i style={{background:'#9ccc65'}}/>膝盖（落地脚转朝向 · 离地整腿跟随）</p>
      <p><i style={{background:'#d23c3c'}}/>拍头 · <em style={{color:'#f0b429'}}>触球点</em></p>
      <p className="ws-note">直接拖动末端，IK 自动解算整条链；在空白处拖动仍是旋转视角。</p>
      </section>

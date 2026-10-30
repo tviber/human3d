@@ -1,4 +1,4 @@
-import {Quaternion,Vector3,MathUtils} from 'three';
+import {Euler,Quaternion,Vector3,MathUtils} from 'three';
 import {HumanRig} from './rig';
 import {blendGrip} from './grip';
 import {applyHandShape} from './hand-shape';
@@ -195,6 +195,21 @@ export function rotateArmAbout(rig:HumanRig,p:PoseParams,side:Side,joint:'upper'
   const rest=handFrame(rig.rest,side),world=rig.bone(`wrist_${side}`).getWorldQuaternion(new Quaternion());
   hand.forward=store(rest.forward.applyQuaternion(world).applyQuaternion(turn));
   hand.normal=store(rest.normal.applyQuaternion(world).applyQuaternion(turn));
+}
+
+/** Rigid FK of one leg about a world pivot (hip for thigh turns, knee for
+ * shank turns): ankle target, knee pole and foot orientation rotate together,
+ * so every joint angle below the pivot is unchanged. Same encoding pattern as
+ * rotateArmAbout: the rig must be solved at the edited pose — the ankle
+ * position and foot frame are read live — and the solver still owns all final
+ * bone writes. The yaw·pitch foot storage drops the turn's roll component,
+ * the same trade-off every foot-orientation write makes. */
+export function rotateLegAbout(rig:HumanRig,p:PoseParams,side:Side,pivot:Vector3,turn:Quaternion){
+  const f=side==='L'?p.footL:p.footR,ankle=rig.point(`foot_${side}`),footQ=rig.bone(`foot_${side}`).getWorldQuaternion(new Quaternion());
+  const about=(v:Vector3)=>v.clone().sub(pivot).applyQuaternion(turn).add(pivot);
+  const a=about(ankle),pole=about(toV(f.pole));
+  f.target={x:a.x,y:a.y,z:a.z};f.pole={x:pole.x,y:pole.y,z:pole.z};
+  const e=new Euler().setFromQuaternion(turn.clone().multiply(footQ),'YXZ');f.pitch=e.x/DEG;f.yaw=e.y/DEG;
 }
 
 /** One check. `ok` is decided from `value` against `limit` in `unit`; the

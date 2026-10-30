@@ -2,7 +2,7 @@ import {Euler,Quaternion,Vector3} from 'three';
 import type {HumanRig} from './rig';
 import type {WorkshopDoc} from './document';
 import {contactStartKey,frameAt,isReleaseKey,keyAt,sortedKeys} from './document';
-import {rotateArmAbout,rotateHandFrame,solveEffectiveFrame} from './solver';
+import {rotateArmAbout,rotateHandFrame,rotateLegAbout,solveEffectiveFrame} from './solver';
 import {handFrame} from './hand-frame';
 import {DEG,angleAt,WRIST_BEND_LIMIT_DEG,LIMITS} from './kinematics';
 import {footDepth,footGeometry,type Side} from './foot';
@@ -194,17 +194,11 @@ export function applySemanticEdit(rig:HumanRig,doc:WorkshopDoc,keyId:string,edit
   if(shift===undefined&&lifted.length>1)return; // already held by the first split
   key.pose.root.z-=shift0-(shift??0);shift=undefined;
  };
- /** Rigid FK of the leg below `pivot` (hip or knee) by a world rotation:
-  * ankle, knee pole and foot orientation turn together, so every joint angle
-  * below the pivot is unchanged. */
+ /** Rigid FK of the leg below `pivot` (hip or knee) by a world rotation —
+  * rotateLegAbout (the same encoding the knee handle's free-leg drag uses);
+  * split() runs first so a held foot is lifted before its target moves. */
  const legFK=(x:Side,pivot:Vector3,turn:Quaternion)=>{
-  const f=x==='L'?key.pose.footL:key.pose.footR,ankle=rig.point(`foot_${x}`),footQ=world(rig,`foot_${x}`);
-  const about=(v:Vector3)=>v.clone().sub(pivot).applyQuaternion(turn).add(pivot);
-  const a=about(ankle),pole=about(new Vector3(f.pole.x,f.pole.y,f.pole.z));
-  split(x);
-  f.target={x:a.x,y:a.y,z:a.z};f.pole={x:pole.x,y:pole.y,z:pole.z};
-  // shortcut: the document stores the foot as yaw·pitch only, so the turn's roll part is dropped; upgrade if a foot-roll field is added.
-  const e=new Euler().setFromQuaternion(turn.clone().multiply(footQ),'YXZ');f.pitch=e.x/DEG;f.yaw=e.y/DEG;
+  split(x);rotateLegAbout(rig,key.pose,x,pivot,turn);
  };
  const hipTurn=(x:Side,kind:'flexion'|'abduction',theta:number)=>
   new Quaternion().setFromAxisAngle((kind==='flexion'?new Vector3(-1,0,0):new Vector3(0,0,x==='L'?1:-1)).applyQuaternion(world(rig,'root')),theta);

@@ -39,6 +39,13 @@ export interface KeyConstraints{
   grip:boolean;
   /** Contact event: the racket head position at this key is a target point. */
   contact:boolean;
+  /** Re-contact marker: a planted key that anchors a NEW contact at its own
+   * stored foot (target/yaw/pitch) even when the previous key was planted —
+   * the normal rule would fold it into the running contact and ignore its
+   * stored foot as dead data. Keyframe copies carry this so the copy owns its
+   * support foot instead of sharing the source's contact run. Meaningless on
+   * keys with no planted side; normalizeDoc folds it away there. */
+  replant?:boolean;
 }
 export type KeyInterpolation='hermite'|'linear';
 export interface WorkshopKey{id:string;time:number;label:string;pose:PoseParams;constraints:KeyConstraints;interpolation?:KeyInterpolation;videoTime?:number}
@@ -226,15 +233,19 @@ interface ContactPlan{override:(number[]|undefined)[];rest:boolean[]}
 function contactPlan(keys:WorkshopKey[],side:Side,loop:boolean,raw:number[][]):ContactPlan{
   const n=keys.length,flag=side==='L'?'plantL':'plantR',chans=lockedChannels(FOOT_CH[side]);
   const planted=keys.map(k=>k.constraints[flag]);
+  const replanted=keys.map(k=>k.constraints.replant===true);
   const before=(j:number)=>loop?planted[(j-1+n)%n]:(j>0&&planted[j-1]);
   let start=0;
-  if(loop){const s=planted.findIndex((p,j)=>p&&!planted[(j-1+n)%n]);start=s<0?0:s;}
+  if(loop){const s=planted.findIndex((p,j)=>p&&(!planted[(j-1+n)%n]||replanted[j]));start=s<0?0:s;}
   const override:(number[]|undefined)[]=new Array(n).fill(undefined);
   const rest=new Array<boolean>(n).fill(false);
   let contact:number[]|undefined;
   for(let k=0;k<n;k++){
     const j=loop?(start+k)%n:k,p=before(j);
-    if(planted[j]&&(!p||!contact))contact=chans.map(c=>raw[j][c]);
+    /* A planted key declares a run start when its predecessor is unplanted,
+     * when nothing anchored yet — or when it carries replant, which breaks the
+     * running contact here and re-anchors at THIS key's stored foot. */
+    if(planted[j]&&(!p||!contact||replanted[j]))contact=chans.map(c=>raw[j][c]);
     if(contact&&(planted[j]||p)){override[j]=contact;rest[j]=true;}
   }
   return {override,rest};
@@ -607,9 +618,13 @@ export function contactStartKey(doc:DocLike&{keys:WorkshopKey[]},side:Side,time:
   if(!n)return undefined;
   const {keyIndex}=constraintsAt(keys,time);
   if(!keys[keyIndex].constraints[flag])return undefined;
-  if(doc.loop&&keys.every(k=>k.constraints[flag]))return keys[0];
+  /* A fully planted loop anchors on key 0 — unless a replant key splits the
+   * cyclic run, in which case the walk below lands on the governing split. */
+  if(doc.loop&&keys.every(k=>k.constraints[flag])&&!keys.some(k=>k.constraints.replant))return keys[0];
   let j=keyIndex;
   for(let guard=0;guard<n;guard++){
+    /* A replant key IS the run start for its planted feet — never walk past it. */
+    if(keys[j].constraints.replant===true)break;
     const p=j>0?j-1:(doc.loop?n-1:-1);
     if(p<0||!keys[p].constraints[flag])break;
     j=p;
@@ -726,6 +741,7 @@ export function validateDocShape(d:unknown):string[]{
   const c=k.constraints;
   if(!c||typeof c!=='object'){e.push(`keys[${idx}].constraints 缺失`);return;}
   for(const f of ['plantL','plantR','grip','contact']as const)if(typeof c[f]!=='boolean')e.push(`keys[${idx}].constraints.${f} 必须是布尔值`);
+  if(c.replant!==undefined&&typeof c.replant!=='boolean')e.push(`keys[${idx}].constraints.replant 必须是布尔值`);
   if(k.videoTime!==undefined&&!Number.isFinite(k.videoTime))e.push(`keys[${idx}].videoTime 不是有限数`);
  });
  if(doc.loop===true&&doc.keys.every(k=>k&&typeof k.time==='number')){
@@ -764,6 +780,16 @@ export function normalizeDoc(raw:unknown):WorkshopDoc{
    for(const side of ['L','R']as const)if(spread[side]===RELAXED_SPREAD)delete spread[side];
    if(spread.L===undefined&&spread.R===undefined)delete k.pose.handSpread;
   }
+  /* replant is meaningful only where it can actually break a contact run —
+   * some side planted with a planted predecessor (cyclic predecessor for
+   * loops). Everywhere else it folds away, like the other canonical defaults,
+   * so a flag that changes nothing can't split fingerprints. */
+  for(let i=0;i<d.keys.length;i++){
+   const c=d.keys[i].constraints;
+   if(c.replant===undefined)continue;
+   const prev=d.loop?d.keys[(i-1+d.keys.length)%d.keys.length]:d.keys[i-1];
+   if(!(c.plantL&&prev?.constraints.plantL===true||c.plantR&&prev?.constraints.plantR===true))delete c.replant;
+  }
   return d;
 }
 export function parseDoc(text:string):WorkshopDoc{return normalizeDoc(JSON.parse(text));}
@@ -794,6 +820,8 @@ export function parseDoc(text:string):WorkshopDoc{return normalizeDoc(JSON.parse
  *                                 contacts all mirror through the same
  *                                 stored-target rewrite the sampler applies
  *   constraints.grip / contact    kept (side-agnostic booleans)
+ *   constraints.replant           kept — it marks whichever feet are planted,
+ *                                 so it mirrors with the planted sides
  *   handFrames                    side-swapped {L←R, R←L}: the interpolation
  *                                 frame follows the hand — a right 'world'
  *                                 hand becomes a left 'world' hand, so the
@@ -834,6 +862,7 @@ export function mirrorKey(key:WorkshopKey):WorkshopKey{
     pose:{root:mv(p.root),yaw:-p.yaw,lean:p.lean,chest:-p.chest,side:-p.side,
       handL:hand(p.handR),handR:hand(p.handL),footL:foot(p.footR),footR:foot(p.footL)},
     constraints:{plantL:c.plantR,plantR:c.plantL,grip:c.grip,contact:c.contact}};
+  if(c.replant!==undefined)out.constraints.replant=c.replant;
   // Hand shape is a side-keyed scalar, so it travels with its hand. An
   // explicit relaxed value is preserved rather than dropped: mirror∘mirror
   // must stay byte-exact, and normalizeDoc is the only place that folds
@@ -861,7 +890,7 @@ export function mirrorDoc(doc:WorkshopDoc):WorkshopDoc{
    *   WorkshopKey: id · time · label · pose · constraints · interpolation · videoTime
    *   PoseParams:  root · yaw · lean · chest · side · handL · handR ·
    *     footL · footR · handSpread   (hand: target/pole/forward/normal; foot: +yaw/pitch)
-   *   KeyConstraints: plantL · plantR · grip · contact                       */
+   *   KeyConstraints: plantL · plantR · grip · contact · replant             */
   const keys=doc.keys.map(mirrorKey);
   return {schemaVersion:2,id:toggle(doc.id,'.mirrored'),name:toggle(doc.name,' · 镜像'),english:toggle(doc.english,' · MIRRORED'),
     duration:doc.duration,inbetweens:doc.inbetweens,loop:doc.loop,

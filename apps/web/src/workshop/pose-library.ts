@@ -187,7 +187,9 @@ function footRunRole(doc:WorkshopDoc,key:WorkshopKey,side:'L'|'R'):FootRunRole{
   const keys=sortedKeys(doc),i=keys.indexOf(key);
   if(i<0)return 'free';
   const prev=doc.loop&&i===0?keys[keys.length-1]:keys[i-1];
-  if(!prev||!prev.constraints[flag])return 'free';
+  // A replant key anchors its own contact — its stored foot is live data the
+  // same way a run-start key's is, never a held mid-run member.
+  if(!prev||!prev.constraints[flag]||key.constraints.replant===true)return 'free';
   if(!key.constraints[flag])return !doc.loop&&i===keys.length-1?'held':'liftoff';
   const allPlanted=doc.loop&&keys.length>1&&keys.every(k=>k.constraints[flag]);
   return allPlanted&&i===0?'free':'held';

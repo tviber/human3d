@@ -176,7 +176,10 @@ components:
                 (`parameters` in GET /v1/actions/{actionId}). Bundled actions
                 accept only `{}`. `workshop-doc` requires `document`: WorkshopDoc
                 JSON (named keyframes with pose targets and plant/grip/contact
-                constraints; each key may set `interpolation` to `hermite`
+                constraints; a planted key may also set `replant: true` to end
+                the running contact interval and anchor a new one at its own
+                stored foot — the mechanism duplicated keyframes use to own
+                their support foot; each key may set `interpolation` to `hermite`
                 (default) or `linear`, and its pose may set `handSpread` to an
                 optional `{L?,R?}` of 0–1 — 0 closed fist, 0.5 relaxed (the
                 absent default), 1 spread open — a sampled pose channel that

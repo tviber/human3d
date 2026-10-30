@@ -43,7 +43,7 @@ export function combineMotions(a:WorkshopDoc,b:WorkshopDoc,options:CombineOption
  if(times.length>WORKSHOP_LIMITS.maxKeys){
   const events=(keys:WorkshopKey[],mapped:number[])=>mapped.filter((_,i)=>{
    const k=keys[i],previous=keys[i-1];
-   return i===0||i===keys.length-1||k.constraints.contact||previous&&(['plantL','plantR','grip'] as const).some(flag=>k.constraints[flag]!==previous.constraints[flag]);
+   return i===0||i===keys.length-1||k.constraints.contact||previous&&(['plantL','plantR','grip','replant'] as const).some(flag=>k.constraints[flag]!==previous.constraints[flag]);
   });
   times=uniqueTimes([0,duration,...boundaries,...events(ka,timesA),...events(kb,timesB)]);
   if(times.length>WORKSHOP_LIMITS.maxKeys)throw new Error(`组合的支撑 / 握拍切换与触球时刻超过 ${WORKSHOP_LIMITS.maxKeys} 个，请先简化源动作。`);

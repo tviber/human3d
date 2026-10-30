@@ -19,11 +19,11 @@ import type {WorkshopDoc} from './document';
  * cannot alter a single solved frame (comments, renaming, extraction) do not
  * require a bump — but when in doubt, bump: a stale id is worse than a
  * gratuitous one. */
-export const SERVICE_VERSION='0.10.0';
+export const SERVICE_VERSION='0.11.0';
 export const RIG_ID='makehuman-body';
 /** Format revision of the ad-hoc workshop document contract. Bumped with the
  * schema, not per document; bundled actions get a content-derived revision. */
-export const WORKSHOP_REVISION='workshop-doc/v5';
+export const WORKSHOP_REVISION='workshop-doc/v6';
 /** Solver identity: carried into provenance.solver and the artifact hash.
  * A rewrite under a new algorithm deserves a new name; same-name semantic
  * changes bump SERVICE_VERSION (see its comment). */

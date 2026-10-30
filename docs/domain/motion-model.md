@@ -4,7 +4,7 @@
 
 ## 关键帧与支撑脚
 
-- 支撑脚是**接触区间**：`plant=true` 连续 run **首帧**的存储脚位定义接触点，run 内后续锁定帧的存储脚位被采样器忽略（决策见 [../decisions/0001-contact-interval-swing-waypoint.md](../decisions/0001-contact-interval-swing-waypoint.md)）。
+- 支撑脚是**接触区间**：`plant=true` 连续 run **首帧**的存储脚位定义接触点，run 内后续锁定帧的存储脚位被采样器忽略（决策见 [../decisions/0001-contact-interval-swing-waypoint.md](../decisions/0001-contact-interval-swing-waypoint.md)）。例外：携带 `replant` 的支撑帧在 run 内仍锚定**自身**存储脚位、断开上一条区间——「复制帧」用它让副本拥有自己的接触（复制时刻采样逐位不变）；归一化会折叠不可能生效的 `replant`。
 - 离地帧（`plant=false` 紧跟支撑）时刻脚仍在接触点；其存储脚位是**后续区间的摆动中点**。贴地存储 = 有意拖步，不是抬脚。
 - 「此帧存储是否生效」必须精确匹配采样器 override 条件（锁定 run 键与释放键两类）；近似的归属规则会把活数据误判成死数据（learning [15]）。
 

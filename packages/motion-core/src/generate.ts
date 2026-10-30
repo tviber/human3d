@@ -514,7 +514,7 @@ function plantGate(src:WorkshopDoc,cand:WorkshopDoc,report:ProbeReport):GenConst
    const ks=sortedKeys(doc),n=ks.length,out:WorkshopKey[]=[];
    for(let i=0;i<n;i++){
     const prev=doc.loop?ks[(i-1+n)%n]:ks[i-1];
-    if(ks[i].constraints[flag]&&!(prev&&prev.constraints[flag]))out.push(ks[i]);
+    if(ks[i].constraints[flag]&&(!(prev&&prev.constraints[flag])||ks[i].constraints.replant===true))out.push(ks[i]);
    }
    return out;};
   const a=starts(src),b=starts(cand);

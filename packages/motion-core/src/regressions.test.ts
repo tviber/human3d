@@ -4,7 +4,7 @@ import {Quaternion,Vector3} from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {HumanRig} from './rig';
 import {attachRacket} from './props/racket';
-import {blankDocument,contactStartKey,flattenPose,frameAt,isReleaseKey,samplePose,validateDocShape,type WorkshopDoc,type WorkshopKey} from './document';
+import {blankDocument,contactStartKey,flattenPose,frameAt,isReleaseKey,mirrorKey,normalizeDoc,samplePose,validateDocShape,type WorkshopDoc,type WorkshopKey} from './document';
 import {ankleYForLift,footGeometry,footLift,type Side} from './foot';
 import {analyzePose,solveEffectiveFrame} from './solver';
 import {mulberry32} from './random-document';
@@ -128,6 +128,57 @@ describe('P1-5 dragging a planted foot writes the contact run start',()=>{
   start.pose.footL.target.z+=.12;
   const after=(solveAt(d,.75),footPoint('L'));
   expect(after.distanceTo(before)).toBeGreaterThan(.1);
+ });
+});
+
+describe('replant declares a fresh contact on a planted key',()=>{
+ it('re-anchors the run at the replant key and stops contactStartKey there',()=>{
+  const d=docWith([0,.5,1,1.5],(i,k)=>{
+   k.constraints={plantL:true,plantR:true,grip:false,contact:false};
+   k.pose.footL.target.z=i*.1;
+   if(i===2)k.constraints.replant=true;
+  },2);
+  expect(contactStartKey(d,'L',.75)?.id).toBe('k0');
+  expect(contactStartKey(d,'L',1.2)?.id).toBe('k2');
+  expect(contactStartKey(d,'L',1.6)?.id).toBe('k2');
+  // The last pre-replant key still samples the run anchor; from the replant
+  // key onward its own stored foot is live. The [k1,k2) interval carries the
+  // smooth transition into the new contact — the authored step.
+  expect(samplePose(d,.5,origin()).footL.target.z).toBeCloseTo(0,9);
+  expect(samplePose(d,1.2,origin()).footL.target.z).toBeCloseTo(.2,9);
+  expect(samplePose(d,.75,origin()).footL.target.z).toBeCloseTo(.1,9);
+ });
+ it('lets a copied planted frame hold its own contact instead of inheriting the run anchor',()=>{
+  const d=docWith([0,.5,1],(i,k)=>{
+   k.constraints={plantL:true,plantR:true,grip:false,contact:false};
+  },1.5);
+  const copy=clone(d.keys[1]);copy.id='k1-copy';copy.time=.75;copy.constraints.replant=true;
+  d.keys.push(copy);d.keys.sort((a,b)=>a.time-b.time);
+  // Move the copy's foot: the earlier keys' stored values must not change,
+  // and the copy — not the run start — owns the contact at its time.
+  const before=d.keys[1].pose.footL.target.x;
+  copy.pose.footL.target.x+=.1;
+  expect(contactStartKey(d,'L',.75)?.id).toBe('k1-copy');
+  expect(d.keys[1].pose.footL.target.x).toBe(before);
+ });
+ it('validates replant type and folds it where it cannot break a run',()=>{
+  const d=docWith([0,.5,1],(i,k)=>{k.constraints={plantL:true,plantR:true,grip:false,contact:false};if(i===1)k.constraints.replant=true;},1.5);
+  d.keys[1].constraints.replant='yes' as unknown as boolean;
+  expect(validateDocShape(d).some(p=>p.includes('replant'))).toBe(true);
+  // Meaningful on keys[1] (planted after planted) — kept; on an unplanted or
+  // predecessor-free key it folds to the canonical absent form.
+  const n=docWith([0,.5,1,1.5],(i,k)=>{
+   k.constraints={plantL:i!==2,plantR:i!==2,grip:false,contact:false};
+   if(i===1||i===2)k.constraints.replant=true;
+  },2);
+  const out=normalizeDoc(clone(n));
+  expect(out.keys[1].constraints.replant).toBe(true);
+  expect(out.keys[2].constraints.replant).toBeUndefined();
+ });
+ it('mirrors the replant flag with the key',()=>{
+  const d=docWith([0],(i,k)=>{k.constraints={plantL:true,plantR:false,grip:false,contact:false,replant:true};},.5);
+  expect(mirrorKey(d.keys[0]).constraints.replant).toBe(true);
+  expect(mirrorKey(d.keys[0]).constraints.plantL).toBe(false);
  });
 });
 

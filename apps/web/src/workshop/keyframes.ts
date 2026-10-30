@@ -1,4 +1,4 @@
-import {sortedKeys,WORKSHOP_LIMITS,type WorkshopDoc,type WorkshopKey} from '@human3d/motion-core';
+import {contactStartKey,sortedKeys,WORKSHOP_LIMITS,type WorkshopDoc,type WorkshopKey} from '@human3d/motion-core';
 
 /** Shared insertion policy for a sampled new key and an exact key copy. */
 export function keyframeInsertSlot(doc:Pick<WorkshopDoc,'duration'|'loop'>,time:number,nextTime?:number){
@@ -11,11 +11,27 @@ export function keyframeInsertSlot(doc:Pick<WorkshopDoc,'duration'|'loop'>,time:
 }
 
 /** Copy stored authoring data independently; never resample the source or
- * share its nested pose/constraint objects with the new key. */
+ * share its nested pose/constraint objects with the new key.
+ *
+ * Planted feet need more than a clone: the copy always lands right after its
+ * source, so a copied `plant` would silently join the source's contact run —
+ * the sampler anchors a run at its first key, the copy's stored foot is dead
+ * data, and every foot edit retargets the run-start key. The copy therefore
+ * declares `replant` (its own contact) and stores the EFFECTIVE contact it
+ * displays — the run anchor's foot, not the source's ignored stored values —
+ * so the inserted copy samples the identical pose while owning its foot. */
 export function copyKeyframe(doc:WorkshopDoc,source:WorkshopKey,time:number){
  const copy=structuredClone(source),base=`${source.id}-copy`;let id=base,suffix=2;
  while(doc.keys.some(k=>k.id===id))id=`${base}-${suffix++}`;
  copy.id=id;copy.time=time;copy.label=`${source.label||'关键帧'} 副本`;
+ for(const side of ['L','R']as const){
+  const flag=side==='L'?'plantL':'plantR';
+  if(!source.constraints[flag])continue;
+  copy.constraints.replant=true;
+  const anchor=contactStartKey(doc,side,source.time)??source;
+  const from=anchor.pose[side==='L'?'footL':'footR'],to=copy.pose[side==='L'?'footL':'footR'];
+  to.target={...from.target};to.yaw=from.yaw;to.pitch=from.pitch;
+ }
  return copy;
 }
 

@@ -170,7 +170,7 @@ try{
  await page.getByTestId('semantic-motion-flexion').tap();await page.getByTestId('semantic-plus').tap();
  await page.getByTestId('semantic-commit').tap();
  const soleR=()=>page.evaluate(()=>{const e=window.__WS__,r=e.rig,g=e.footGeometry('R'),ankle=r.point('foot_R');let low=Infinity;for(const n of g.names)low=Math.min(low,r.point(n).y);
-  const q=r.bone('foot_R').getWorldQuaternion(new r.bone('foot_R').quaternion.constructor());
+  const foot=r.bone('foot_R'),Quaternion=foot.quaternion.constructor,q=foot.getWorldQuaternion(new Quaternion());
   return (Math.min(low,ankle.y+g.heelOffset.clone().applyQuaternion(q).y)-g.groundY)*1000;});
  const liftedDoc=(await read(page)).doc;
  assert(Math.abs(await soleR())>3,'the thigh edit did not move the foot off the floor');

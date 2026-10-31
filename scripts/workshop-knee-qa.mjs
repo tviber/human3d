@@ -81,7 +81,7 @@ try{
  await page.waitForTimeout(100);
  check('脚俯仰回到平放时身体恢复原高度',Math.abs((await footPitchState()).rootY-pitchBase.rootY)<1e-6);
  await openFold('[data-fold="doc"]');
- const durationInput=page.locator('.ws-doc-card input[type="number"]');
+ const durationInput=page.getByRole('spinbutton',{name:/^时长 s/});
  await durationInput.fill('0.2');await durationInput.press('Enter');await page.waitForTimeout(100);
  await openFold('[data-fold="keys"]');
  await page.getByTestId('keyframe-insert-after').click();

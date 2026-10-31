@@ -25,7 +25,7 @@ worker.onmessage=async(event:MessageEvent<GenerateWorkerRequest>)=>{
   const info=await response.json() as RigInfo;
   const rig=new HumanRig(gltf.scene,info);
   const grip=request.doc.gripSide==='L'?'L':'R';
-  const racket=attachProp(rig,'racket',grip);
+  const racket=attachProp(rig,'racket',grip,request.doc.gripBevel,request.doc.gripTilt);
   const result=generateMotion(rig,{
    doc:request.doc,
    lockedKeyIds:request.lockedKeyIds,

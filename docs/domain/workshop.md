@@ -13,11 +13,12 @@
 - 渲染位置 ≠ 编辑目标时必须拆两个控件：摆动区间内脚柄 `passive`（显示真实位置、拾取穿透），青色 `swing` 手柄绑离地帧存储目标、跟手（learning [6]）。手柄必须跟手是所见即所得底线。
 - 死数据写入口就近提示（learning [7]）：末尾离地帧无后续区间、存储高度不会被采样——UI 给出显式提示且不显路径点手柄。
 
-## 拍柄棱面与手指开合（ADR-0010）
+## 拍柄棱面、倾角与手指开合（ADR-0010 / ADR-0011）
 
 - **bevel 不是求解输入**：`gripBevel` 只转拍面（`mountRacket` 后的局部 roll），拍头在柄轴上、手指绕圆柄包裹、没有骨骼读它——改棱面轨迹不变。但它是文档字段，**照常进请求指纹与定义哈希**（改棱面 = 新 artifact id、同轨迹）；不要为它开「仅展示不入指纹」的旁路。
 - 编号手掌相对且左右镜像（`bevelSign` 右 +1 / 左 −1）：`mirrorDoc` 原样保留 `gripBevel`，镜像后球拍是源的精确 x 镜像（grip-side.test.ts 逐点钉死；探针 x≠0 时左右对应点是**局部 x 取反**的点）。
 - 缺省即规范：显式 1 被 `normalizeDoc` 折叠、未写旧文档字节不变；导出仅在非 1 时写 `presentation.bevel`。
+- **拍柄倾角 `gripTilt` 是文档级握拍属性**：范围 −45°..45°，默认 0°；局部 +X 转动球拍，正值让拍头朝局部 +Z（掌面前方）倾斜，再应用 bevel 的柄轴滚转。它改变拍头位置与朝向，但不改变 `solveEffectiveFrame` 写出的手腕/手指轨迹；因此拍头接触标记和带 racket-tip 的生成/质量度量也会随角度变化。真实挂载测试同时钉住「拍头改变、骨骼不变」。x 镜像下局部 X 轴不变，`mirrorDoc` 原样保留角度。归一化折叠显式 0°，姿态包只在非零时写 `presentation.gripTilt`，播放源读回并重挂拍子。作为文档字段照常进请求指纹和定义哈希；WorkshopDoc revision 从 v7→v8。它不改变服务输出的骨骼求解结果，因此不 bump `SERVICE_VERSION`。
 - **handSpread 的 0.5 是缺省规范形态**：写 0.5 = 删通道；`applyHandShape` 在 0.5 走与旧 `relaxHand` **逐位相同**的快速路径（articulateHand 会引入 −0 分量泄漏进包字节）——改 hand-shape/solver 时不得破坏该等价（hand-shape.test.ts 钉死）。通道追加在 `flattenPose` 尾部（L=47/R=48），旧索引不动；生成器 handL/handR 相位移动必须捎带自己的 spread 通道（`EXTRAS`）。
 - **头部朝向是每键姿态通道**：`headYaw`/`headPitch` 缺省为 0，限位分别为 ±80°/±45°；求解相对已解出的颈部转动 head 骨。`flattenPose` 将其追加到 49/50，旧通道索引不动；躯干相位移动必须同时移动两条头部通道。工作台「通用」页提供滑块，紫色头前控制点经真实拖动写入所选关键帧；Review 或离开「通用」页时控制点隐藏。左右镜像时 yaw 变号、pitch 保持。求解语义变化需 bump `SERVICE_VERSION`（本切片 0.11.0→0.12.0，`WORKSHOP_REVISION` v6→v7）。
 - 手型移动指节骨骼 = 运动语义变化，必须 bump `SERVICE_VERSION`（本切片 0.8.0→0.9.0，`WORKSHOP_REVISION` v4→v5）。

@@ -94,5 +94,7 @@ export function combineMotions(a:WorkshopDoc,b:WorkshopDoc,options:CombineOption
  // bevel when that source uses the canonical default (represented by absence).
  if(gripDoc.gripBevel===undefined)delete combined.gripBevel;
  else combined.gripBevel=gripDoc.gripBevel;
+ if(gripDoc.gripTilt===undefined)delete combined.gripTilt;
+ else combined.gripTilt=gripDoc.gripTilt;
  return identify(combined);
 }

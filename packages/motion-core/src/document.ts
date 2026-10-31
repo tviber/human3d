@@ -2,7 +2,7 @@ import {Matrix4,Quaternion,Vector3} from 'three';
 import {DEG,smoothstep} from './kinematics';
 import {HEAD_ROTATION_LIMITS,WORKSHOP_LIMITS} from './limits';
 import {RELAXED_SPREAD} from './hand-shape';
-import {RACKET_BEVEL_DEFAULT} from './props/racket';
+import {RACKET_BEVEL_DEFAULT,RACKET_GRIP_TILT_DEFAULT,RACKET_GRIP_TILT_LIMIT_DEG} from './props/racket';
 import type {Side} from './foot';
 
 /** Trajectory-first motion document (schema v2): keyframes carry task-space
@@ -88,6 +88,11 @@ export interface WorkshopDoc{
    * PRESERVED by mirrorDoc (bevel k always means the same grip on either
    * hand). See docs/decisions/0010-racket-bevels-hand-shape.md. */
   gripBevel?:number;
+  /** Shaft tilt relative to the palm, in degrees. Positive turns the racket
+   * head toward racket-local +Z after the canonical hand mount. Absent means
+   * 0°; this is a document-level grip choice, mirrored unchanged, and it only
+   * rotates the prop (the wrist/finger solve remains authored by the pose). */
+  gripTilt?:number;
   keys:WorkshopKey[];
 }
 export type DocLike=Pick<WorkshopDoc,'keys'|'duration'|'loop'|'handFrames'>;
@@ -101,7 +106,10 @@ export interface EffectiveFrame{pose:PoseParams;constraints:KeyConstraints;keyIn
  /** The document-level bevel flattened onto the frame, same pattern as
   * gripSide. Absent means the canonical 1. Not a solve input (it only turns
   * the prop), so it is carried for the renderer's mount, never for the bones. */
- gripBevel?:number}
+ gripBevel?:number;
+ /** Document-level racket shaft tilt in degrees. Absent means 0° and it only
+  * changes the racket mount, never the wrist/finger solve. */
+ gripTilt?:number}
 
 /** Grip closes and opens over this window after the key that toggles it. */
 const GRIP_TRANSITION_S=.25;
@@ -526,17 +534,18 @@ export function frameAt(doc:WorkshopDoc,time:number,origin:V3|Vector3=ZERO_V3):E
 /** frameAt over an already-built model — the body of frameAt minus the
  * per-call buildModel, for batch consumers that hoist the preprocessing.
  * `m` must come from buildModel(doc, …) on THIS document. Param 2 is narrowed
- * to exactly the doc fields it reads so a CompiledMotion (which carries those
- * four fields verbatim) satisfies it directly; full WorkshopDocs still fit. */
-export function frameFromModel(m:Model,doc:Pick<WorkshopDoc,'duration'|'inbetweens'|'gripSide'|'gripBevel'|'clavicleLift'|'freeArms'>,time:number):EffectiveFrame{
+ * to exactly the doc fields it reads so a CompiledMotion (which carries the
+ * sampled document-level fields verbatim) satisfies it directly; full
+ * WorkshopDocs still fit. */
+export function frameFromModel(m:Model,doc:Pick<WorkshopDoc,'duration'|'inbetweens'|'gripSide'|'gripBevel'|'gripTilt'|'clavicleLift'|'freeArms'>,time:number):EffectiveFrame{
   const t=Math.max(0,Math.min(doc.duration,time)),side:Side=doc.gripSide==='L'?'L':'R';
   if(!doc.inbetweens){
     const {keyIndex,constraints}=constraintsAt(m.keys,t),e=m.entries[keyIndex];
     return {pose:unflattenPose(e.flat.slice()),constraints:{...constraints},keyIndex,
-      support:{L:e.plant.L?1:0,R:e.plant.R?1:0},gripAmount:e.grip?1:0,clavicleLift:doc.clavicleLift,freeArms:doc.freeArms,gripSide:side,gripBevel:doc.gripBevel};
+      support:{L:e.plant.L?1:0,R:e.plant.R?1:0},gripAmount:e.grip?1:0,clavicleLift:doc.clavicleLift,freeArms:doc.freeArms,gripSide:side,gripBevel:doc.gripBevel,gripTilt:doc.gripTilt};
   }
   const r=interpolate(m,t),k=m.chain[r.i].real;
-  return {pose:r.pose,constraints:{...m.keys[k].constraints},keyIndex:k,support:r.support,gripAmount:r.grip,clavicleLift:doc.clavicleLift,freeArms:doc.freeArms,gripSide:side,gripBevel:doc.gripBevel};
+  return {pose:r.pose,constraints:{...m.keys[k].constraints},keyIndex:k,support:r.support,gripAmount:r.grip,clavicleLift:doc.clavicleLift,freeArms:doc.freeArms,gripSide:side,gripBevel:doc.gripBevel,gripTilt:doc.gripTilt};
 }
 
 /** Recursively Object.freeze a plain-JSON value — pojos, arrays and
@@ -570,6 +579,8 @@ export interface CompiledMotion{
  gripSide?:Side;
  /** Prop bevel (1–8; absent = 1) — visual orientation only, never a solve input. */
  gripBevel?:number;
+ /** Prop shaft tilt in degrees (absent = 0°) — mount orientation only. */
+ gripTilt?:number;
  clavicleLift?:boolean;
  freeArms?:boolean;
  /** The origin buildModel baked into the snapshot — a fresh Vector3 owned by
@@ -592,7 +603,7 @@ export function compileMotion(doc:WorkshopDoc,origin:V3|Vector3=ZERO_V3):Compile
  const keys=doc.keys.map(k=>freezeDeep<WorkshopKey>({...k,pose:clonePose(k.pose),constraints:{...k.constraints}}));
  const model=buildModel({keys,duration:doc.duration,loop:doc.loop,handFrames:{...doc.handFrames}},origin);
  return Object.freeze({docId:doc.id,keyCount:keys.length,duration:doc.duration,inbetweens:doc.inbetweens,loop:doc.loop,
-  gripSide:doc.gripSide,gripBevel:doc.gripBevel,clavicleLift:doc.clavicleLift,freeArms:doc.freeArms,origin:Object.freeze(model.origin),model});
+  gripSide:doc.gripSide,gripBevel:doc.gripBevel,gripTilt:doc.gripTilt,clavicleLift:doc.clavicleLift,freeArms:doc.freeArms,origin:Object.freeze(model.origin),model});
 }
 /** frameAt over a compiled snapshot — the single sampling entry point for
  * batch consumers: the same EffectiveFrame, with the per-call buildModel
@@ -693,6 +704,8 @@ export function validateDocShape(d:unknown):string[]{
  if(doc.gripBevel!==undefined){
   if(!Number.isInteger(doc.gripBevel)||doc.gripBevel<1||doc.gripBevel>8)e.push('gripBevel 必须是 1–8 的整数');
  }
+ if(doc.gripTilt!==undefined&&!(Number.isFinite(doc.gripTilt)&&doc.gripTilt>=-RACKET_GRIP_TILT_LIMIT_DEG&&doc.gripTilt<=RACKET_GRIP_TILT_LIMIT_DEG))
+  e.push(`gripTilt 必须是 −${RACKET_GRIP_TILT_LIMIT_DEG} 至 ${RACKET_GRIP_TILT_LIMIT_DEG}° 的有限数`);
  for(const s of ['L','R']as const){
   const v=(doc.handFrames as Record<string,unknown>|undefined)?.[s];
   if(v!=='world'&&v!=='pelvis')e.push(`handFrames.${s} 必须是 world 或 pelvis`);
@@ -775,12 +788,13 @@ export function normalizeDoc(raw:unknown):WorkshopDoc{
   /* Canonical form: 'R' is the implicit default, so an explicit 'R' is folded
    * back to absent — documents that mean the same solve must serialize and
    * fingerprint identically (normalizedRequest embeds the parsed doc). The
-   * bevel's default 1 and a relaxed hand shape (.5) are folded the same way:
+   * bevel's default 1, racket tilt's default 0° and a relaxed hand shape (.5) are folded the same way:
    * they are what an absent channel already means, and keeping them would make
    * a document that merely touched a slider and returned it differ byte-wise
    * from the identical one that never did. */
   if(d.gripSide==='R')delete d.gripSide;
   if(d.gripBevel===RACKET_BEVEL_DEFAULT)delete d.gripBevel;
+  if(d.gripTilt===RACKET_GRIP_TILT_DEFAULT)delete d.gripTilt;
   for(const k of d.keys)canonicalizeHands(k.pose);
   for(const k of d.keys){
    if(k.pose.headYaw===0)delete k.pose.headYaw;
@@ -899,7 +913,7 @@ export function mirrorDoc(doc:WorkshopDoc):WorkshopDoc{
    * mirrored document quietly keeps the source's value):
    *   WorkshopDoc: schemaVersion · id · name · english · duration ·
    *     inbetweens · loop · handFrames · clavicleLift · freeArms · gripSide ·
-   *     gripBevel · keys
+   *     gripBevel · gripTilt · keys
    *   WorkshopKey: id · time · label · pose · constraints · interpolation · videoTime
    *   PoseParams:  root · yaw · lean · chest · side · headYaw · headPitch ·
    *     handL · handR · footL · footR · handSpread
@@ -917,6 +931,9 @@ export function mirrorDoc(doc:WorkshopDoc):WorkshopDoc{
      * is the same grip on the mirrored hand. Copying it is what keeps the
      * mirrored racket the exact x-mirror of the source's. */
     ...(doc.gripBevel!==undefined?{gripBevel:doc.gripBevel}:{}),
+    /* The local X tilt axis is invariant under the x reflection, so the same
+     * degree value yields the exact mirrored racket shaft angle. */
+    ...(doc.gripTilt!==undefined?{gripTilt:doc.gripTilt}:{}),
     keys};
 }
 

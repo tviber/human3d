@@ -21,7 +21,7 @@ import {bevelBadgeState,BEVEL_BADGE_SCALE} from './bevel-badges';
 export interface WorkshopFrame{time:number;duration:number;playing:boolean;label:string;analysis?:Analysis}
 export interface WorkshopOptions{handles:boolean;trajectories:boolean;balance:boolean;onion:boolean;onionCount:number;onionMode:'keys'|'step';onionStep:number;
  /** Draw the handle's eight bevel numbers (1–8) as labels around the grip.
-  * Display-only: the authored bevel (doc.gripBevel) is what turns the racket,
+  * Display-only: authored bevel and tilt (doc.gripBevel/gripTilt) turn the racket,
   * and this option never touches the document. */
  bevels:boolean;
  /** Show the raw leg pole floats. The knee handle is the everyday control, so
@@ -200,6 +200,8 @@ export class WorkshopEngine{
   /** The bevel currently rolled into the palm — remounts on change the same way
    * racketSide does. Undefined means the canonical bevel 1. */
   private racketBevel:number|undefined;
+  /** The shaft tilt currently authored for this racket — undefined means 0°. */
+  private racketGripTilt:number|undefined;
   onFrame?:(f:WorkshopFrame)=>void;onReady?:(info:RigInfo)=>void;onError?:(e:Error)=>void;
   /** App hooks: begin edit = pick or auto-insert the key being dragged. */
   onBeginEdit?:(time:number,prefer?:string)=>WorkshopKey|null;
@@ -237,8 +239,8 @@ export class WorkshopEngine{
       this.anatomy=new AnatomySelection(this.host,this.renderer.domElement,this.camera,atlas,event=>this.capturing||!this.ready||!!this.drag||!!this.pick(event));
       this.model.traverse(o=>{if(o instanceof SkinnedMesh){o.castShadow=true;o.receiveShadow=true;o.frustumCulled=false;this.anatomy!.add(o);}});
       this.skinSwap=new SkinSwap(this.model,this.platform);await this.skinSwap.set(this.skin);if(this.disposed)return;
-      this.racket=attachProp(this.rig,'racket',this.getDoc().gripSide==='L'?'L':'R',this.getDoc().gripBevel);
-      this.racketSide=this.getDoc().gripSide==='L'?'L':'R';this.racketBevel=this.getDoc().gripBevel;this.racket.visible=false;
+      this.racket=attachProp(this.rig,'racket',this.getDoc().gripSide==='L'?'L':'R',this.getDoc().gripBevel,this.getDoc().gripTilt);
+      this.racketSide=this.getDoc().gripSide==='L'?'L':'R';this.racketBevel=this.getDoc().gripBevel;this.racketGripTilt=this.getDoc().gripTilt;this.racket.visible=false;
       this.makeBevelLabels(this.racketSide);
       this.footGeo={L:footGeometry(this.rig.rest,'L'),R:footGeometry(this.rig.rest,'R')};
       this.makeHandles();this.makeMarkers();this.makeOnion();
@@ -555,8 +557,11 @@ export class WorkshopEngine{
         if(direction.lengthSq()<1e-10)break;
         const yaw=Math.atan2(direction.x,direction.z)*180/Math.PI;
         const pitch=Math.atan2(-direction.y,Math.hypot(direction.x,direction.z))*180/Math.PI;
+        // solvePose adds -lean * 0.12 to the authored channel. Invert that
+        // compensation so the stored pitch reproduces the direction under the pointer.
+        const authoredPitch=pitch+k.lean*.12;
         k.headYaw=Math.max(HEAD_ROTATION_LIMITS.yaw[0],Math.min(HEAD_ROTATION_LIMITS.yaw[1],yaw));
-        k.headPitch=Math.max(HEAD_ROTATION_LIMITS.pitch[0],Math.min(HEAD_ROTATION_LIMITS.pitch[1],pitch));
+        k.headPitch=Math.max(HEAD_ROTATION_LIMITS.pitch[0],Math.min(HEAD_ROTATION_LIMITS.pitch[1],authoredPitch));
         if(k.headYaw===0)delete k.headYaw;
         if(k.headPitch===0)delete k.headPitch;
         break;
@@ -616,20 +621,21 @@ export class WorkshopEngine{
     const pelvisShift=this.drag?.kneeFlex&&this.drag.kneeFootFixed
       ?undefined:schedule&&!schedule.passthrough?schedule.at(t):undefined;
     solveEffectiveFrame(this.rig,f,pelvisShift);
-    /* Remount on side/bevel change — the frame carries the doc's gripSide and
-     * gripBevel, and both are constants per document, so this fires at most
+    /* Remount on side/bevel/tilt change — the frame carries the doc's gripSide,
+     * gripBevel and gripTilt, all constants per document, so this fires at most
      * once per edit (here, the one place every solve path funnels through,
-     * trajectory and ghost sampling included). The bevel is a roll about the
-     * handle inside the wrist frame: it turns the string bed and nothing the
-     * solver reads, so a remount never changes the trajectory. */
+     * trajectory and ghost sampling included). Bevel changes the string-bed
+     * roll; tilt can move the racket tip. Neither adjustment changes a solved
+     * bone, and the racket is remounted only after the body solve. */
     const side=f.gripSide==='L'?'L':'R';
-    if(this.racket&&(side!==this.racketSide||f.gripBevel!==this.racketBevel)){
-      mountRacket(this.rig,this.racket,side,f.gripBevel);
+    if(this.racket&&(side!==this.racketSide||f.gripBevel!==this.racketBevel||f.gripTilt!==this.racketGripTilt)){
+      mountRacket(this.rig,this.racket,side,f.gripBevel,f.gripTilt);
       this.racketSide=side;
       // The label ring is per side (the left numbering mirrors), so the side
       // change has to redraw it — a bevel-only change leaves the ring alone.
       if(side!==this.bevelSide)this.makeBevelLabels(side);
       this.racketBevel=f.gripBevel;
+      this.racketGripTilt=f.gripTilt;
     }
   }
   /** The pelvis shift the viewport solves time `t` with (undefined = argmin). */

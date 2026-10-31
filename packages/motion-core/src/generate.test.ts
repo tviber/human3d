@@ -74,10 +74,11 @@ describe('subsampled interval curves',()=>{
   expect(sub.keys[2].interpolation).toBeUndefined();
  });
  it('carries the doc-level bevel and samples hand spread with the pose',()=>{
-  const doc=defaultDocument(rig.rest);doc.gripBevel=5;
+  const doc=defaultDocument(rig.rest);doc.gripBevel=5;doc.gripTilt=18;
   doc.keys[0].pose.handSpread={L:.1,R:.2};doc.keys[1].pose.handSpread={L:.9,R:.8};
   const sub=subsampleDoc(doc,[0,.22],rig.rest);
   expect(sub.gripBevel).toBe(5);
+  expect(sub.gripTilt).toBe(18);
   expect(sub.keys[0].pose.handSpread).toEqual({L:.1,R:.2});
   expect(sub.keys[1].pose.handSpread).toEqual({L:.9,R:.8});
  });

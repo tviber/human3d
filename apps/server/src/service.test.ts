@@ -206,6 +206,17 @@ describe('POST /v1/motions — workshop-doc action',()=>{
    expect(lv[i+2]).toBeCloseTo(-rv[i+2],9);expect(lv[i+3]).toBeCloseTo(rv[i+3],9);
   }
  });
+ it('keeps racket shaft tilt in the document identity and presentation hint',()=>{
+  const doc=blankDocument(ctx.rig.rest,'拍柄倾斜','grip-tilt');
+  doc.keys.forEach(k=>{k.constraints.grip=true;});
+  const zero=post({action:{id:'workshop-doc',parameters:{document:doc}}}).body as PosePackage;
+  const tilted={...JSON.parse(JSON.stringify(doc)),gripTilt:24};
+  const angled=post({action:{id:'workshop-doc',parameters:{document:tilted}}}).body as PosePackage;
+  expect(angled.id).not.toBe(zero.id);
+  expect(angled.action.definitionSHA256).not.toBe(zero.action.definitionSHA256);
+  expect(angled.action.parameters.presentation).toHaveProperty('gripTilt',24);
+  expect(angled.tracks).toEqual(zero.tracks);
+ });
  it('keeps an explicitly spelled R identical to the omitted default',()=>{
   const doc=blankDocument(ctx.rig.rest,'同义','same-solve');
   const a=post({action:{id:'workshop-doc',parameters:{document:doc}}}).body as PosePackage;

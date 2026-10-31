@@ -7,6 +7,12 @@ dist/
 __pycache__/
 .out/
 
+# Local agent state and scratch artifacts
+.ryugi/
+.zcode/
+tmp/
+docs/reviews/
+
 # Vision-calibration seeds are per-challenge secrets; the one archived evidence
 # record is committed explicitly.
 .vision-check-*.json

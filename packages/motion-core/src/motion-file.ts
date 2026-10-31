@@ -1,5 +1,6 @@
 import {normalizeDoc,type WorkshopDoc} from './document';
 import type {DynamicsRecords,MuscleActionFile} from './muscle-action';
+import {RACKET_GRIP_TILT_LIMIT_DEG} from './props/racket';
 
 /** Motion-file envelope (schema v1): the asset on disk under assets/motions.
  * The trajectory carrier depends on `kind`: `document` for a workshop-motion,
@@ -13,8 +14,8 @@ export interface MotionCapabilities{
   /** The prop's `side` is the wrist it mounts on; absent means 'R' — the
    * pre-WP-D default every existing envelope relied on. `bevel` is the facet
    * rolled into the palm (1–8, palm-relative); absent means the canonical
-   * bevel 1. */
-  prop?:{kind:'racket';trail:boolean;handView:boolean;side?:'L'|'R';bevel?:number};
+   * bevel 1. `gripTilt` is the shaft tilt in degrees (−45°..45°), absent = 0°. */
+  prop?:{kind:'racket';trail:boolean;handView:boolean;side?:'L'|'R';bevel?:number;gripTilt?:number};
   camera?:{targetHeight:number;distance:number};
   locomotion?:'in-place'|'follow';
 }
@@ -83,6 +84,7 @@ export function validateMotionFileShape(raw:unknown):string[]{
    else{
     if(c.prop!==undefined&&(!isObj(c.prop)||c.prop.kind!=='racket'||typeof c.prop.trail!=='boolean'||typeof c.prop.handView!=='boolean'||(c.prop.side!==undefined&&c.prop.side!=='L'&&c.prop.side!=='R')))e.push('capabilities.prop 必须是 {kind:\'racket\',trail,handView,side?}');
     else if(c.prop!==undefined&&c.prop.bevel!==undefined&&(!isNum(c.prop.bevel)||!Number.isInteger(c.prop.bevel)||c.prop.bevel<1||c.prop.bevel>8))e.push('capabilities.prop.bevel 必须是 1–8 的整数');
+    else if(c.prop!==undefined&&c.prop.gripTilt!==undefined&&(!isNum(c.prop.gripTilt)||Math.abs(c.prop.gripTilt)>RACKET_GRIP_TILT_LIMIT_DEG))e.push(`capabilities.prop.gripTilt 必须是 −${RACKET_GRIP_TILT_LIMIT_DEG} 至 ${RACKET_GRIP_TILT_LIMIT_DEG}° 的有限数`);
     if(c.camera!==undefined&&(!isObj(c.camera)||!isNum(c.camera.targetHeight)||!isNum(c.camera.distance)))e.push('capabilities.camera 必须是 {targetHeight,distance}');
     if(c.locomotion!==undefined&&c.locomotion!=='in-place'&&c.locomotion!=='follow')e.push('capabilities.locomotion 必须是 in-place 或 follow');
    }

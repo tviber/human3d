@@ -191,13 +191,17 @@ components:
                 `freeArms: true` disables arm/elbow/wrist anatomical bend
                 clamps for authoring; optional document flags such as
                 `clavicleLift`, `gripSide` — 'R'|'L', default 'R', which hand
-                holds the racket — and `gripBevel` — integer 1–8, default 1,
+                holds the racket — `gripBevel` — integer 1–8, default 1,
                 which of the racket handle's eight bevels rests against the
                 palm (palm-relative numbering, so the same number is the same
-                grip on either hand and survives mirroring); the bevel is a
-                prop-orientation choice, not a solve input — it changes the
-                artifact id through the document but never the solved
-                trajectory; at most 10 s and 120 keys). `schemaVersion` must be 2: older documents are refused
+                grip on either hand and survives mirroring) — and `gripTilt`,
+                a finite angle from −45° to 45° (default 0°) which tilts the
+                racket shaft at the grip. Bevel and tilt define the prop mount
+                transform but do not alter solved bone trajectories; tilt can
+                move the derived racket tip used by contact and generation
+                metrics. Both are document fields and therefore affect the
+                artifact id. At most 10 s and
+                120 keys). `schemaVersion` must be 2: older documents are refused
                 with 400 `validation_failed`, never silently upgraded.
         rig:
           type: string

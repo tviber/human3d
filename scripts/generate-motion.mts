@@ -6,7 +6,7 @@
 //
 // Usage: npx tsx scripts/generate-motion.mts [forehand|squat|forehand-detuned|squat-detuned|all]
 //   forehand          spec/examples/forehand-study.request.json 的文档，
-//                     ready/contact 键锁定，tip=attachRacket(gripSide)
+//                     ready/contact 键锁定，tip=attachRacket(gripSide,gripBevel,gripTilt)
 //   squat             motionFileById('squat') 在 [0,1.6,2.8,4.8,5.6] 的子采样
 //                     （双脚全程支撑，无 contact → 不带 tip）
 //   *-detuned         先经 applyGenMove 施加恰好一个晶格步的损伤
@@ -69,7 +69,7 @@ for(const id of ids){
  const doc=dmg.doc;
  /* attachRacket 于 gripSide 腕部 —— 同一把球拍对象在多次探测间复用，
   * tip.parent===wrist_<gs> 的软校验在 emit 门禁里记录。 */
- if(c.tip&&!racket)racket=attachRacket(ctx.rig,doc.gripSide==='L'?'L':'R');
+ if(c.tip&&!racket)racket=attachRacket(ctx.rig,doc.gripSide==='L'?'L':'R',doc.gripBevel,doc.gripTilt);
  const res:MotionGenResult=generateMotion(ctx.rig,{doc,lockedKeyIds:c.lockedKeyIds,tip:c.tip?racket:undefined});
 
  const d=res.diagnostics;

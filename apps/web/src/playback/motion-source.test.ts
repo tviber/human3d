@@ -41,6 +41,18 @@ describe('checkPosePackageShape',()=>{
   expect(checkPosePackageShape(golden,validBones())).toEqual([]);
   expect(checkPosePackageShape(golden)).toEqual([]);
  });
+ it('points editable-action and library-backup JSON to their matching import flows',()=>{
+  const action=blankDocument(rig.rest,'跨设备动作','cross-device-action');
+  expect(checkPosePackageShape(action)).toEqual([
+   '这是可编辑动作 JSON，不是姿态包；请在动作工作台用「导入动作」导入。实验室播放请从工作台导出 .pose.json 姿态包。',
+  ]);
+  expect(checkPosePackageShape({kind:'workshop-motion',document:action})).toEqual([
+   '这是可编辑动作 JSON，不是姿态包；请在动作工作台用「导入动作」导入。实验室播放请从工作台导出 .pose.json 姿态包。',
+  ]);
+  expect(checkPosePackageShape({kind:'h3d-library-backup'})).toEqual([
+   '这是动作库整库备份，不是姿态包；请在动作工作台用「恢复备份」导入。',
+  ]);
+ });
  it('rejects each broken copy with a readable problem',()=>{
   const cases:[string,(p:PosePackage)=>void,RegExp][]=[
    ['末时间戳不等于 duration',p=>{p.timeline.duration+=.5;},/末时间戳/],

@@ -1,8 +1,9 @@
 import {Euler,Quaternion,Vector3} from 'three';
 import type {HumanRig} from './rig';
 import type {WorkshopDoc} from './document';
-import {contactStartKey,frameAt,isReleaseKey,keyAt,sortedKeys} from './document';
+import {compileMotion,contactStartKey,frameAt,frameAtCompiled,isReleaseKey,keyAt,sortedKeys} from './document';
 import {rotateArmAbout,rotateHandFrame,rotateLegAbout,solveEffectiveFrame} from './solver';
+import {buildPelvisSchedule} from './pelvis-schedule';
 import {handFrame} from './hand-frame';
 import {DEG,angleAt,WRIST_BEND_LIMIT_DEG,LIMITS} from './kinematics';
 import {footDepth,footGeometry,footLowestY,type Side} from './foot';
@@ -167,6 +168,7 @@ export function applySemanticEdit(rig:HumanRig,doc:WorkshopDoc,keyId:string,edit
  const keyIndex=sortedKeys(next).findIndex(k=>k.id===key.id);
  const fixedAt=(s:Side)=>frame.constraints[s==='L'?'plantL':'plantR']||isReleaseKey(next,keyIndex,s);
  const heldSides=(['L','R'] as const).filter(fixedAt),feet0=heldSides.map(s=>rig.point(`foot_${s}`));
+ let fixedKneeScheduleFit=true;
  const footOwner=(s:Side)=>{
   if(!fixedAt(s))return key;
   if(frame.constraints[s==='L'?'plantL':'plantR'])return contactStartKey(next,s,key.time)??key;
@@ -233,20 +235,40 @@ export function applySemanticEdit(rig:HumanRig,doc:WorkshopDoc,keyId:string,edit
     else{
      const targetDistance=Math.sqrt(Math.max(0,upper*upper+lower*lower+2*upper*lower*Math.cos(target*DEG)));
      axis.multiplyScalar((targetDistance-distance)/distance);
-    const targetRootZ=rig.point('root').z+axis.z;
+     const targetRootZ=rig.point('root').z+axis.z;
      key.pose.root.x+=axis.x;key.pose.root.y+=axis.y;key.pose.root.z+=axis.z;
-    // Refit root.z to the natural pelvis correction after changing the pose,
-    // keeping the intended world-space pelvis displacement stable on commit.
-    shift=undefined;
-    for(let i=0;i<5;i++){
+     // First preserve the displayed pelvis displacement while solving without
+     // the old schedule; then refit against the candidate document's actual
+     // schedule so the preview, commit and later seek all use the same solve.
+     shift=undefined;
+     for(let i=0;i<5;i++){
+      solve();
+      const correction=targetRootZ-rig.point('root').z;
+      if(Math.abs(correction)<1e-8)break;
+      key.pose.root.z+=correction;
+     }
+     const contact=feet0[heldSides.indexOf(side)];
+     let scheduleFit=false;
+     for(let i=0;i<8;i++){
+      const compiled=compileMotion(next,origin),schedule=buildPelvisSchedule(rig,compiled);
+      shift=schedule.passthrough?undefined:schedule.at(key.time);
+      solveEffectiveFrame(rig,frameAtCompiled(compiled,key.time),shift);
+      const angle=measureSemantic(rig,'knee','flexion',side);
+      const drift=Math.max(0,...heldSides.map((s,j)=>rig.point(`foot_${s}`).distanceTo(feet0[j])*1000));
+      if(Math.abs(angle-target)<=.35&&drift<1){scheduleFit=true;break;}
+      if(!contact)break;
+      const hipNow=rig.point(`upperleg01_${side}`),toward=hipNow.clone().sub(contact),length=toward.length();
+      if(length<1e-8)break;
+      const step=Math.max(-.05,Math.min(.05,targetDistance-length));
+      if(Math.abs(step)<1e-7)break;
+      toward.multiplyScalar(step/length);
+      key.pose.root.x+=toward.x;key.pose.root.y+=toward.y;key.pose.root.z+=toward.z;
+     }
+     fixedKneeScheduleFit=scheduleFit;
+     if(!scheduleFit)reason??='自动骨盆排程下无法同时保持膝角与支撑脚位置';
      solve();
-     const correction=targetRootZ-rig.point('root').z;
-     if(Math.abs(correction)<1e-8)break;
-     key.pose.root.z+=correction;
-    }
-    solve();
-    carries='膝屈伸时骨盆沿髋—踝方向随动；支撑脚的位置与朝向保持锁定，踝角会随小腿方向变化';
-    keeps='支撑脚与其他关键帧保持不变；只调整选中帧的膝角与骨盆位置';
+     carries='膝屈伸时骨盆沿髋—踝方向随动；支撑脚的位置与朝向保持锁定，踝角会随小腿方向变化';
+     keeps='支撑脚与其他关键帧保持不变；只调整选中帧的膝角与骨盆位置';
     }
    }else{
     const hip=rig.point(`upperleg01_${side}`),knee=rig.point(`lowerleg01_${side}`),ankle=rig.point(`foot_${side}`);
@@ -353,7 +375,7 @@ export function applySemanticEdit(rig:HumanRig,doc:WorkshopDoc,keyId:string,edit
  }
  if(childMoved&&!reason)reason=`${childMoved.x==='L'?'左':'右'}${SEMANTIC_PART_LABELS[childMoved.p]}被带动 ${childMoved.d.toFixed(1)}°`;
  if(neighbourMm>1&&!reason)reason=`接管接触的相邻关键帧显示姿态变化 ${neighbourMm.toFixed(1)} mm`;
- const residual=actual-deg,ok=Math.abs(residual)<=SEMANTIC_TOLERANCE_DEG&&footDriftMm<1&&soleMm<=5&&neighbourMm<=1&&!childMoved&&!(ankleOut&&edit.part==='ankle');
+ const residual=actual-deg,ok=fixedKneeScheduleFit&&Math.abs(residual)<=SEMANTIC_TOLERANCE_DEG&&footDriftMm<1&&soleMm<=5&&neighbourMm<=1&&!childMoved&&!(ankleOut&&edit.part==='ankle');
  if(!ok&&!reason){
   if(footDriftMm>=1)reason=`支撑脚被带动 ${footDriftMm.toFixed(1)} mm`;
   else if(edit.part==='wrist'&&!next.freeArms){

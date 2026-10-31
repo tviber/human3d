@@ -1364,7 +1364,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
      <p><i style={{background:'#e2543a'}}/>脚踝（支撑贴地 · 离地可三维拖动）</p>
      <p><i style={{background:'#0891b2'}}/>摆动路径点（离地帧存储的脚位，摆动中点）</p>
      <p><i style={{background:'#4a9e6b'}}/>肘 / 膝极点（膝极点默认隐藏，「显示」可开）</p>
-     <p><i style={{background:'#9ccc65'}}/>膝盖（落地脚转朝向 · 离地整腿跟随）</p>
+     <p><i style={{background:'#9ccc65'}}/>膝盖（支撑脚固定时屈伸 · 离地整腿跟随）</p>
      <p><i style={{background:'#d23c3c'}}/>拍头 · <em style={{color:'#f0b429'}}>触球点</em></p>
      <p className="ws-note">直接拖动末端，IK 自动解算整条链；在空白处拖动仍是旋转视角。</p>
      </section>

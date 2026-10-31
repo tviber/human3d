@@ -584,7 +584,34 @@ export class WorkshopEngine{
     this.docDirty=true;this.onDocChanged?.();
   };
   private onPointerUp=(ev:PointerEvent)=>{
-    if(this.drag){this.drag=undefined;this.controls.enabled=true;try{this.renderer.domElement.releasePointerCapture(ev.pointerId);}catch{/* released */}this.solveCurrent();this.onEditEnd?.();}
+    if(this.drag){
+      const drag=this.drag;this.drag=undefined;this.controls.enabled=true;
+      try{this.renderer.domElement.releasePointerCapture(ev.pointerId);}catch{/* released */}
+      const side=drag.kneeFootFixed?drag.h.side:undefined,contact=side?drag.protectedFeet?.[side]:undefined;
+      const key=drag.kneeFlexActive&&side&&drag.lastFlex!==undefined
+        ?this.getDoc().keys.find(item=>item.id===drag.key.id):undefined;
+      if(this.rig&&key&&side&&contact&&drag.lastFlex!==undefined&&drag.baseDoc){
+        // Re-run the final drag angle from its base doc through the same
+        // schedule-aware semantic path used by the knee slider. Keep the
+        // pointer-driven bend direction while discarding per-move root drift.
+        const active=this.getDoc(),base=JSON.parse(JSON.stringify(drag.baseDoc)) as WorkshopDoc;
+        const baseKey=base.keys.find(item=>item.id===drag.key.id),footName=side==='L'?'footL':'footR';
+        const currentKey=active.keys.find(item=>item.id===drag.key.id);
+        if(baseKey&&currentKey&&drag.kneeFlexStart!==undefined){
+          baseKey.pose[footName].pole={...currentKey.pose[footName].pole};
+          const out=applySemanticEdit(this.rig,base,drag.key.id,
+            {part:'knee',side,motion:'flexion',degrees:drag.lastFlex-drag.kneeFlexStart},this.restRoot(),drag.pelvisShift);
+          if(out.report.ok)Object.assign(active,out.doc);
+          else{
+            Object.assign(active,drag.baseDoc);
+            this.solveCurrent();
+            this.onEditNotice?.(out.report.reason??'自动骨盆排程下无法同时保持膝角与支撑脚，本次膝部拖动已撤销。');
+          }
+          this.docVer++;
+        }else this.solveCurrent();
+      }else this.solveCurrent();
+      this.docDirty=true;this.onDocChanged?.();this.onEditEnd?.();
+    }
   };
   /* ---------- pose evaluation ---------- */
   /** Pelvis hand-frame origin: the rest root, the same origin the solver uses.

@@ -42,7 +42,7 @@ jobs:
           done
           cat "$RUNNER_TEMP/dev-server.log"
           exit 1
-      - name: Preset editing and rotation binding (real UI)
+      - name: Preset editing, rotation binding, and contact warnings (real UI)
         run: node scripts/workshop-preset-qa.mjs --out-dir "$RUNNER_TEMP/qa/workshop-preset"
       - name: Mobile workshop and rotation controls (real UI)
         run: node scripts/workshop-mobile-qa.mjs --out-dir "$RUNNER_TEMP/qa/workshop-mobile"

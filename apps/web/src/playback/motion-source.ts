@@ -27,6 +27,9 @@ export interface MotionSource{
   /** Bevel the prop is rolled to (facet in the palm), constant per source like
    * propSide. Absent means the canonical bevel 1. */
   readonly propBevel?:number;
+  /** Document-level shaft tilt in degrees, constant per source; absent means
+   * the canonical 0° mount. */
+  readonly propGripTilt?:number;
   /** Whole-model visual offset (walk accumulates one stride per loop wrap). */
   readonly modelOffset?:Vector3;
   /** Loop-seam side effect, e.g. the walk clip accumulating its stride. */
@@ -100,6 +103,7 @@ export class DocumentSource implements MotionSource{
   get propSide(){return this.compiled.gripSide==='L'?'L':'R';}
   /** The authored bevel (facet rolled into the palm); absent is bevel 1. */
   get propBevel(){return this.compiled.gripBevel;}
+  get propGripTilt(){return this.compiled.gripTilt;}
   rootPoint(){return this.rig.point('root');}
   point(name:string){return this.rig.bones.has(name)?this.rig.point(name):undefined;}
   diagnostics(){return rigReadout(this.rig,this.wantsProp()?this.racket:undefined,this.propSide);}
@@ -151,6 +155,7 @@ export class PosePackageSource implements MotionSource{
   /** The prop capability's declared mount side ('R' when undeclared). */
   get propSide(){return this.prop?.side==='L'?'L':'R';}
   get propBevel(){return this.prop?.bevel;}
+  get propGripTilt(){return this.prop?.gripTilt;}
   rootPoint(){return this.rig.point('root');}
   point(name:string){return this.rig.bones.has(name)?this.rig.point(name):undefined;}
   diagnostics(){return rigReadout(this.rig,this.wantsProp()?this.racket:undefined,this.propSide);}

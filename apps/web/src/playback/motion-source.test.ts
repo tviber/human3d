@@ -41,6 +41,18 @@ describe('checkPosePackageShape',()=>{
   expect(checkPosePackageShape(golden,validBones())).toEqual([]);
   expect(checkPosePackageShape(golden)).toEqual([]);
  });
+ it('points editable-action and library-backup JSON to their matching import flows',()=>{
+  const action=blankDocument(rig.rest,'跨设备动作','cross-device-action');
+  expect(checkPosePackageShape(action)).toEqual([
+   '这是可编辑动作 JSON，不是姿态包；请在动作工作台用「导入动作」导入。实验室播放请从工作台导出 .pose.json 姿态包。',
+  ]);
+  expect(checkPosePackageShape({kind:'workshop-motion',document:action})).toEqual([
+   '这是可编辑动作 JSON，不是姿态包；请在动作工作台用「导入动作」导入。实验室播放请从工作台导出 .pose.json 姿态包。',
+  ]);
+  expect(checkPosePackageShape({kind:'h3d-library-backup'})).toEqual([
+   '这是动作库整库备份，不是姿态包；请在动作工作台用「恢复备份」导入。',
+  ]);
+ });
  it('rejects each broken copy with a readable problem',()=>{
   const cases:[string,(p:PosePackage)=>void,RegExp][]=[
    ['末时间戳不等于 duration',p=>{p.timeline.duration+=.5;},/末时间戳/],
@@ -278,7 +290,7 @@ describe('posePackageSpec — ad-hoc presentation channel',()=>{
   expect(spec.phases.length).toBe(doc.keys.length);
   expect(spec.description).toContain('常量显示');
  });
- it('carries gripBevel into the prop hint; the canonical bevel stays absent',async()=>{
+ it('carries grip bevel and shaft tilt into the prop hint; canonical values stay absent',async()=>{
   const doc=blankDocument(rig.rest,'换棱面','bevel-grip');
   doc.keys.forEach(k=>{k.constraints.grip=true;});
   const plain=await local(doc);
@@ -291,6 +303,12 @@ describe('posePackageSpec — ad-hoc presentation channel',()=>{
   expect(spec.capabilities?.prop).toEqual({kind:'racket',trail:true,handView:true,bevel:6});
   const src=new PosePackageSource(rig,pkg,spec.capabilities?.prop,racket);
   expect(src.propBevel).toBe(6);
+  doc.gripTilt=17.5;
+  const tiltedPkg=await local(doc),tiltedSpec=posePackageSpec(tiltedPkg,'pkg:test');
+  expect(tiltedPkg.action.parameters).toEqual({documentName:'换棱面',presentation:{prop:'racket',bevel:6,gripTilt:17.5,loop:false}});
+  expect(tiltedSpec.capabilities?.prop?.gripTilt).toBe(17.5);
+  const tiltedSrc=new PosePackageSource(rig,tiltedPkg,tiltedSpec.capabilities?.prop,racket);
+  expect(tiltedSrc.propGripTilt).toBe(17.5);
  });
  it('carries gripSide into the prop side hint and the mount readout',async()=>{
   const doc=blankDocument(rig.rest,'左持拍','left-grip');

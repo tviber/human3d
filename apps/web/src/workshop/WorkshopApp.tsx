@@ -51,6 +51,7 @@ interface ReviewNote{id:string;docId:string;keyId:string;keyLabel:string;time:nu
 const NOTE_PARTS=['右臂','左臂','右手腕','左手腕','躯干','骨盆','右腿','左腿','右脚','左脚','球拍'];
 const NOTE_ISSUES=['手臂穿身','拍头方向','支撑脚漂移','关节过屈 / 反折','姿态与参考不符','时机不对','其他'];
 const fmt=(t:number)=>`${Math.floor(t/60)}:${(Math.floor(t%60)).toString().padStart(2,'0')}.${Math.floor(t*100%100).toString().padStart(2,'0')}`;
+const REPLANT_SLIDE_WARNING_M=.1;
 const metricLabels:Record<string,string>={
  'cost.endEffectorJerk':'末端加加速度积分','cost.angularJerk':'角运动加加速度积分',
  'cost.checkViolations':'姿态检查超限','cost.footContact':'支撑脚滑动','cost.penetration':'脚底穿透',
@@ -290,6 +291,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
    e.onReady=setInfo;
    e.setEditable(false);e.setOptions({trajectories:false,balance:false});
    e.onError=err=>setError(err.message);
+   e.onEditNotice=message=>setHint(message);
    e.onFrame=setFrame;
    e.onSelectKey=setSelected;
    let lastDragSave=0;
@@ -1304,6 +1306,9 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
       {Array.from({length:RACKET_BEVELS},(_,i)=>i+1).map(n=><option key={n} value={n}>{n}{n===RACKET_BEVEL_DEFAULT?'（默认）':''}</option>)}
      </select></label>
      <p className="ws-note">转动球拍只会改变拍面朝向，握拍位置不变。开启「显示 → 拍柄棱面编号」可对照号码选择。</p>
+     <Slider label="拍柄倾斜" value={d.gripTilt??0} min={-45} max={45} step={.5} unit="°" testId="grip-tilt"
+      onChange={v=>edit(dd=>{if(v===0)delete dd.gripTilt;else dd.gripTilt=v;})}/>
+     <p className="ws-note">调节拍头相对手掌的倾斜，不需要靠腕屈伸补偿；正值朝掌面前方倾斜，范围 ±45°。</p>
      <Row label="抬肩辅助" detail="手高于胸口时锁骨与肩部随动上抬" checked={d.clavicleLift===true} onChange={v=>edit(dd=>{dd.clavicleLift=v||undefined;})}/>
      <div className="ws-row">
       {/* x=0 平面整档镜像：同一动作换边（右手正手→左手正手）。产出入库并选
@@ -1359,7 +1364,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
      <p><i style={{background:'#e2543a'}}/>脚踝（支撑贴地 · 离地可三维拖动）</p>
      <p><i style={{background:'#0891b2'}}/>摆动路径点（离地帧存储的脚位，摆动中点）</p>
      <p><i style={{background:'#4a9e6b'}}/>肘 / 膝极点（膝极点默认隐藏，「显示」可开）</p>
-     <p><i style={{background:'#9ccc65'}}/>膝盖（落地脚转朝向 · 离地整腿跟随）</p>
+     <p><i style={{background:'#9ccc65'}}/>膝盖（支撑脚固定时屈伸 · 离地整腿跟随）</p>
      <p><i style={{background:'#d23c3c'}}/>拍头 · <em style={{color:'#f0b429'}}>触球点</em></p>
      <p className="ws-note">直接拖动末端，IK 自动解算整条链；在空白处拖动仍是旋转视角。</p>
      </section>
@@ -1449,7 +1454,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
        {d.gripSide===adjustmentSide?<Row label={`${adjustmentSideName}手握拍`} checked={sel.constraints.grip} onChange={v=>editSelected(k=>{k.constraints.grip=v;})}/>:null}
       </div>}
       {adjustmentTab==='common'?<><div className="ws-sub"><h3>躯干与骨盆</h3>
-       <Slider label="前倾" value={sel.pose.lean} min={-50} max={60} step={.5} onChange={v=>editSelected(k=>{k.pose.lean=v;})}/>
+       <Slider label="前倾" value={sel.pose.lean} min={-50} max={60} step={.5} testId="trunk-lean" onChange={v=>editSelected(k=>{k.pose.lean=v;})}/>
        <Slider label="转体" value={sel.pose.chest} min={-60} max={60} step={.5} onChange={v=>editSelected(k=>{k.pose.chest=v;})}/>
        <Slider label="侧弯" value={sel.pose.side} min={-30} max={30} step={.5} onChange={v=>editSelected(k=>{k.pose.side=v;})}/>
        <Slider label="朝向" value={sel.pose.yaw} min={-180} max={180} step={1} onChange={v=>editSelected(k=>{k.pose.yaw=v;})}/>
@@ -1492,6 +1497,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
         return <div className="ws-limb-side" data-testid={`limb-controls-${side}`} key={side}>
          <div className="ws-sub ws-limb-controls"><h3>{cn}侧四肢姿态精调 <small>IK 目标与弯曲方向</small></h3>
          <p className="ws-note">以下为 IK 末端与方向提示；肘部引导点不直接指定大臂角度。大臂向后摆动请使用上方关节旋转，手部末端会随之移动。</p>
+         <p className="ws-note">支撑脚锁定时，沿膝盖到髋—踝直线方向拖膝盖球可伸直；反方向拖会增加屈曲。脚的位置与朝向保持锁定，骨盆随动。离地腿按住 Shift（⇧）上下拖可调膝屈曲。精确角度可在「语义」页选择「膝 / 小腿」。</p>
          <VectorSliders title={`${cn}前臂（小臂）末端目标`} value={hand.target} testPrefix={`limb-${side}-arm-target`}
           onChange={(axis,value)=>write(hand.target,axis,value)}/>
          <VectorSliders title={`${cn}肘部弯曲引导点`} value={hand.pole} testPrefix={`limb-${side}-arm-pole`}
@@ -1512,11 +1518,19 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
         // dead stored values — ordinary swing keys own their stored pose, so
         // they must edit sel directly (never reach back to the last plant).
         const ks=sortedKeys(d),si=ks.findIndex(k=>k.id===sel.id);
+        const precedingKey=si>0?ks[si-1]:d.loop?ks.at(-1):undefined;
+        const precedingTime=precedingKey
+         ?si>0?(precedingKey.time+sel.time)/2:(precedingKey.time+d.duration+sel.time)/2%d.duration
+         :undefined;
+        const precedingContact=planted&&sel.constraints.replant&&precedingTime!==undefined
+         ?contactStartKey(d,side,precedingTime):undefined;
+        const precedingFoot=precedingContact?.pose[side==='L'?'footL':'footR'];
         let owner:WorkshopKey|undefined;
         if(planted)owner=contactStartKey(d,side,sel.time);
         else if(isReleaseKey(d,si,side)){const p=si>0?si-1:ks.length-1;owner=contactStartKey(d,side,ks[p].time)??ks[p];}
         owner??=sel;
         const foot=side==='L'?owner.pose.footL:owner.pose.footR;
+        const contactShift=precedingFoot?Math.hypot(foot.target.x-precedingFoot.target.x,foot.target.z-precedingFoot.target.z):0;
         const setFootOrientation=(yaw:number,pitch:number)=>{
          const geo=engine.current?.footGeometry(side);
          const lift=geo?Math.max(0,footLift(geo,foot.target.y,foot.yaw,foot.pitch)):0;
@@ -1527,6 +1541,9 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
          <Slider label={`${cn}脚抬升高度（脚底离地）`} value={liftOf(side,planted?owner:sel)} min={0} max={.8} step={.005} unit="m" disabled={planted} onChange={v=>setLift(side,v)}/>
          <Slider label={`${cn}脚俯仰`} value={foot.pitch} min={-40} max={40} step={1} onChange={v=>editAtKey(sel,()=>setFootOrientation(foot.yaw,v))}/>
          <Slider label={`${cn}脚朝向`} value={foot.yaw} min={-90} max={90} step={1} onChange={v=>editAtKey(sel,()=>setFootOrientation(v,foot.pitch))}/>
+         {contactShift>REPLANT_SLIDE_WARNING_M?<p className="ws-note" data-testid={`replant-foot-warning-${side}`} style={{color:'var(--amber)'}}>
+          {cn}脚的新接触点比前一接触点移动约 {Math.round(contactShift*100)} cm；这段仍标记为支撑，脚会平滑过渡到新位置，可能看起来像滑步。需要脚离地移动时，请插入离地帧（关闭支撑），再重新接触。
+         </p>:null}
          {owner!==sel?<p className="ws-note" style={{color:'var(--amber)'}}>{cn}脚此帧由 {owner.time.toFixed(2)}s 的支撑开始帧锁定：俯仰与朝向的修改写入该帧。</p>:null}
         </div>;
        })}

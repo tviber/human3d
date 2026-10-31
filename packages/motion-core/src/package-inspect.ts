@@ -1,6 +1,6 @@
 import {POSE_PACKAGE_KIND,POSE_PACKAGE_SCHEMA_VERSION} from './package-const';
 import {RIG_ID} from './protocol';
-import {RACKET_BEVELS} from './props/racket';
+import {RACKET_BEVELS,RACKET_GRIP_TILT_LIMIT_DEG} from './props/racket';
 import type {PosePackage} from './pose-package';
 import type {MotionCapabilities} from './motion-file';
 import {motionFileById} from './motion-files';
@@ -14,6 +14,7 @@ import type {MotionId,MotionSpec} from './types';
 
 const isObj=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const isVec=(v:unknown):v is number[]=>Array.isArray(v)&&v.every(Number.isFinite);
+const isWorkshopDocLike=(v:Record<string,unknown>)=>v.schemaVersion===2&&Array.isArray(v.keys)&&typeof v.duration==='number';
 /** The events enum of spec/pose-package.schema.json — keep in lockstep. */
 const PACKAGE_EVENT_TYPES=new Set<string>(['phase','keyframe','contact','support-start','support-end']);
 /** Absolute sample bound for a delivered package: 200_000 samples ≈ 13.9 min
@@ -29,6 +30,8 @@ export const MAX_PACKAGE_SAMPLES=200_000;
 export function checkPosePackageShape(pkg:unknown,validBones?:ReadonlySet<string>):string[]{
   const e:string[]=[];
   if(!isObj(pkg))return ['姿态包不是对象'];
+  if(pkg.kind==='h3d-library-backup')return ['这是动作库整库备份，不是姿态包；请在动作工作台用「恢复备份」导入。'];
+  if(pkg.kind==='workshop-motion'||isWorkshopDocLike(pkg))return ['这是可编辑动作 JSON，不是姿态包；请在动作工作台用「导入动作」导入。实验室播放请从工作台导出 .pose.json 姿态包。'];
   const p=pkg as unknown as PosePackage;
   if(p.kind!==POSE_PACKAGE_KIND)e.push(`kind 必须是 ${POSE_PACKAGE_KIND}`);
   if(p.schemaVersion!==POSE_PACKAGE_SCHEMA_VERSION)e.push(`schemaVersion 必须是 ${POSE_PACKAGE_SCHEMA_VERSION}`);
@@ -188,11 +191,12 @@ export function posePackageSpec(p:PosePackage,id:MotionId,trust?:(actionId:strin
  // so a forged presentation channel cannot add a prop to a bundled id.
  const prop=envelope?envelope.capabilities?.prop
   :(pres.prop==='racket'?{kind:'racket' as const,trail:true,handView:true,
-    // Ad-hoc packages carry the document's grip side and bevel as
+    // Ad-hoc packages carry the document's grip side, bevel and shaft tilt as
     // package-level constants (v2 has no per-frame prop channel); absent
     // means 'R' and bevel 1.
     ...(pres.gripSide==='L'?{side:'L' as const}:{}),
-    ...(typeof pres.bevel==='number'&&Number.isInteger(pres.bevel)&&pres.bevel>=1&&pres.bevel<=RACKET_BEVELS?{bevel:pres.bevel}:{})}:undefined);
+    ...(typeof pres.bevel==='number'&&Number.isInteger(pres.bevel)&&pres.bevel>=1&&pres.bevel<=RACKET_BEVELS?{bevel:pres.bevel}:{}),
+    ...(typeof pres.gripTilt==='number'&&Number.isFinite(pres.gripTilt)&&Math.abs(pres.gripTilt)<=RACKET_GRIP_TILT_LIMIT_DEG&&pres.gripTilt!==0?{gripTilt:pres.gripTilt}:{})}:undefined);
  const capabilities:MotionCapabilities|undefined=envelope?envelope.capabilities:(prop?{prop}:undefined);
  // Loop semantics are authored in the document, not the package: bundled
  // envelopes carry the document, ad-hoc packages carry presentation.loop.

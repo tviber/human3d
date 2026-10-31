@@ -32,6 +32,10 @@ export const RACKET_TIP_LOCAL=new Vector3(0,.61,0);
 export const RACKET_BEVELS=8;
 /** Canonical bevel: the facet in the palm at the default mount. */
 export const RACKET_BEVEL_DEFAULT=1;
+/** Maximum racket shaft tilt relative to the palm, in degrees. */
+export const RACKET_GRIP_TILT_LIMIT_DEG=45;
+/** Canonical racket shaft tilt: the existing mount stays unchanged. */
+export const RACKET_GRIP_TILT_DEFAULT=0;
 const BEVEL_STEP=Math.PI/4;
 /** Local azimuth (x=sinθ, z=cosθ) of the palm facet, per mount side. Measured
  * on the real rig: the right palm rests on local −X (270°), the left mount is
@@ -58,6 +62,14 @@ const bevelSign=(side:'L'|'R')=>side==='R'?1:-1;
  * right one (R_y(α) conjugates to R_y(−α) across x=0). */
 export function bevelRoll(side:'L'|'R',bevel?:number){
  return -bevelSign(side)*(normalizeBevel(bevel)-1)*BEVEL_STEP;
+}
+/** Clamp a requested shaft tilt to the authored range; non-finite values fall
+ * back to the unchanged canonical mount. The document validator rejects
+ * out-of-range values, while this low-level guard keeps direct prop callers
+ * from producing a NaN quaternion. */
+export function normalizeGripTilt(tilt?:number|null){
+ if(!Number.isFinite(tilt as number))return RACKET_GRIP_TILT_DEFAULT;
+ return Math.max(-RACKET_GRIP_TILT_LIMIT_DEG,Math.min(RACKET_GRIP_TILT_LIMIT_DEG,tilt as number));
 }
 /** Outward direction of bevel `bevel`'s facet in racket-local coordinates
  * (unit, XZ plane) — the direction the number label sits on. Fixed per facet,
@@ -117,22 +129,27 @@ function racketLocalTransform(rig:HumanRig){
  * left axis — the head on the pinky side, a 180°-flipped handle — which is
  * why the mount mirrors a canonical transform instead.
  *
- * `bevel` rolls the racket about its own handle so the chosen facet sits in
- * the palm. The roll is a LOCAL post-rotation (q · R_y): the mirrored document
- * stays the exact x-mirror of the source, because a local yaw conjugates to its
- * own negation across x=0 and bevelRoll already carries the per-side sign. */
-export function mountRacket(rig:HumanRig,racket:Group,side:'L'|'R'='R',bevel?:number){
+ * `gripTilt` tips the shaft in the racket's local YZ plane around local +X;
+ * positive values tip the head toward local +Z (palmar forward). It is applied
+ * as a LOCAL post-rotation, so it changes racket orientation without moving
+ * the grip origin or rotating the wrist/fingers. The x-reflection leaves a
+ * local X rotation unchanged, so the same tilt on either side preserves the
+ * exact mirrored mount. `bevel` then rolls around the tilted handle axis to
+ * seat the requested facet; its side-signed roll preserves that same mirror. */
+export function mountRacket(rig:HumanRig,racket:Group,side:'L'|'R'='R',bevel?:number,gripTilt?:number){
   const t=racketLocalTransform(rig);
   racket.position.copy(t.position);racket.quaternion.copy(t.quaternion);
   if(side==='L'){
     racket.position.x=-racket.position.x;
     racket.quaternion.set(racket.quaternion.x,-racket.quaternion.y,-racket.quaternion.z,racket.quaternion.w);
   }
+  const tilt=normalizeGripTilt(gripTilt)*Math.PI/180;
+  if(tilt!==0)racket.quaternion.multiply(new Quaternion().setFromAxisAngle(new Vector3(1,0,0),tilt));
   const roll=bevelRoll(side,bevel);
   if(roll!==0)racket.quaternion.multiply(new Quaternion().setFromAxisAngle(new Vector3(0,1,0),roll));
   racket.removeFromParent();
   rig.bone(`wrist_${side}`).add(racket);
 }
-export function attachRacket(rig:HumanRig,side:'L'|'R'='R',bevel?:number){
-  const racket=createRacket();mountRacket(rig,racket,side,bevel);return racket;
+export function attachRacket(rig:HumanRig,side:'L'|'R'='R',bevel?:number,gripTilt?:number){
+  const racket=createRacket();mountRacket(rig,racket,side,bevel,gripTilt);return racket;
 }

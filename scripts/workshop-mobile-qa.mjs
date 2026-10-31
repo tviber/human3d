@@ -169,8 +169,9 @@ try{
  await page.getByTestId('semantic-part-hip').tap();await page.getByTestId('semantic-side-R').tap();
  await page.getByTestId('semantic-motion-flexion').tap();await page.getByTestId('semantic-plus').tap();
  await page.getByTestId('semantic-commit').tap();
- const soleR=()=>page.evaluate(()=>{const r=window.__WS__.rig;let low=Infinity;for(const [n] of r.bones)if(n==='foot_R'||(n.startsWith('toe')&&n.endsWith('_R')))low=Math.min(low,r.point(n).y);
-  let rest=Infinity;for(const [n,v] of r.rest)if(n==='foot_R'||(n.startsWith('toe')&&n.endsWith('_R')))rest=Math.min(rest,v.y);return (low-rest)*1000;});
+ const soleR=()=>page.evaluate(()=>{const e=window.__WS__,r=e.rig,g=e.footGeometry('R'),ankle=r.point('foot_R');let low=Infinity;for(const n of g.names)low=Math.min(low,r.point(n).y);
+  const foot=r.bone('foot_R'),Quaternion=foot.quaternion.constructor,q=foot.getWorldQuaternion(new Quaternion());
+  return (Math.min(low,ankle.y+g.heelOffset.clone().applyQuaternion(q).y)-g.groundY)*1000;});
  const liftedDoc=(await read(page)).doc;
  assert(Math.abs(await soleR())>3,'the thigh edit did not move the foot off the floor');
  await page.getByTestId('semantic-ground').tap();

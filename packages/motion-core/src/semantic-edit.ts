@@ -1,8 +1,9 @@
 import {Euler,Quaternion,Vector3} from 'three';
 import type {HumanRig} from './rig';
 import type {WorkshopDoc} from './document';
-import {contactStartKey,frameAt,isReleaseKey,keyAt,sortedKeys} from './document';
+import {compileMotion,contactStartKey,frameAt,frameAtCompiled,isReleaseKey,keyAt,sortedKeys} from './document';
 import {rotateArmAbout,rotateHandFrame,rotateLegAbout,solveEffectiveFrame} from './solver';
+import {buildPelvisSchedule} from './pelvis-schedule';
 import {handFrame} from './hand-frame';
 import {DEG,angleAt,WRIST_BEND_LIMIT_DEG,LIMITS} from './kinematics';
 import {footDepth,footGeometry,footLowestY,type Side} from './foot';
@@ -45,7 +46,7 @@ export interface SemanticReport{
  requested:number;actual:number;residual:number;ok:boolean;unit:'°';
  /** Present when actual ≠ requested beyond tolerance: why the solver did not deliver. */
  reason?:string;carries:string;keeps:string;
- /** Largest planted-foot ankle displacement caused by the edit (mm). */
+ /** Largest anchored-foot ankle displacement caused by the edit (mm). */
  footDriftMm:number;
  /** Arm edits: solved wrist distance from the stored IK target (mm). */
  targetResidualMm?:number;
@@ -53,6 +54,9 @@ export interface SemanticReport{
 export const SEMANTIC_TOLERANCE_DEG=.5;
 /** Joint angles a part's edit must leave unchanged: only the commanded joint
  * moves, everything distal keeps its angle (rigid FK below the pivot). */
+/** Distal angles held by FK edits. A knee edit with an anchored foot is the
+ * exception: the foot frame stays locked while the pelvis moves, so ankle
+ * flexion necessarily changes with the shank. */
 const CHILD_JOINTS:Partial<Record<SemanticPart,[SemanticPart,SemanticMotion][]>>={
  shoulder:[['elbow','flexion'],['wrist','flexion'],['wrist','deviation']],
  elbow:[['wrist','flexion'],['wrist','deviation']],
@@ -151,11 +155,9 @@ export function applySemanticEdit(rig:HumanRig,doc:WorkshopDoc,keyId:string,edit
  const solve=()=>{const f=frameAt(next,key.time,origin);solveEffectiveFrame(rig,f,shift);return f;};
  const frame=solve();
  const shift0=solveEffectiveFrame(rig,frame,pelvisShift).pelvisShift;
- const planted=(['L','R'] as const).filter(s=>frame.constraints[s==='L'?'plantL':'plantR']);
  const [ankleLo,ankleHi]=LIMITS.ankleFlexion;
  const ankleExcess=()=>{const v=measureSemantic(rig,'ankle','flexion',side);return Math.max(0,ankleLo-v,v-ankleHi);};
  const ankleExcess0=ankleExcess();
- const feet0=planted.map(s=>rig.point(`foot_${s}`));
  const before=measureSemantic(rig,edit.part,edit.motion,side);
  const hand=side==='L'?key.pose.handL:key.pose.handR;
  const leg=edit.part==='hip'||edit.part==='legs'||edit.part==='knee'||edit.part==='ankle';
@@ -165,6 +167,8 @@ export function applySemanticEdit(rig:HumanRig,doc:WorkshopDoc,keyId:string,edit
  let carries=SEMANTIC_CARRIES[edit.part],keeps=SEMANTIC_KEEPS;
  const keyIndex=sortedKeys(next).findIndex(k=>k.id===key.id);
  const fixedAt=(s:Side)=>frame.constraints[s==='L'?'plantL':'plantR']||isReleaseKey(next,keyIndex,s);
+ const heldSides=(['L','R'] as const).filter(fixedAt),feet0=heldSides.map(s=>rig.point(`foot_${s}`));
+ let fixedKneeScheduleFit=true;
  const footOwner=(s:Side)=>{
   if(!fixedAt(s))return key;
   if(frame.constraints[s==='L'?'plantL':'plantR'])return contactStartKey(next,s,key.time)??key;
@@ -217,19 +221,68 @@ export function applySemanticEdit(rig:HumanRig,doc:WorkshopDoc,keyId:string,edit
    break;
   }
   case 'knee':{
-   if(before+deg<-SEMANTIC_TOLERANCE_DEG)reason='已到伸直位（0°），膝不能反向过伸';
-   else if(before+deg>LIMITS.kneeFlexion[1]+SEMANTIC_TOLERANCE_DEG)reason=`膝屈曲上限 ${LIMITS.kneeFlexion[1]}°`;
-   const hip=rig.point(`upperleg01_${side}`),knee=rig.point(`lowerleg01_${side}`),ankle=rig.point(`foot_${side}`);
-   // Hinge from the solved bend plane; a straight leg falls back to the axis
-   // whose positive turn swings the ankle backward (knees flex backward).
-   const thigh=knee.clone().sub(hip),shank=ankle.clone().sub(knee),axis=new Vector3().crossVectors(thigh,shank);
-   if(axis.lengthSq()<1e-8){
-    axis.set(1,0,0).applyQuaternion(world(rig,'root'));
-    const back=new Vector3(0,0,-1).applyQuaternion(world(rig,'root'));
-    if(new Vector3().crossVectors(axis,shank).dot(back)<0)axis.negate();
+   const requested=before+deg,target=Math.max(LIMITS.kneeFlexion[0],Math.min(LIMITS.kneeFlexion[1],requested));
+   if(requested<-SEMANTIC_TOLERANCE_DEG)reason='已到伸直位（0°），膝不能反向过伸';
+   else if(requested>LIMITS.kneeFlexion[1]+SEMANTIC_TOLERANCE_DEG)reason=`膝屈曲上限 ${LIMITS.kneeFlexion[1]}°`;
+   if(fixedAt(side)){
+    // With a fixed ankle and fixed-length bones, knee flexion is determined
+    // by hip-to-ankle distance. Move the pelvis along that axis so the ankle
+    // target and foot orientation stay locked while the requested angle changes.
+    const hip=rig.point(`upperleg01_${side}`),ankle=rig.point(`foot_${side}`),axis=hip.clone().sub(ankle),distance=axis.length();
+    const upper=rig.rest.get(`upperleg01_${side}`)!.distanceTo(rig.rest.get(`lowerleg01_${side}`)!);
+    const lower=rig.rest.get(`lowerleg01_${side}`)!.distanceTo(rig.rest.get(`foot_${side}`)!);
+    if(distance<1e-8)reason='髋与踝重合，无法确定伸腿方向';
+    else{
+     const targetDistance=Math.sqrt(Math.max(0,upper*upper+lower*lower+2*upper*lower*Math.cos(target*DEG)));
+     axis.multiplyScalar((targetDistance-distance)/distance);
+     const targetRootZ=rig.point('root').z+axis.z;
+     key.pose.root.x+=axis.x;key.pose.root.y+=axis.y;key.pose.root.z+=axis.z;
+     // First preserve the displayed pelvis displacement while solving without
+     // the old schedule; then refit against the candidate document's actual
+     // schedule so the preview, commit and later seek all use the same solve.
+     shift=undefined;
+     for(let i=0;i<5;i++){
+      solve();
+      const correction=targetRootZ-rig.point('root').z;
+      if(Math.abs(correction)<1e-8)break;
+      key.pose.root.z+=correction;
+     }
+     const contact=feet0[heldSides.indexOf(side)];
+     let scheduleFit=false;
+     for(let i=0;i<8;i++){
+      const compiled=compileMotion(next,origin),schedule=buildPelvisSchedule(rig,compiled);
+      shift=schedule.passthrough?undefined:schedule.at(key.time);
+      solveEffectiveFrame(rig,frameAtCompiled(compiled,key.time),shift);
+      const angle=measureSemantic(rig,'knee','flexion',side);
+      const drift=Math.max(0,...heldSides.map((s,j)=>rig.point(`foot_${s}`).distanceTo(feet0[j])*1000));
+      if(Math.abs(angle-target)<=.35&&drift<1){scheduleFit=true;break;}
+      if(!contact)break;
+      const hipNow=rig.point(`upperleg01_${side}`),toward=hipNow.clone().sub(contact),length=toward.length();
+      if(length<1e-8)break;
+      const step=Math.max(-.05,Math.min(.05,targetDistance-length));
+      if(Math.abs(step)<1e-7)break;
+      toward.multiplyScalar(step/length);
+      key.pose.root.x+=toward.x;key.pose.root.y+=toward.y;key.pose.root.z+=toward.z;
+     }
+     fixedKneeScheduleFit=scheduleFit;
+     if(!scheduleFit)reason??='自动骨盆排程下无法同时保持膝角与支撑脚位置';
+     solve();
+     carries='膝屈伸时骨盆沿髋—踝方向随动；支撑脚的位置与朝向保持锁定，踝角会随小腿方向变化';
+     keeps='支撑脚与其他关键帧保持不变；只调整选中帧的膝角与骨盆位置';
+    }
+   }else{
+    const hip=rig.point(`upperleg01_${side}`),knee=rig.point(`lowerleg01_${side}`),ankle=rig.point(`foot_${side}`);
+    // Hinge from the solved bend plane; a straight leg falls back to the axis
+    // whose positive turn swings the ankle backward (knees flex backward).
+    const thigh=knee.clone().sub(hip),shank=ankle.clone().sub(knee),axis=new Vector3().crossVectors(thigh,shank);
+    if(axis.lengthSq()<1e-8){
+     axis.set(1,0,0).applyQuaternion(world(rig,'root'));
+     const back=new Vector3(0,0,-1).applyQuaternion(world(rig,'root'));
+     if(new Vector3().crossVectors(axis,shank).dot(back)<0)axis.negate();
+    }
+    // The pole lies in the bend plane, which the hinge keeps; turning it about the knee keeps it there.
+    legFK(side,knee,new Quaternion().setFromAxisAngle(axis.normalize(),deg*DEG));
    }
-   // The pole lies in the bend plane, which the hinge keeps; turning it about the knee keeps it there.
-   legFK(side,knee,new Quaternion().setFromAxisAngle(axis.normalize(),deg*DEG));
    break;
   }
   case 'ankle':{
@@ -293,7 +346,8 @@ export function applySemanticEdit(rig:HumanRig,doc:WorkshopDoc,keyId:string,edit
   keeps='其余关节角保持；只改本帧该腿与相邻帧的支撑标记 / 接触脚位';
  }
  const childSides=edit.part==='legs'?(['L','R'] as const):[side];
- const childAngles=()=>(CHILD_JOINTS[edit.part]??[]).flatMap(([p,m])=>childSides.map(x=>({p,m,x,v:measureSemantic(rig,p,m,x)})));
+ const childJoints=edit.part==='knee'&&fixedAt(side)?[]:CHILD_JOINTS[edit.part]??[];
+ const childAngles=()=>childJoints.flatMap(([p,m])=>childSides.map(x=>({p,m,x,v:measureSemantic(rig,p,m,x)})));
  solveEffectiveFrame(rig,frameAt(doc,key.time,origin),pelvisShift);
  const children0=childAngles();
  solve();
@@ -302,7 +356,7 @@ export function applySemanticEdit(rig:HumanRig,doc:WorkshopDoc,keyId:string,edit
  let actual=after-before;
  actual=((actual+540)%360)-180; // angle readbacks wrap at ±180°
  // Feet the edit deliberately moved are judged by reach instead of drift.
- const footDriftMm=Math.max(0,...planted.map((s,i)=>lifted.includes(s)?0:rig.point(`foot_${s}`).distanceTo(feet0[i])*1000));
+ const footDriftMm=Math.max(0,...heldSides.map((s,i)=>lifted.includes(s)?0:rig.point(`foot_${s}`).distanceTo(feet0[i])*1000));
  const arm=edit.part!=='trunk'&&!leg;
  const targetResidualMm=arm?rig.point(`wrist_${side}`).distanceTo(new Vector3(hand.target.x,hand.target.y,hand.target.z))*1000:undefined;
  // Swing-foot checks: the solver does not clamp a swing sole or the ankle angle.
@@ -321,7 +375,7 @@ export function applySemanticEdit(rig:HumanRig,doc:WorkshopDoc,keyId:string,edit
  }
  if(childMoved&&!reason)reason=`${childMoved.x==='L'?'左':'右'}${SEMANTIC_PART_LABELS[childMoved.p]}被带动 ${childMoved.d.toFixed(1)}°`;
  if(neighbourMm>1&&!reason)reason=`接管接触的相邻关键帧显示姿态变化 ${neighbourMm.toFixed(1)} mm`;
- const residual=actual-deg,ok=Math.abs(residual)<=SEMANTIC_TOLERANCE_DEG&&footDriftMm<1&&soleMm<=5&&neighbourMm<=1&&!childMoved&&!(ankleOut&&edit.part==='ankle');
+ const residual=actual-deg,ok=fixedKneeScheduleFit&&Math.abs(residual)<=SEMANTIC_TOLERANCE_DEG&&footDriftMm<1&&soleMm<=5&&neighbourMm<=1&&!childMoved&&!(ankleOut&&edit.part==='ankle');
  if(!ok&&!reason){
   if(footDriftMm>=1)reason=`支撑脚被带动 ${footDriftMm.toFixed(1)} mm`;
   else if(edit.part==='wrist'&&!next.freeArms){

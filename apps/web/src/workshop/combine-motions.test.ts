@@ -75,17 +75,19 @@ describe('combine saved motions through the production document sampler',()=>{
   expect(()=>combineMotions(a,mirrorDoc(b),{kind:'append',transition:.3},origin())).toThrow(/持拍侧不同/);
  });
  it('carries the grip source bevel and clears an inherited nondefault when that source uses the default facet',()=>{
-  const gripDoc=(bevel?:number)=>{const d=doc('grip');d.keys.forEach(k=>k.constraints.grip=true);if(bevel!==undefined)d.gripBevel=bevel;return d;};
+  const gripDoc=(bevel?:number,tilt?:number)=>{const d=doc('grip');d.keys.forEach(k=>k.constraints.grip=true);if(bevel!==undefined)d.gripBevel=bevel;if(tilt!==undefined)d.gripTilt=tilt;return d;};
   // The bevel follows the doc whose grip survives (policy spreads itself onto
   // the output first), so a shaped facet on the grip source wins even when the
   // policy source carries a different one.
   expect(combineMotions(doc('p'),gripDoc(6),{kind:'append',transition:.3},origin()).gripBevel).toBe(6);
+  expect(combineMotions(doc('p'),gripDoc(6,18),{kind:'append',transition:.3},origin()).gripTilt).toBe(18);
   expect(combineMotions(gripDoc(3),doc('n'),{kind:'blend',weight:.75},origin()).gripBevel).toBe(3);
   // Absent — and an explicit 1, which normalizeDoc folds back to absent — is
   // the canonical default facet: the nondefault bevel inherited from policy
   // must be cleared, not silently kept.
-  const policy=doc('policy');policy.gripBevel=5;
+  const policy=doc('policy');policy.gripBevel=5;policy.gripTilt=16;
   expect(combineMotions(policy,gripDoc(),{kind:'append',transition:.3},origin()).gripBevel).toBeUndefined();
+  expect(combineMotions(policy,gripDoc(),{kind:'append',transition:.3},origin()).gripTilt).toBeUndefined();
   expect(combineMotions(gripDoc(1),policy,{kind:'blend',weight:.75},origin()).gripBevel).toBeUndefined();
   expect(validateDocShape(combineMotions(policy,gripDoc(6),{kind:'append',transition:.3},origin()))).toEqual([]);
  });

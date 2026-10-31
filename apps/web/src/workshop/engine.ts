@@ -1,5 +1,5 @@
 import {webPlatform,type AppPlatform} from '../platform/platform';
-import {AmbientLight,BufferGeometry,CanvasTexture,Color,DirectionalLight,DoubleSide,Float32BufferAttribute,Group,HemisphereLight,Line,LineBasicMaterial,LineDashedMaterial,LineLoop,LineSegments,Mesh,MeshBasicMaterial,MeshStandardMaterial,PerspectiveCamera,Plane,PlaneGeometry,Quaternion,Raycaster,RingGeometry,Scene,SkinnedMesh,SphereGeometry,Sprite,SpriteMaterial,Vector2,Vector3,WebGLRenderer,PCFSoftShadowMap,SRGBColorSpace,ACESFilmicToneMapping,Clock,GridHelper} from 'three';
+import {AmbientLight,BufferGeometry,CanvasTexture,Color,DirectionalLight,DoubleSide,Float32BufferAttribute,Group,HemisphereLight,Line,LineBasicMaterial,LineDashedMaterial,LineLoop,LineSegments,MathUtils,Mesh,MeshBasicMaterial,MeshStandardMaterial,PerspectiveCamera,Plane,PlaneGeometry,Quaternion,Raycaster,RingGeometry,Scene,SkinnedMesh,SphereGeometry,Sprite,SpriteMaterial,Vector2,Vector3,WebGLRenderer,PCFSoftShadowMap,SRGBColorSpace,ACESFilmicToneMapping,Clock,GridHelper} from 'three';
 import {HEAD_ROTATION_LIMITS,RACKET_TIP_LOCAL,RACKET_BEVELS,RACKET_BEVEL_DEFAULT,bevelAnchor} from '@human3d/motion-core';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
@@ -8,7 +8,7 @@ import {attachProp,mountRacket} from '@human3d/motion-core';
 import type {RigInfo,ViewId} from '@human3d/motion-core';
 import type {CompiledMotion,EffectiveFrame,PoseParams,WorkshopDoc,WorkshopKey} from '@human3d/motion-core';
 import {buildPelvisSchedule,compileMotion,contactStartKey,frameAtCompiled,isReleaseKey,parseDoc,serializeDoc,sortedKeys,toV} from '@human3d/motion-core';
-import {analyzePose,solveEffectiveFrame,rotateLegAbout,boundLegTurnForClearance,type Analysis} from '@human3d/motion-core';
+import {analyzePose,applySemanticEdit,boundLegTurnForClearance,LIMITS,measureSemantic,rotateLegAbout,solveEffectiveFrame,type Analysis} from '@human3d/motion-core';
 import type {PelvisSchedule} from '@human3d/motion-core';
 import {ankleYForLift,footGeometry,type FootGeometry,type Side} from '@human3d/motion-core';
 import {bindSceneBackground} from '../theme/scene-background';
@@ -21,7 +21,7 @@ import {bevelBadgeState,BEVEL_BADGE_SCALE} from './bevel-badges';
 export interface WorkshopFrame{time:number;duration:number;playing:boolean;label:string;analysis?:Analysis}
 export interface WorkshopOptions{handles:boolean;trajectories:boolean;balance:boolean;onion:boolean;onionCount:number;onionMode:'keys'|'step';onionStep:number;
  /** Draw the handle's eight bevel numbers (1–8) as labels around the grip.
-  * Display-only: the authored bevel (doc.gripBevel) is what turns the racket,
+  * Display-only: authored bevel and tilt (doc.gripBevel/gripTilt) turn the racket,
   * and this option never touches the document. */
  bevels:boolean;
  /** Show the raw leg pole floats. The knee handle is the everyday control, so
@@ -156,7 +156,7 @@ export class WorkshopEngine{
    * the handle. Created once per side in makeBevelLabels; visibility follows
    * options.bevels && the racket being on screen. */
   private bevelLabels:Sprite[]=[];private bevelSide:'L'|'R'='R';
-  private drag?:{h:Handle;plane:Plane;offset:Vector3;key:WorkshopKey};private docDirty=true;
+  private drag?:{h:Handle;plane:Plane;offset:Vector3;key:WorkshopKey;startPos?:Vector3;bendAxis?:Vector3;kneeFlex?:boolean;kneeFlexActive?:boolean;kneeFootFixed?:boolean;kneeFlexStart?:number;kneeFlexRate?:number;lastFlex?:number;baseDoc?:WorkshopDoc;pelvisShift?:number;protectedFeet?:Partial<Record<Side,Vector3>>};private docDirty=true;
   private deferPelvisSchedule=false;
   /* Compiled-snapshot cache (issue #10 PR-B): one slot, keyed by document
    * identity + content version + compile origin — all three must match.
@@ -200,10 +200,13 @@ export class WorkshopEngine{
   /** The bevel currently rolled into the palm — remounts on change the same way
    * racketSide does. Undefined means the canonical bevel 1. */
   private racketBevel:number|undefined;
+  /** The shaft tilt currently authored for this racket — undefined means 0°. */
+  private racketGripTilt:number|undefined;
   onFrame?:(f:WorkshopFrame)=>void;onReady?:(info:RigInfo)=>void;onError?:(e:Error)=>void;
   /** App hooks: begin edit = pick or auto-insert the key being dragged. */
   onBeginEdit?:(time:number,prefer?:string)=>WorkshopKey|null;
   onDocChanged?:()=>void;onSelectKey?:(id:string)=>void;onSeek?:(time:number)=>void;
+  onEditNotice?:(message:string)=>void;
   /** Fired once when a drag ends — the app persists the doc here so the final
    * pose can't be lost between pointermove re-renders. */
   onEditEnd?:()=>void;
@@ -236,8 +239,8 @@ export class WorkshopEngine{
       this.anatomy=new AnatomySelection(this.host,this.renderer.domElement,this.camera,atlas,event=>this.capturing||!this.ready||!!this.drag||!!this.pick(event));
       this.model.traverse(o=>{if(o instanceof SkinnedMesh){o.castShadow=true;o.receiveShadow=true;o.frustumCulled=false;this.anatomy!.add(o);}});
       this.skinSwap=new SkinSwap(this.model,this.platform);await this.skinSwap.set(this.skin);if(this.disposed)return;
-      this.racket=attachProp(this.rig,'racket',this.getDoc().gripSide==='L'?'L':'R',this.getDoc().gripBevel);
-      this.racketSide=this.getDoc().gripSide==='L'?'L':'R';this.racketBevel=this.getDoc().gripBevel;this.racket.visible=false;
+      this.racket=attachProp(this.rig,'racket',this.getDoc().gripSide==='L'?'L':'R',this.getDoc().gripBevel,this.getDoc().gripTilt);
+      this.racketSide=this.getDoc().gripSide==='L'?'L':'R';this.racketBevel=this.getDoc().gripBevel;this.racketGripTilt=this.getDoc().gripTilt;this.racket.visible=false;
       this.makeBevelLabels(this.racketSide);
       this.footGeo={L:footGeometry(this.rig.rest,'L'),R:footGeometry(this.rig.rest,'R')};
       this.makeHandles();this.makeMarkers();this.makeOnion();
@@ -382,7 +385,37 @@ export class WorkshopEngine{
       ?new Plane(new Vector3(0,1,0),-origin.y)
       :new Plane().setFromNormalAndCoplanarPoint(normal,origin);
     const hit=this.raycaster.ray.intersectPlane(plane,new Vector3())??origin;
-    this.drag={h,plane,offset:origin.clone().sub(hit),key};
+    const editDoc=this.getDoc();
+    const editKeys=sortedKeys(editDoc),editIndex=editKeys.findIndex(item=>item.id===key.id);
+    const kneeFootFixed=!!(h.kind==='knee'&&h.side&&(key.constraints[h.side==='L'?'plantL':'plantR']||isReleaseKey(editDoc,editIndex,h.side)));
+    const kneeFlex=h.kind==='knee'&&!!h.side&&(ev.shiftKey||kneeFootFixed);
+    const protectedFeet:Partial<Record<Side,Vector3>>={};
+    if(kneeFlex)for(const side of ['L','R'] as const){
+      const planted=key.constraints[side==='L'?'plantL':'plantR']||isReleaseKey(editDoc,editIndex,side);
+      if(planted)protectedFeet[side]=this.rig!.point(`foot_${side}`).clone();
+    }
+    const kneeFlexStart=kneeFlex?measureSemantic(this.rig!,'knee','flexion',h.side!):undefined;
+    let bendAxis:Vector3|undefined,kneeFlexRate=240;
+    if(kneeFlex){
+      bendAxis=new Vector3(0,1,0).applyQuaternion(this.camera.quaternion).normalize();
+      if(kneeFootFixed&&kneeFlexStart!==undefined){
+        const hip=this.rig!.point(`upperleg01_${h.side}`),ankle=this.rig!.point(`foot_${h.side}`),knee=this.rig!.point(`lowerleg01_${h.side}`),axis=hip.clone().sub(ankle);
+        const along=axis.lengthSq()>1e-10?MathUtils.clamp(knee.clone().sub(ankle).dot(axis)/axis.lengthSq(),0,1):0;
+        const towardStraight=ankle.clone().addScaledVector(axis,along).sub(knee),view=this.camera.getWorldDirection(new Vector3());
+        towardStraight.addScaledVector(view,-towardStraight.dot(view));
+        const screenDistance=towardStraight.length();
+        if(screenDistance>.005){
+          bendAxis=towardStraight.multiplyScalar(1/screenDistance);
+          // The pointer reaches the straight-leg line at zero flexion. Clamp
+          // the gain so a nearly straight starting pose remains controllable.
+          kneeFlexRate=MathUtils.clamp(kneeFlexStart/screenDistance,90,600);
+        }
+      }
+    }
+    this.drag={h,plane,offset:origin.clone().sub(hit),key,
+      ...(kneeFlex?{startPos:origin.clone(),bendAxis,kneeFlex:true,
+       kneeFlexStart,kneeFlexRate,lastFlex:kneeFlexStart,
+       kneeFootFixed,protectedFeet,baseDoc:JSON.parse(JSON.stringify(editDoc)) as WorkshopDoc,pelvisShift:this.pelvisShiftAt(key.time)}:{})};
     this.setPlaying(false); // editing a pose while playback moves time is incoherent
     this.controls.enabled=false;try{this.renderer.domElement.setPointerCapture(ev.pointerId);}catch{/* synthetic events have no pointer */}
   };
@@ -403,7 +436,92 @@ export class WorkshopEngine{
       case 'poleArm':{(this.drag.h.side==='L'?k.handL:k.handR).pole={x:pos.x,y:pos.y,z:pos.z};break;}
       case 'poleLeg':{(this.drag.h.side==='L'?k.footL:k.footR).pole={x:pos.x,y:pos.y,z:pos.z};break;}
       case 'knee':{
-        const side=this.drag.h.side!,f=side==='L'?k.footL:k.footR,hip=this.rig.point(`upperleg01_${side}`);
+        const drag=this.drag,side=drag.h.side!;
+        if(drag.kneeFlex&&drag.baseDoc&&drag.startPos&&drag.bendAxis&&drag.kneeFlexStart!==undefined){
+          const travel=pos.clone().sub(drag.startPos).dot(drag.bendAxis);
+          const flexDirection=drag.kneeFootFixed?-1:1;
+          const target=Math.max(LIMITS.kneeFlexion[0],Math.min(LIMITS.kneeFlexion[1],drag.kneeFlexStart+travel*(drag.kneeFlexRate??240)*flexDirection));
+          const delta=target-(drag.lastFlex??drag.kneeFlexStart);
+          if(Math.abs(delta)>.05){
+            if(!drag.kneeFlexActive){
+              // Use semantic readback for the first move so joint bounds and
+              // anchored-foot handling match the precision controls.
+              const out=applySemanticEdit(this.rig,drag.baseDoc,drag.key.id,
+                {part:'knee',side,motion:'flexion',degrees:target-drag.kneeFlexStart},this.restRoot(),drag.pelvisShift);
+              if(drag.kneeFootFixed&&!out.report.ok){
+                this.onEditNotice?.(out.report.reason??'另一只支撑脚无法保持在接触点，已拒绝膝部调整。');
+                this.solveCurrent();return;
+              }
+              const candidate=out.doc;
+              const candidateKey=candidate.keys.find(item=>item.id===drag.key.id);
+              if(candidateKey){
+                if(drag.kneeFootFixed){
+                  const foot=side==='L'?candidateKey.pose.footL:candidateKey.pose.footR;
+                  foot.pole={x:pos.x,y:pos.y,z:pos.z};
+                }else{
+                  const hip=this.rig.point(`upperleg01_${side}`),thigh=this.rig.point(`lowerleg01_${side}`).sub(hip),dir=pos.clone().sub(hip);
+                  if(thigh.lengthSq()>1e-10&&dir.lengthSq()>1e-10){
+                    const turn=new Quaternion().setFromUnitVectors(thigh.normalize(),dir.normalize()),geo=this.footGeo?.[side];
+                    const bounded=geo?boundLegTurnForClearance(this.rig,candidateKey.pose,side,hip,turn,geo):turn;
+                    rotateLegAbout(this.rig,candidateKey.pose,side,hip,bounded);
+                  }
+                }
+                const active=this.getDoc();Object.assign(active,candidate);
+                drag.key=active.keys.find(item=>item.id===candidateKey.id)??candidateKey;
+                drag.kneeFlexActive=true;
+                break;
+              }
+            }else{
+              if(drag.kneeFootFixed){
+                const foot=side==='L'?k.footL:k.footR,rootBefore={...k.root},poleBefore={...foot.pole};
+                const hip=this.rig.point(`upperleg01_${side}`),ankle=this.rig.point(`foot_${side}`),axis=hip.clone().sub(ankle),distance=axis.length();
+                if(distance<1e-8){this.onEditNotice?.('髋与踝重合，无法确定伸腿方向。');return;}
+                const upper=this.rig.rest.get(`upperleg01_${side}`)!.distanceTo(this.rig.rest.get(`lowerleg01_${side}`)!);
+                const lower=this.rig.rest.get(`lowerleg01_${side}`)!.distanceTo(this.rig.rest.get(`foot_${side}`)!);
+                const targetDistance=Math.sqrt(Math.max(0,upper*upper+lower*lower+2*upper*lower*Math.cos(target*Math.PI/180)));
+                axis.multiplyScalar((targetDistance-distance)/distance);
+                const targetRootZ=this.rig.point('root').z+axis.z;
+                k.root.x+=axis.x;k.root.y+=axis.y;k.root.z+=axis.z;
+                foot.pole={x:pos.x,y:pos.y,z:pos.z};
+                this.docVer++;this.solveCurrent();
+                for(let i=0;i<5;i++){
+                  const correction=targetRootZ-this.rig.point('root').z;
+                  if(Math.abs(correction)<1e-8)break;
+                  k.root.z+=correction;this.docVer++;this.solveCurrent();
+                }
+                const drift=Math.max(0,...(['L','R'] as const).flatMap(s=>drag.protectedFeet?.[s]?[this.rig!.point(`foot_${s}`).distanceTo(drag.protectedFeet[s]!)*1000]:[]));
+                if(drift>=1){
+                  k.root=rootBefore;foot.pole=poleBefore;this.docVer++;this.solveCurrent();
+                  this.onEditNotice?.(`支撑脚会移动 ${drift.toFixed(1)} mm，已拒绝膝部调整。`);return;
+                }
+                break;
+              }
+              // Subsequent pointer events apply only their angle delta. Keep
+              // the knee interaction responsive instead of re-running the
+              // semantic neighbor checks for every mousemove.
+              const hip=this.rig.point(`upperleg01_${side}`),thigh=this.rig.point(`lowerleg01_${side}`).sub(hip),dir=pos.clone().sub(hip);
+              if(thigh.lengthSq()>1e-10&&dir.lengthSq()>1e-10){
+                const turn=new Quaternion().setFromUnitVectors(thigh.normalize(),dir.normalize()),geo=this.footGeo?.[side];
+                const bounded=geo?boundLegTurnForClearance(this.rig,k,side,hip,turn,geo):turn;
+                rotateLegAbout(this.rig,k,side,hip,bounded);
+                this.docVer++;this.solveCurrent();
+              }
+              const hipAfter=this.rig.point(`upperleg01_${side}`),knee=this.rig.point(`lowerleg01_${side}`),ankle=this.rig.point(`foot_${side}`);
+              const thighAfter=knee.clone().sub(hipAfter),shank=ankle.clone().sub(knee),axis=new Vector3().crossVectors(thighAfter,shank);
+              if(axis.lengthSq()<1e-8){
+                const rootQ=this.rig.bone('root').getWorldQuaternion(new Quaternion());
+                axis.set(1,0,0).applyQuaternion(rootQ);
+                const back=new Vector3(0,0,-1).applyQuaternion(rootQ);
+                if(new Vector3().crossVectors(axis,shank).dot(back)<0)axis.negate();
+              }
+              const bend=new Quaternion().setFromAxisAngle(axis.normalize(),delta*Math.PI/180),geo=this.footGeo?.[side];
+              const bounded=geo?boundLegTurnForClearance(this.rig,k,side,knee,bend,geo):bend;
+              rotateLegAbout(this.rig,k,side,knee,bounded);
+              break;
+            }
+          }
+        }
+        const f=side==='L'?k.footL:k.footR,hip=this.rig.point(`upperleg01_${side}`);
         const doc=this.getDoc(),i=sortedKeys(doc).findIndex(x=>x.id===this.drag!.key.id);
         /* A foot held at its contact (planted, or a release key still drawn at
          * the contact) leaves the knee one DOF — swivel about the hip→ankle
@@ -439,8 +557,11 @@ export class WorkshopEngine{
         if(direction.lengthSq()<1e-10)break;
         const yaw=Math.atan2(direction.x,direction.z)*180/Math.PI;
         const pitch=Math.atan2(-direction.y,Math.hypot(direction.x,direction.z))*180/Math.PI;
+        // solvePose adds -lean * 0.12 to the authored channel. Invert that
+        // compensation so the stored pitch reproduces the direction under the pointer.
+        const authoredPitch=pitch+k.lean*.12;
         k.headYaw=Math.max(HEAD_ROTATION_LIMITS.yaw[0],Math.min(HEAD_ROTATION_LIMITS.yaw[1],yaw));
-        k.headPitch=Math.max(HEAD_ROTATION_LIMITS.pitch[0],Math.min(HEAD_ROTATION_LIMITS.pitch[1],pitch));
+        k.headPitch=Math.max(HEAD_ROTATION_LIMITS.pitch[0],Math.min(HEAD_ROTATION_LIMITS.pitch[1],authoredPitch));
         if(k.headYaw===0)delete k.headYaw;
         if(k.headPitch===0)delete k.headPitch;
         break;
@@ -458,10 +579,39 @@ export class WorkshopEngine{
      * branches and safe on a no-op move — the snapshot recompiles lazily on
      * the next frameAtTime, not here. */
     this.docVer++;
-    this.solveCurrent();this.docDirty=true;this.onDocChanged?.();
+    this.solveCurrent();
+    if(this.drag?.kneeFlex&&this.drag.h.side)this.drag.lastFlex=measureSemantic(this.rig,'knee','flexion',this.drag.h.side);
+    this.docDirty=true;this.onDocChanged?.();
   };
   private onPointerUp=(ev:PointerEvent)=>{
-    if(this.drag){this.drag=undefined;this.controls.enabled=true;try{this.renderer.domElement.releasePointerCapture(ev.pointerId);}catch{/* released */}this.solveCurrent();this.onEditEnd?.();}
+    if(this.drag){
+      const drag=this.drag;this.drag=undefined;this.controls.enabled=true;
+      try{this.renderer.domElement.releasePointerCapture(ev.pointerId);}catch{/* released */}
+      const side=drag.kneeFootFixed?drag.h.side:undefined,contact=side?drag.protectedFeet?.[side]:undefined;
+      const key=drag.kneeFlexActive&&side&&drag.lastFlex!==undefined
+        ?this.getDoc().keys.find(item=>item.id===drag.key.id):undefined;
+      if(this.rig&&key&&side&&contact&&drag.lastFlex!==undefined&&drag.baseDoc){
+        // Re-run the final drag angle from its base doc through the same
+        // schedule-aware semantic path used by the knee slider. Keep the
+        // pointer-driven bend direction while discarding per-move root drift.
+        const active=this.getDoc(),base=JSON.parse(JSON.stringify(drag.baseDoc)) as WorkshopDoc;
+        const baseKey=base.keys.find(item=>item.id===drag.key.id),footName=side==='L'?'footL':'footR';
+        const currentKey=active.keys.find(item=>item.id===drag.key.id);
+        if(baseKey&&currentKey&&drag.kneeFlexStart!==undefined){
+          baseKey.pose[footName].pole={...currentKey.pose[footName].pole};
+          const out=applySemanticEdit(this.rig,base,drag.key.id,
+            {part:'knee',side,motion:'flexion',degrees:drag.lastFlex-drag.kneeFlexStart},this.restRoot(),drag.pelvisShift);
+          if(out.report.ok)Object.assign(active,out.doc);
+          else{
+            Object.assign(active,drag.baseDoc);
+            this.solveCurrent();
+            this.onEditNotice?.(out.report.reason??'自动骨盆排程下无法同时保持膝角与支撑脚，本次膝部拖动已撤销。');
+          }
+          this.docVer++;
+        }else this.solveCurrent();
+      }else this.solveCurrent();
+      this.docDirty=true;this.onDocChanged?.();this.onEditEnd?.();
+    }
   };
   /* ---------- pose evaluation ---------- */
   /** Pelvis hand-frame origin: the rest root, the same origin the solver uses.
@@ -495,21 +645,24 @@ export class WorkshopEngine{
     const schedule=this.drag||this.deferPelvisSchedule
       ?(this.pelvis?.doc===doc?this.pelvis.schedule:undefined)
       :this.scheduleFor(doc);
-    solveEffectiveFrame(this.rig,f,schedule&&!schedule.passthrough?schedule.at(t):undefined);
-    /* Remount on side/bevel change — the frame carries the doc's gripSide and
-     * gripBevel, and both are constants per document, so this fires at most
+    const pelvisShift=this.drag?.kneeFlex&&this.drag.kneeFootFixed
+      ?undefined:schedule&&!schedule.passthrough?schedule.at(t):undefined;
+    solveEffectiveFrame(this.rig,f,pelvisShift);
+    /* Remount on side/bevel/tilt change — the frame carries the doc's gripSide,
+     * gripBevel and gripTilt, all constants per document, so this fires at most
      * once per edit (here, the one place every solve path funnels through,
-     * trajectory and ghost sampling included). The bevel is a roll about the
-     * handle inside the wrist frame: it turns the string bed and nothing the
-     * solver reads, so a remount never changes the trajectory. */
+     * trajectory and ghost sampling included). Bevel changes the string-bed
+     * roll; tilt can move the racket tip. Neither adjustment changes a solved
+     * bone, and the racket is remounted only after the body solve. */
     const side=f.gripSide==='L'?'L':'R';
-    if(this.racket&&(side!==this.racketSide||f.gripBevel!==this.racketBevel)){
-      mountRacket(this.rig,this.racket,side,f.gripBevel);
+    if(this.racket&&(side!==this.racketSide||f.gripBevel!==this.racketBevel||f.gripTilt!==this.racketGripTilt)){
+      mountRacket(this.rig,this.racket,side,f.gripBevel,f.gripTilt);
       this.racketSide=side;
       // The label ring is per side (the left numbering mirrors), so the side
       // change has to redraw it — a bevel-only change leaves the ring alone.
       if(side!==this.bevelSide)this.makeBevelLabels(side);
       this.racketBevel=f.gripBevel;
+      this.racketGripTilt=f.gripTilt;
     }
   }
   /** The pelvis shift the viewport solves time `t` with (undefined = argmin). */

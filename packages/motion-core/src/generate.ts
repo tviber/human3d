@@ -66,7 +66,7 @@ export interface MotionGenRequest{
  /** Called after each real probe evaluation; callback failures propagate. */
  onProgress?:(progress:MotionGenProgress)=>void;
  /** REQUIRED when the doc has contact keys: the RacketGrip Object3D returned
-  * by attachRacket(rig,doc.gripSide), still parented directly to this rig's
+  * by attachRacket(rig,doc.gripSide,doc.gripBevel,doc.gripTilt), still parented directly to this rig's
   * matching wrist. Tip metrics are never silently mapped onto the wrist. */
  tip?:ProbeTip;
 }
@@ -125,6 +125,7 @@ export function subsampleDoc(doc:WorkshopDoc,times:number[],rest:ReadonlyMap<str
  // subsampled copy has to keep the same facet in the palm. `handSpread` needs
  // no carry: it lives in the keys' poses and sampleMotion returns it.
  if(doc.gripBevel!==undefined)out.gripBevel=doc.gripBevel;
+ if(doc.gripTilt!==undefined)out.gripTilt=doc.gripTilt;
  const problems=validateDocShape(out);
  if(problems.length)throw new Error(`subsampleDoc 产出非法文档: ${problems.join('；')}`);
  return out;
@@ -486,10 +487,10 @@ function docGates(ctx:GenMoveContext,src:WorkshopDoc,cand:WorkshopDoc):GenConstr
  rows.push({code:'key-set',ok:sk.length===ck.length&&sk.every((k,i)=>k.id===ck[i].id),
   detail:'关键帧 id 集合与排序一致'});
  rows.push({code:'doc-fields',ok:src.duration===cand.duration&&src.inbetweens===cand.inbetweens
-  &&src.loop===cand.loop&&src.gripSide===cand.gripSide&&src.gripBevel===cand.gripBevel
+  &&src.loop===cand.loop&&src.gripSide===cand.gripSide&&src.gripBevel===cand.gripBevel&&src.gripTilt===cand.gripTilt
   &&src.clavicleLift===cand.clavicleLift&&src.freeArms===cand.freeArms
   &&src.handFrames.L===cand.handFrames.L&&src.handFrames.R===cand.handFrames.R,
-  detail:'duration/inbetweens/loop/handFrames/gripSide/gripBevel/clavicleLift/freeArms 原样'});
+  detail:'duration/inbetweens/loop/handFrames/gripSide/gripBevel/gripTilt/clavicleLift/freeArms 原样'});
  rows.push({code:'constraints-pattern',ok:sk.every((k,i)=>sameConstraints(k,ck[i])),
   detail:'逐键 plantL/plantR/grip/contact 深比较'});
  const pinned=sk.every((k,i)=>{

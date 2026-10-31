@@ -91,7 +91,7 @@ export async function buildPosePackageLocal(doc:unknown,fps:number,env:PackageEn
  const motionId='mot_'+(await digest(canonical(artifactIdPayload(fp,definitionSHA256,env.manifest.manifestSHA256,SOLVER_NAME)))).slice(0,16);
  const meta=workshopMeta({motionId,manifestSHA256:env.manifest.manifestSHA256,bones:env.manifest.bones.length,
   actionId:'workshop-doc',revision:WORKSHOP_REVISION,definitionSHA256,
-  documentName:requestDoc.name,prop:requestDoc.keys.some(k=>k.constraints?.grip),loop:requestDoc.loop,gripSide:requestDoc.gripSide,bevel:requestDoc.gripBevel,
+  documentName:requestDoc.name,prop:requestDoc.keys.some(k=>k.constraints?.grip),loop:requestDoc.loop,gripSide:requestDoc.gripSide,bevel:requestDoc.gripBevel,gripTilt:requestDoc.gripTilt,
   source:'client-supplied WorkshopDoc',license:'caller-owned; service asserts no rights',
   requestFingerprint:fp,fps,duration:requestDoc.duration,keys:requestDoc.keys.length,
   notes:['kinematic solve only — no dynamics validation']});

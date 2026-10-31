@@ -16,7 +16,7 @@ import {createHash} from 'node:crypto';
  * — bump both together. */
 
 /** Must equal WORKSHOP_REVISION in packages/motion-core/src/protocol.ts. */
-export const REVIEW_BUNDLE_REVISION='workshop-doc/v6';
+export const REVIEW_BUNDLE_REVISION='workshop-doc/v8';
 
 /** Sorted-key stable stringify — mirrors canonical() in protocol.ts. */
 export function canonicalJson(value){

@@ -10,6 +10,7 @@ import {RACKET_HANDLE} from './props/racket';
 import {blankDocument,frameAt,parseDoc,serializeDoc,validateDocShape,type FootTarget,type HandTarget,type V3,type WorkshopDoc} from './document';
 import {solveEffectiveFrame} from './solver';
 import {canonical,normalizedRequest} from './protocol';
+import {validateMotionFileShape} from './motion-file';
 import {analyzeProbeFrames,probeFrames} from './quality-probe';
 
 /** WP-D gripSide 侧别参数化 — the whole suite runs the real
@@ -104,6 +105,28 @@ describe('gripSide — parse and normalize',()=>{
   raw.gripSide='B';
   expect(validateDocShape(raw).some(e=>e.includes('gripSide'))).toBe(true);
   expect(()=>parseDoc(JSON.stringify(raw))).toThrow();
+ });
+ it('validates shaft tilt on motion-file prop capabilities',()=>{
+  const envelope=(gripTilt:number)=>({schemaVersion:1,kind:'workshop-motion',id:'tilt',order:0,
+   name:'倾角',english:'TILT',duration:1,description:'',method:'',focus:[],phases:[],
+   capabilities:{prop:{kind:'racket',trail:true,handView:true,gripTilt}},document:{duration:1}});
+  expect(validateMotionFileShape(envelope(-45))).toEqual([]);
+  expect(validateMotionFileShape(envelope(45))).toEqual([]);
+  expect(validateMotionFileShape(envelope(45.01)).some(e=>e.includes('capabilities.prop.gripTilt'))).toBe(true);
+ });
+ it('round-trips the document-level racket tilt and folds its zero default',()=>{
+  const doc=blankDocument(rig.rest,'拍柄倾斜','grip-tilt');
+  doc.gripTilt=22.5;
+  const back=parseDoc(serializeDoc(doc));
+  expect(back.gripTilt).toBe(22.5);
+  expect(frameAt(back,.3,rig.rest.get('root')).gripTilt).toBe(22.5);
+  const zero=JSON.parse(serializeDoc({...doc,gripTilt:0}));
+  expect(parseDoc(JSON.stringify(zero)).gripTilt).toBeUndefined();
+  for(const invalid of [NaN,45.01,-45.01]){
+   const raw=JSON.parse(serializeDoc(doc)) as {gripTilt?:number};raw.gripTilt=invalid;
+   expect(validateDocShape(raw).some(e=>e.includes('gripTilt'))).toBe(true);
+   expect(()=>parseDoc(JSON.stringify(raw))).toThrow();
+  }
  });
  it('folds the side into the request fingerprint, collapsing R spellings',()=>{
   const base=blankDocument(rig.rest,'t','t');
@@ -200,7 +223,7 @@ describe('gripSide — racket mount',()=>{
  it('mounts nondefault bevels as the exact left/right mirror',()=>{
   const doc=symmetricDoc();
   for(const bevel of [2,4,8]){
-   const rR=attachRacket(rig,'R',bevel),rL=attachRacket(rig,'L',bevel);
+   const rR=attachRacket(rig,'R',bevel,23),rL=attachRacket(rig,'L',bevel,23);
    solved(doc,.5);const R={tip:rR.localToWorld(RACKET_TIP_LOCAL.clone()),q:rR.getWorldQuaternion(new Quaternion()),edge:rR.localToWorld(new Vector3(.03,.45,0))};
    // The left mount is the conjugated transform, so a local probe with x≠0
    // corresponds to the x-mirrored local point on the left racket.
@@ -209,6 +232,21 @@ describe('gripSide — racket mount',()=>{
    expect(L.q.angleTo(mirrorQuat(R.q)),`bevel ${bevel} rotation`).toBeLessThan(1e-6);
    rR.removeFromParent();rL.removeFromParent();
   }
+ });
+ it('tilts the racket shaft at the grip without moving the wrist or changing the solved bones',()=>{
+  const doc=symmetricDoc(),base=attachRacket(rig,'R'),tilted=attachRacket(rig,'R',undefined,24);
+  const before=solved(doc,.5);
+  const baseTip=base.localToWorld(RACKET_TIP_LOCAL.clone());
+  const baseQ=base.getWorldQuaternion(new Quaternion());
+  const tiltedDoc={...doc,gripTilt:24};
+  const after=solved(tiltedDoc,.5);
+  const tiltedTip=tilted.localToWorld(RACKET_TIP_LOCAL.clone());
+  expect(tilted.getWorldPosition(new Vector3()).distanceTo(base.getWorldPosition(new Vector3()))).toBeLessThan(1e-9);
+  expect(tiltedTip.distanceTo(baseTip)).toBeGreaterThan(.05);
+  expect(tilted.getWorldQuaternion(new Quaternion()).angleTo(baseQ)).toBeCloseTo(24*Math.PI/180,6);
+  for(const [name,p]of before.pos)expect(after.pos.get(name)!.distanceTo(p),`bone ${name}`).toBeLessThan(1e-9);
+  for(const [name,q]of before.quat)expect(after.quat.get(name)!.angleTo(q),`bone ${name} orientation`).toBeLessThan(1e-7);
+  base.removeFromParent();tilted.removeFromParent();
  });
  it('mounts on wrist_L with the mirrored transform',()=>{
   const doc=symmetricDoc();

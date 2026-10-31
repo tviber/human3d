@@ -154,15 +154,24 @@ try{
  assert.notEqual(headSliders.headPitch??0,headBase.headPitch??0,'head pitch slider did not update the selected key');
  assert.deepEqual((await read()).doc.keys[1].pose.headYaw,headBase.headYaw,'head slider changed a different key');
  await page.getByRole('button',{name:'撤销',exact:true}).click();
+ const afterPitchUndo=(await read()).doc.keys[0].pose;
+ assert.equal(afterPitchUndo.headPitch,headBase.headPitch);
+ assert.equal(afterPitchUndo.headYaw,headSliders.headYaw);
+ await page.getByRole('button',{name:'撤销',exact:true}).click();
  assert.equal((await read()).doc.keys[0].pose.headYaw,headBase.headYaw);
  await page.getByRole('button',{name:'重做',exact:true}).click();
  assert.equal((await read()).doc.keys[0].pose.headYaw,headSliders.headYaw);
+ await page.getByRole('button',{name:'重做',exact:true}).click();
+ assert.equal((await read()).doc.keys[0].pose.headPitch,headSliders.headPitch);
 
  // Drag the visible LEFT wrist on the copied player motion (right hand has
  // a racket/tip handle). Screen coordinates come from the actual handle.
  await page.locator('.ws-cameras').getByRole('button',{name:'正面',exact:true}).click();
  await page.waitForFunction(()=>window.__WS__.view==='front');
  await page.waitForFunction(()=>window.__WS__.handles.find(h=>h.kind==='head')?.mesh.visible===true);
+ const leanControl=page.getByTestId('trunk-lean');
+ await leanControl.focus();await leanControl.press('End');
+ assert.equal((await read()).doc.keys[0].pose.lean,60,'test setup should put the torso in a pronounced forward lean');
  const headBeforeDrag=(await read()).doc.keys[0].pose;
  const headSpot=await page.evaluate(()=>{
   const e=window.__WS__,h=e.handles.find(h=>h.kind==='head');
@@ -172,7 +181,18 @@ try{
  });
  assert(headSpot.visible,'head control point is hidden on the common tab');
  await page.mouse.move(headSpot.x,headSpot.y);await page.mouse.down();
- await page.mouse.move(headSpot.x+40,headSpot.y-28,{steps:8});await page.mouse.up();
+ await page.mouse.move(headSpot.x+40,headSpot.y-28,{steps:8});
+ const headAimError=await page.evaluate(()=>{
+  const e=window.__WS__,h=e.handles.find(h=>h.kind==='head'),parent=e.rig.bone('head').parent;
+  if(!e.drag||!h||!parent)return Infinity;
+  const hit=e.raycaster.ray.intersectPlane(e.drag.plane,h.mesh.position.clone());if(!hit)return Infinity;
+  const neckQ=parent.getWorldQuaternion(h.mesh.quaternion.clone()).invert(),pivot=e.rig.point('head');
+  const desired=hit.add(e.drag.offset).sub(pivot).applyQuaternion(neckQ).normalize();
+  const actual=h.mesh.getWorldPosition(h.mesh.position.clone()).sub(pivot).applyQuaternion(neckQ).normalize();
+  return desired.angleTo(actual)*180/Math.PI;
+ });
+ assert(headAimError<1,`head control point should follow the pointer with a leaned torso (error ${headAimError.toFixed(2)}°)`);
+ await page.mouse.up();
  const headDragged=(await read()).doc.keys[0].pose;
  assert(Math.abs((headDragged.headYaw??0)-(headBeforeDrag.headYaw??0))>.5,'head drag did not change yaw');
  assert(Math.abs((headDragged.headPitch??0)-(headBeforeDrag.headPitch??0))>.5,'head drag did not change pitch');
@@ -251,6 +271,23 @@ try{
  const limbControls=page.getByTestId('limb-controls-L');
  await limbControls.scrollIntoViewIfNeeded();
  await page.screenshot({path:outputFile('limb-controls.png')});
+ // A copied planted frame owns a new contact. Moving that contact by 20 cm
+ // while it remains planted must surface the liftoff guidance in the real UI.
+ await page.getByTestId('keyframe-copy-selected').scrollIntoViewIfNeeded();
+ await page.getByTestId('keyframe-copy-selected').click();
+ const copiedContactDoc=(await read()).doc;
+ const copiedContact=copiedContactDoc.keys.find(k=>k.constraints.replant&&k.constraints.plantL);
+ assert(copiedContact,'copying a planted frame should declare an independent contact');
+ const copiedFootX=copiedContact.pose.footL.target.x;
+ const footTargetX=page.getByTestId('limb-L-leg-target-x');
+ await footTargetX.scrollIntoViewIfNeeded();await footTargetX.focus();
+ for(let i=0;i<40;i++)await footTargetX.press('ArrowRight');
+ const movedContact=(await read()).doc.keys.find(k=>k.id===copiedContact.id);
+ assert(movedContact.pose.footL.target.x-copiedFootX>.19,'the copied contact should move by about 20 cm');
+ const replantWarning=page.getByTestId('replant-foot-warning-L');
+ await replantWarning.scrollIntoViewIfNeeded();
+ assert(await replantWarning.isVisible(),'a large planted recontact move should show lift-off guidance');
+ assert.match(await replantWarning.textContent(),/滑步.*插入离地帧/);
  const finalEdited=await read();
  // Creating the same preset again must stay independent of the edited copy.
  await startButton.click();
@@ -371,6 +408,33 @@ try{
  await page.reload();await ready();
  await reopenPanels(); // reload resets review mode and collapses the panels
  assertRestoredDoc((await read()).doc,authored);
+ // The grip tilt is authored through the common-tab slider. It must turn the
+ // racket itself while leaving the selected pose and wrist solve untouched,
+ // then survive the normal library save/reload path.
+ await page.locator('[data-fold="doc"] summary').click();
+ await page.getByTestId('adjustment-tab-common').click();
+ const gripTilt=page.getByTestId('grip-tilt');
+ const gripState=()=>page.evaluate(()=>{
+  const e=window.__WS__,side=e.getDoc().gripSide==='L'?'L':'R';
+  return {tilt:e.getDoc().gripTilt??0,pose:JSON.stringify(e.getDoc().keys[0].pose),
+   racket:e.racket.quaternion.toArray(),tip:e.racket.localToWorld(e.racket.position.clone().set(0,.61,0)).toArray(),
+   wrist:e.rig.bone(`wrist_${side}`).quaternion.toArray()};
+ });
+ const gripBefore=await gripState();
+ assert.equal(gripBefore.tilt,0);
+ await gripTilt.scrollIntoViewIfNeeded();await gripTilt.focus();await gripTilt.press('ArrowRight');
+ const gripAfter=await gripState();
+ assert.equal(gripAfter.tilt,.5,'grip tilt slider did not write its document value');
+ assert.notDeepEqual(gripAfter.racket,gripBefore.racket,'grip tilt did not rotate the racket');
+ assert(Math.hypot(...gripAfter.tip.map((v,i)=>v-gripBefore.tip[i]))>.001,'grip tilt did not move the racket head');
+ assert.deepEqual(gripAfter.wrist,gripBefore.wrist,'racket adjustment changed the solved wrist rotation');
+ assert.equal(gripAfter.pose,gripBefore.pose,'racket adjustment changed the selected pose');
+ await awaitStoredDoc();
+ await page.screenshot({path:outputFile('grip-tilt.png')});
+ await page.reload();await ready();await reopenPanels();
+ const restoredGrip=await gripState();
+ assert.equal(restoredGrip.tilt,.5,'grip tilt was lost on reload');
+ assert.deepEqual(restoredGrip.racket,gripAfter.racket,'reloaded racket tilt changed');
  // Closed <details> content is not exposed to the accessibility tree, so the
  // preset select and the generator controls need their folds reopened.
  await page.locator('[data-fold="preset"] summary').click();
@@ -399,8 +463,8 @@ try{
  assert.equal(await page.locator('vite-error-overlay').count(),0);
  assert.deepEqual(errors,[]);
  const result={url:page.url(),browser:await browser.version(),identity,
-  checks:{presetList:true,copyParity:true,sourceUnchanged:true,creationUndoRedo:true,presetCopyRename:true,pointerEdit:true,editUndoRedo:true,segmentInterpolation:true,sideTabsAndScroll,limbCoordinateEdits:limbEdits,repeatedCopy:true,reloadSolvedPose:true,wristAxesAfterReload:true,upperArmBehindTorso:true,forearmPivot:true,armUndoRedo:true,freeArmReload:true,generationLock:true,consoleErrors:errors},warnings,
-  screenshots:['segment-interpolation.png','limb-controls.png','free-arm-authoring.png','desktop.png','mobile.png']};
+  checks:{presetList:true,copyParity:true,sourceUnchanged:true,creationUndoRedo:true,presetCopyRename:true,pointerEdit:true,editUndoRedo:true,segmentInterpolation:true,sideTabsAndScroll,limbCoordinateEdits:limbEdits,repeatedCopy:true,reloadSolvedPose:true,wristAxesAfterReload:true,upperArmBehindTorso:true,forearmPivot:true,armUndoRedo:true,freeArmReload:true,gripTilt:true,generationLock:true,consoleErrors:errors},warnings,
+  screenshots:['segment-interpolation.png','limb-controls.png','free-arm-authoring.png','grip-tilt.png','desktop.png','mobile.png']};
  atomicWriteFile(outputFile('result.json'),JSON.stringify(result,null,2));
  console.log(JSON.stringify(result,null,2));
 }finally{await browser.close();}

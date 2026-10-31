@@ -137,8 +137,8 @@ try{
  },{documentUrl:coreModule('document.ts'),solverUrl:coreModule('solver.ts')});
  check('支撑膝角验收使用非透传骨盆排程',scheduleFitEvidence.scheduled!==undefined,JSON.stringify(scheduleFitEvidence));
  check('该中间帧排程修正与自然修正相差超过 1mm',scheduleFitEvidence.delta>.001,JSON.stringify(scheduleFitEvidence));
- check('语义调膝保持脚目标与朝向',JSON.stringify(bent0.keys[0].target)===JSON.stringify(sliderBase.keys[0].target)&&
-   bent0.keys[0].yaw===sliderBase.keys[0].yaw&&bent0.keys[0].pitch===sliderBase.keys[0].pitch);
+ check('语义调膝保持脚目标与朝向',JSON.stringify(bent0.keys[1].target)===JSON.stringify(sliderBase.keys[1].target)&&
+   bent0.keys[1].yaw===sliderBase.keys[1].yaw&&bent0.keys[1].pitch===sliderBase.keys[1].pitch);
  check('语义调膝保持脚踝世界位置',Math.hypot(bent0.ankle[0]-sliderBase.ankle[0],bent0.ankle[1]-sliderBase.ankle[1],bent0.ankle[2]-sliderBase.ankle[2])<.001);
  await page.getByTestId('semantic-commit').click();
  await page.waitForTimeout(150);
@@ -162,8 +162,8 @@ try{
  const moved3=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y,a.z-b.z);
  check('沿伸直方向拖动支撑膝球会减小膝屈曲',planted1.kneeFlex<planted0.kneeFlex-10,
   `${planted0.kneeFlex.toFixed(1)}°→${planted1.kneeFlex.toFixed(1)}°`);
- check('拖动支撑膝球保持脚目标与朝向',JSON.stringify(planted1.keys[0].target)===JSON.stringify(planted0.keys[0].target)&&
-   planted1.keys[0].yaw===planted0.keys[0].yaw&&planted1.keys[0].pitch===planted0.keys[0].pitch);
+ check('拖动支撑膝球保持脚目标与朝向',JSON.stringify(planted1.keys[1].target)===JSON.stringify(planted0.keys[1].target)&&
+   planted1.keys[1].yaw===planted0.keys[1].yaw&&planted1.keys[1].pitch===planted0.keys[1].pitch);
  check('拖动支撑膝球保持脚踝世界位置',moved3(planted1.ankle,planted0.ankle)<.001,
   `Δankle=${(moved3(planted1.ankle,planted0.ankle)*1000).toFixed(2)}mm`);
 

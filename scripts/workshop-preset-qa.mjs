@@ -411,6 +411,7 @@ try{
  // The grip tilt is authored through the common-tab slider. It must turn the
  // racket itself while leaving the selected pose and wrist solve untouched,
  // then survive the normal library save/reload path.
+ await page.locator('[data-fold="doc"] summary').click();
  await page.getByTestId('adjustment-tab-common').click();
  const gripTilt=page.getByTestId('grip-tilt');
  const gripState=()=>page.evaluate(()=>{

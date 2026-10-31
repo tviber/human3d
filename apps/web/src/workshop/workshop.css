@@ -217,6 +217,11 @@
 .ws-semantic-amount{display:grid;grid-template-columns:40px minmax(0,1fr) 40px;align-items:center;gap:8px;margin-top:2px}
 .ws-semantic-amount>button{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;background:var(--pill);color:var(--fg)}
 .ws-semantic-amount input{width:100%;accent-color:var(--fg)}
+.ws-semantic-knee{display:flex;flex-direction:column;gap:6px;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card-2)}
+.ws-semantic-knee label{display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--fg-2)}
+.ws-semantic-knee output{font-variant-numeric:tabular-nums;color:var(--fg);font-weight:600}
+.ws-semantic-knee input{width:100%;accent-color:var(--fg)}
+.ws-semantic-knee small{font-size:10px;line-height:1.6;color:var(--muted)}
 .ws-semantic-steps{display:flex;gap:5px;justify-content:center}
 .ws-semantic-report{display:flex;flex-direction:column;gap:3px;padding:9px 10px;border-radius:8px;background:var(--green-soft);color:var(--green);min-height:38px;font-size:11px}
 .ws-semantic-report small{font-size:10px;color:var(--fg-2)}

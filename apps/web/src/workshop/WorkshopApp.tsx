@@ -290,6 +290,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
    e.onReady=setInfo;
    e.setEditable(false);e.setOptions({trajectories:false,balance:false});
    e.onError=err=>setError(err.message);
+   e.onEditNotice=message=>setHint(message);
    e.onFrame=setFrame;
    e.onSelectKey=setSelected;
    let lastDragSave=0;
@@ -1492,6 +1493,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
         return <div className="ws-limb-side" data-testid={`limb-controls-${side}`} key={side}>
          <div className="ws-sub ws-limb-controls"><h3>{cn}侧四肢姿态精调 <small>IK 目标与弯曲方向</small></h3>
          <p className="ws-note">以下为 IK 末端与方向提示；肘部引导点不直接指定大臂角度。大臂向后摆动请使用上方关节旋转，手部末端会随之移动。</p>
+         <p className="ws-note">支撑脚锁定时，沿膝盖到髋—踝直线方向拖膝盖球可伸直；反方向拖会增加屈曲。脚的位置与朝向保持锁定，骨盆随动。离地腿按住 Shift（⇧）上下拖可调膝屈曲。精确角度可在「语义」页选择「膝 / 小腿」。</p>
          <VectorSliders title={`${cn}前臂（小臂）末端目标`} value={hand.target} testPrefix={`limb-${side}-arm-target`}
           onChange={(axis,value)=>write(hand.target,axis,value)}/>
          <VectorSliders title={`${cn}肘部弯曲引导点`} value={hand.pole} testPrefix={`limb-${side}-arm-pole`}

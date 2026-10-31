@@ -42,7 +42,7 @@
 
 - **Review 不写文档**：`WorkshopEngine.setEditable(false)` 隐藏手柄与触球标记并拒绝编辑拾取（允许只读肌群高亮选择）；时间轴在 Review 下只 seek、不重定时，姿态卡整体 `inert`。桌面和手机均默认 Review，轨迹与重心/支撑叠加默认关闭；进入 Edit 后按需展开语义调整与编辑手柄。抽屉只是 CSS（`.ws-compact`），开关不重建 canvas、不丢相机/编辑状态。
 - **语义命令**走 `applySemanticEdit`（`packages/motion-core/src/semantic-edit.ts`）：白名单 `部位 × 侧别 × 动作 × 度数` → 编码进既有 `PoseParams` 字段（不改 schema）→ 生产 `frameAt → solveEffectiveFrame` → 从求解后的骨骼读回解剖角，返回 `requested/actual/residual/reason`；不足 0.5° 或带动支撑脚即 `ok:false`，界面显示原因，不报成功。输入文档不被修改：预览总从事务开始时的同一基底重算，确认 = 一条撤销记录，取消 = 恢复基底并丢掉该记录。
-- **只动被指令的关节**：髋 / 膝语义是对该关节以下的腿做刚性 FK（`foot.target/pole/yaw/pitch` 一起旋转），肩 / 肘同理（`rotateArmAbout`）；`CHILD_JOINTS` 列出必须不变的子关节角，超过 1.5° 判失败。支撑帧上调腿 = 本帧离地 + 相邻帧接管原接触点（显示姿态逐骨核对 ≤1 mm），并补偿掉被取消支撑后不再施加的自动骨盆后移。
+- **只动被指令的关节**：髋语义与离地膝语义是对该关节以下的腿做刚性 FK（`foot.target/pole/yaw/pitch` 一起旋转），肩 / 肘同理（`rotateArmAbout`）；`CHILD_JOINTS` 列出必须不变的子关节角，超过 1.5° 判失败。膝在支撑 / 释放接触帧屈伸时保持脚目标与朝向不变，按定长双骨几何沿髋—踝轴移动骨盆来改变膝角；踝角随之变化。若另一支撑脚超过可达范围，编辑拒绝且文档不变。髋关节编辑若需移动支撑脚，仍由本帧释放、相邻帧接管原接触点（显示姿态逐骨核对 ≤1 mm）。
 - 「落地」= `groundFoot`：只改本帧，竖直平移整体（自动骨盆后移保持为本帧原值并折算进 `root.z`），支撑腿重新求解；够不到 / 踝超限时拒绝，文档不变。
 - 关节旋转条显示选中帧求解后的绝对角度，不保存组件内增量。**只暴露求解器真能独立兑现的自由度**（三者都经 `frameAt → solveEffectiveFrame` 实测 round-trip）：
   - **大臂**：肩相对 `shoulder01`→`upperarm01` 的 YXZ 三通道（`lift/swing/twist` = X/Y/Z）全部可控，读回残差 0.00°。肩是球关节，`rotateArmAbout` 把世界旋转编码进手目标 / 肘 pole，脚本无关。

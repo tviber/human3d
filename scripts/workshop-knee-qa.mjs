@@ -159,7 +159,7 @@ try{
  await page.mouse.move(straightTarget.end.x,straightTarget.end.y,{steps:8});await page.mouse.up();
  await page.waitForTimeout(150);
  const planted1=await keyState();
- const moved3=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y,a.z-b.z);
+ const moved3=(a,b)=>Math.hypot(...['x','y','z'].map((axis,i)=>(a[axis]??a[i])-(b[axis]??b[i])));
  check('沿伸直方向拖动支撑膝球会减小膝屈曲',planted1.kneeFlex<planted0.kneeFlex-10,
   `${planted0.kneeFlex.toFixed(1)}°→${planted1.kneeFlex.toFixed(1)}°`);
  check('拖动支撑膝球保持脚目标与朝向',JSON.stringify(planted1.keys[1].target)===JSON.stringify(planted0.keys[1].target)&&

@@ -154,9 +154,15 @@ try{
  assert.notEqual(headSliders.headPitch??0,headBase.headPitch??0,'head pitch slider did not update the selected key');
  assert.deepEqual((await read()).doc.keys[1].pose.headYaw,headBase.headYaw,'head slider changed a different key');
  await page.getByRole('button',{name:'撤销',exact:true}).click();
+ const afterPitchUndo=(await read()).doc.keys[0].pose;
+ assert.equal(afterPitchUndo.headPitch,headBase.headPitch);
+ assert.equal(afterPitchUndo.headYaw,headSliders.headYaw);
+ await page.getByRole('button',{name:'撤销',exact:true}).click();
  assert.equal((await read()).doc.keys[0].pose.headYaw,headBase.headYaw);
  await page.getByRole('button',{name:'重做',exact:true}).click();
  assert.equal((await read()).doc.keys[0].pose.headYaw,headSliders.headYaw);
+ await page.getByRole('button',{name:'重做',exact:true}).click();
+ assert.equal((await read()).doc.keys[0].pose.headPitch,headSliders.headPitch);
 
  // Drag the visible LEFT wrist on the copied player motion (right hand has
  // a racket/tip handle). Screen coordinates come from the actual handle.

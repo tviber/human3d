@@ -100,9 +100,10 @@ try{
   const u=e.rig.point('upperleg01_L').sub(e.rig.point('lowerleg01_L'));
   const w=e.rig.point('foot_L').sub(e.rig.point('lowerleg01_L'));
   const internal=Math.acos(Math.max(-1,Math.min(1,u.dot(w)/(u.length()*w.length()))))*180/Math.PI;
-  return {grips:ks.map(k=>k.constraints.grip===true),
+  return {time:e.time,grips:ks.map(k=>k.constraints.grip===true),
    plants:ks.map(k=>({L:k.constraints.plantL===true,R:k.constraints.plantR===true})),
-   keys:ks.map(k=>({id:k.id,time:k.time,pole:{...k.pose.footL.pole},target:{...k.pose.footL.target},yaw:k.pose.footL.yaw,pitch:k.pose.footL.pitch})),
+   keys:ks.map(k=>({id:k.id,time:k.time,pole:{...k.pose.footL.pole},target:{...k.pose.footL.target},yaw:k.pose.footL.yaw,pitch:k.pose.footL.pitch,root:{...k.pose.root}})),
+   hint:document.querySelector('.ws-feedback span')?.textContent??'',
    kneeFlex:180-internal,ankleFlex:measureSemantic(e.rig,'ankle','flexion','L'),
    hip:e.rig.point('upperleg01_L').toArray(),knee:e.rig.point('lowerleg01_L').toArray(),ankle:e.rig.point('foot_L').toArray()};
  },coreModule('semantic-edit.ts'));
@@ -188,7 +189,7 @@ try{
  await page.waitForTimeout(150);
  const free1=await keyState();
  check('离地膝球向上拖动也只增加屈曲角',free1.kneeFlex>free0.kneeFlex+10,
-  `${free0.kneeFlex.toFixed(1)}°→${free1.kneeFlex.toFixed(1)}°`);
+  `${free0.kneeFlex.toFixed(1)}°→${free1.kneeFlex.toFixed(1)}°; time=${free1.time}; keys=${JSON.stringify(free1.keys)}; hint=${free1.hint}`);
  check('离地膝铰链拖动保持踝屈伸角',Math.abs(free1.ankleFlex-free0.ankleFlex)<.5,
   `${free0.ankleFlex.toFixed(1)}°→${free1.ankleFlex.toFixed(1)}°`);
 

@@ -1,5 +1,0 @@
-/* Utilities only — the app's own CSS is the reset. Preflight would restyle
- * every existing control. */
-@layer theme, base, components, utilities;
-@import "tailwindcss/theme.css" layer(theme);
-@import "tailwindcss/utilities.css" layer(utilities);

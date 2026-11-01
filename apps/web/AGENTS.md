@@ -1,6 +1,6 @@
 # AGENTS — @human3d/web
 
-浏览器端：实验室（`src/lab/`）、统一播放源（`src/playback/`）、动作工作台（`src/workshop/`）与两个入口页。
+浏览器端：实验室（`src/lab/`）、统一播放源（`src/playback/`）、动作工作台（`src/workshop/`）、共享已保存动作投影（`src/motions/`）、共享布局样式（`src/layout/`）与两个入口页。
 
 ## 边界（自动强制）
 
@@ -15,7 +15,7 @@
 
 ## 界面
 
-实验室与工作台共用 Magpie 色板（`src/theme/tokens.css`：浅色默认，`prefers-color-scheme: dark` 或 `data-theme="dark"` 切暗色）。控件走 shadcn Nova 形态（`@base-ui/react` + `cva`，`src/components/ui/`），图标 Lucide，进场与对话框用 `motion/react`，桌面三栏用 `react-resizable-panels`（实验室窄于 760px 仍堆叠；工作台在 `COMPACT_QUERY` 下用同一 DOM 改为三维视图 + 底部抽屉，见 `WorkshopApp.tsx`/`workshop.css` 的 `.ws-compact`），工作台动作库排序与时间轴拖键用 `@dnd-kit`，实验室与工作台的界面状态用 Zustand（`src/lab/store.ts`、`src/workshop/ui-store.ts`）。三维画布、求解与播放源不走这套控件。
+实验室与工作台遵循 [`DESIGN.md`](DESIGN.md)，共享中性浅色表面、石墨文字、蓝色交互强调（`src/theme/tokens.css` + `src/redesign.css`）。控件走 Nova 形态（`@base-ui/react`，`src/components/ui/`）；布局样式位于 `src/layout/`，图标 Lucide，进场与对话框用 `motion/react`，桌面三栏用 `react-resizable-panels`（实验室窄于 760px 仍堆叠；工作台在 `COMPACT_QUERY` 下用同一 DOM 改为三维视图 + 底部抽屉，见 `WorkshopApp.tsx`/`workshop.css` 的 `.ws-compact`），工作台动作库排序与时间轴拖键用 `@dnd-kit`，实验室与工作台的界面状态用 Zustand（`src/lab/store.ts`、`src/workshop/ui-store.ts`）。三维画布、求解与播放源不走这套控件。
 
 ## 检索指针
 

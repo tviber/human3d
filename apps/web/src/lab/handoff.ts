@@ -1,5 +1,5 @@
 import type {MotionSpec} from '@human3d/motion-core';
-import {SAVED_MOTION_PREFIX} from '../workshop/library';
+import {SAVED_MOTION_PREFIX} from '../motions/saved-motion';
 
 /** Lab → workshop handoff resolution for the CURRENT motion.
  *

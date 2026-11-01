@@ -101,6 +101,7 @@ try{
   const w=e.rig.point('foot_L').sub(e.rig.point('lowerleg01_L'));
   const internal=Math.acos(Math.max(-1,Math.min(1,u.dot(w)/(u.length()*w.length()))))*180/Math.PI;
   return {grips:ks.map(k=>k.constraints.grip===true),
+   plants:ks.map(k=>({L:k.constraints.plantL===true,R:k.constraints.plantR===true})),
    keys:ks.map(k=>({id:k.id,time:k.time,pole:{...k.pose.footL.pole},target:{...k.pose.footL.target},yaw:k.pose.footL.yaw,pitch:k.pose.footL.pitch})),
    kneeFlex:180-internal,ankleFlex:measureSemantic(e.rig,'ankle','flexion','L'),
    hip:e.rig.point('upperleg01_L').toArray(),knee:e.rig.point('lowerleg01_L').toArray(),ankle:e.rig.point('foot_L').toArray()};
@@ -145,8 +146,19 @@ try{
  check('语义调膝保持脚踝世界位置',Math.hypot(bent0.ankle[0]-sliderBase.ankle[0],bent0.ankle[1]-sliderBase.ankle[1],bent0.ankle[2]-sliderBase.ankle[2])<.001);
  await page.getByTestId('semantic-commit').click();
  await page.waitForTimeout(150);
- await page.evaluate(()=>{const e=window.__WS__;e.setPlaying(false);e.solveCurrent();});
+ const keyCount=await page.locator('.ws-key').count();
+ // Keep one leg planted so this deliberately exercises the angle-only knee
+ // gesture. The fresh document starts in bilateral support, which correctly
+ // routes knee drags to the separate balance gesture instead.
+ for(let i=0;i<keyCount;i++){
+  await page.locator('.ws-key').nth(i).click();
+  await page.getByTestId('adjustment-tab-left').click();
+  const rightBox=page.locator('.ws-check').filter({hasText:'右脚支撑锁定'}).locator('input');
+  if(await rightBox.isChecked())await rightBox.uncheck();
+ }
+ await page.evaluate(()=>{const e=window.__WS__;e.setPlaying(false);e.seek(.1);e.solveCurrent();});
  const planted0=await keyState();
+ check('支撑角度拖动场景只有左脚锁定',planted0.plants.every(p=>p.L&&!p.R),JSON.stringify(planted0.plants));
  const bentSpot=await kneeSpot();
  await page.mouse.move(bentSpot.x,bentSpot.y);await page.mouse.down();
  await page.mouse.move(bentSpot.x,bentSpot.y-50,{steps:8});await page.mouse.up();
@@ -161,7 +173,6 @@ try{
   `Δankle=${(moved3(planted1.ankle,planted0.ankle)*1000).toFixed(2)}mm`);
 
  // ---- 3. free leg: unplant both keys and verify a drag changes only knee flexion
- const keyCount=await page.locator('.ws-key').count();
  for(let i=0;i<keyCount;i++){
   await page.locator('.ws-key').nth(i).click();
   await page.getByTestId('adjustment-tab-left').click();
@@ -170,6 +181,7 @@ try{
  }
  await page.evaluate(()=>{const e=window.__WS__;e.setPlaying(false);e.seek(0);e.solveCurrent();});
  const free0=await keyState();
+ check('离地角度拖动场景左右脚均未锁定',free0.plants.every(p=>!p.L&&!p.R),JSON.stringify(free0.plants));
  const spot1=await kneeSpot();
  await page.mouse.move(spot1.x,spot1.y);await page.mouse.down();
  await page.mouse.move(spot1.x-50,spot1.y-60,{steps:8});await page.mouse.up();

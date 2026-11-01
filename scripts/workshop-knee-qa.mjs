@@ -93,8 +93,8 @@ try{
   return {x:r.left+(p.x+1)/2*r.width,y:r.top+(1-p.y)/2*r.height,visible:h.mesh.visible===true,
    atJoint:h.mesh.position.distanceTo(e.rig.point(`lowerleg01_${side}`))};
  },side);
- const keyState=()=>page.evaluate(async url=>{
-  const {measureSemantic}=await import(url);
+ const keyState=()=>page.evaluate(async({semanticUrl,footUrl})=>{
+  const [{measureSemantic},{footGeometry,footLift}]=await Promise.all([import(semanticUrl),import(footUrl)]);
   const e=window.__WS__;e.setPlaying(false);e.seek(e.time);
   const ks=[...e.getDoc().keys].sort((a,b)=>a.time-b.time);
   const u=e.rig.point('upperleg01_L').sub(e.rig.point('lowerleg01_L'));
@@ -104,9 +104,10 @@ try{
    plants:ks.map(k=>({L:k.constraints.plantL===true,R:k.constraints.plantR===true})),
    keys:ks.map(k=>({id:k.id,time:k.time,pole:{...k.pose.footL.pole},target:{...k.pose.footL.target},yaw:k.pose.footL.yaw,pitch:k.pose.footL.pitch,root:{...k.pose.root}})),
    hint:document.querySelector('.ws-feedback span')?.textContent??'',
+   leftLift:footLift(footGeometry(e.rig.rest,'L'),ks[0].pose.footL.target.y,ks[0].pose.footL.yaw,ks[0].pose.footL.pitch),
    kneeFlex:180-internal,ankleFlex:measureSemantic(e.rig,'ankle','flexion','L'),
    hip:e.rig.point('upperleg01_L').toArray(),knee:e.rig.point('lowerleg01_L').toArray(),ankle:e.rig.point('foot_L').toArray()};
- },coreModule('semantic-edit.ts'));
+ },{semanticUrl:coreModule('semantic-edit.ts'),footUrl:coreModule('foot.ts')});
 
  // ---- 1. knee handles ride the solved joints; raw pole editing is absent
  const spot0=await kneeSpot();
@@ -173,15 +174,24 @@ try{
  check('角度拖动支撑膝球保持脚踝世界位置',moved3(planted1.ankle,planted0.ankle)<.001,
   `Δankle=${(moved3(planted1.ankle,planted0.ankle)*1000).toFixed(2)}mm`);
 
- // ---- 3. free leg: unplant both keys and verify a drag changes only knee flexion
+ // ---- 3. free leg: unplant both keys, raise the swing foot clear of ground,
+ // then verify a drag changes only knee flexion. The new document's default
+ // ankle target puts the sole 35mm below ground, so the semantic edit is
+ // correctly rejected until the real UI's swing-height control clears it.
  for(let i=0;i<keyCount;i++){
   await page.locator('.ws-key').nth(i).click();
   await page.getByTestId('adjustment-tab-left').click();
   const box=page.locator('.ws-check').filter({hasText:'左脚支撑锁定'}).locator('input');
   if(await box.isChecked())await box.uncheck();
  }
+ await page.locator('.ws-key').first().click();
+ await page.getByTestId('adjustment-tab-left').click();
+ const swingLift=page.locator('.ws-slider').filter({hasText:'左脚抬升高度'}).locator('input');
+ for(let i=0;i<24;i++)await swingLift.press('ArrowRight');
+ await page.waitForTimeout(150);
  await page.evaluate(()=>{const e=window.__WS__;e.setPlaying(false);e.seek(0);e.solveCurrent();});
  const free0=await keyState();
+ check('自由膝角度拖动先将离地脚抬出地面',free0.leftLift>=.12,`lift=${(free0.leftLift*1000).toFixed(0)}mm`);
  check('离地角度拖动场景左右脚均未锁定',free0.plants.every(p=>!p.L&&!p.R),JSON.stringify(free0.plants));
  const spot1=await kneeSpot();
  await page.mouse.move(spot1.x,spot1.y);await page.mouse.down();

@@ -428,6 +428,9 @@ try{
  const gripBefore=await gripState();
  assert.equal(gripBefore.tilt,0);
  await gripTilt.scrollIntoViewIfNeeded();await gripTilt.focus();await gripTilt.press('ArrowRight');
+ // The document write marks auxiliary geometry dirty. Let the engine finish
+ // that rebuild and re-solve the playhead pose before reading the live rig.
+ await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  const gripAfter=await gripState();
  assert.equal(gripAfter.tilt,.5,'grip tilt slider did not write its document value');
  assert.notDeepEqual(gripAfter.racket,gripBefore.racket,'grip tilt did not rotate the racket');

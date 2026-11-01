@@ -1,70 +1,87 @@
 import {Box3,BufferGeometry,CatmullRomCurve3,Float32BufferAttribute,Matrix4,SphereGeometry,Vector3} from 'three';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
+import {createHairCardGeometry,type HairCard} from './hair-cards';
 
+export type {HairLock} from './hair-cards';
 type Point=[number,number,number];
-export type HairLock={root:Vector3;tip:Vector3};
+type CardSpec={root:Point;bend:Point;tip:Point;width:number;depth:number;widthAxis:Point;shape?:HairCard['shape']};
 
-/** Solid swept locks fitted to the original scalp; +Z is the face. */
+/**
+ * Deterministic SSJ card layout, authored in scalp-relative units; +Z faces forward.
+ * Cards cover the crown in overlapping swept spikes, with separate forelock,
+ * temple, occipital and nape layers so the silhouette reads from every side.
+ */
+const SSJ_CARDS:readonly CardSpec[]=[
+ // Tall crown spikes.
+ {root:[0,.50,-.14],bend:[-.10,1.55,-.28],tip:[.20,2.72,-.70],width:.58,depth:.24,widthAxis:[1,0,0]},
+ {root:[-.25,.46,-.12],bend:[-.62,1.45,-.30],tip:[-1.02,2.46,-.68],width:.52,depth:.21,widthAxis:[.1,0,1]},
+ {root:[.25,.46,-.12],bend:[.60,1.40,-.34],tip:[1.0,2.42,-.76],width:.52,depth:.21,widthAxis:[.1,0,-1]},
+ {root:[-.46,.32,-.20],bend:[-.88,1.12,-.42],tip:[-1.36,2.00,-.68],width:.48,depth:.20,widthAxis:[0,0,1]},
+ {root:[.46,.32,-.20],bend:[.86,1.08,-.42],tip:[1.34,2.02,-.72],width:.48,depth:.20,widthAxis:[0,0,-1]},
+ {root:[-.14,.35,-.45],bend:[-.38,1.28,-.78],tip:[-.48,2.62,-1.18],width:.50,depth:.22,widthAxis:[1,0,0]},
+ {root:[.14,.35,-.45],bend:[.42,1.27,-.78],tip:[.72,2.56,-1.22],width:.49,depth:.22,widthAxis:[1,0,0]},
+ {root:[-.52,.17,-.34],bend:[-.90,.75,-.55],tip:[-1.22,1.56,-.78],width:.43,depth:.18,widthAxis:[0,0,1]},
+ {root:[.52,.17,-.34],bend:[.90,.77,-.57],tip:[1.24,1.62,-.80],width:.43,depth:.18,widthAxis:[0,0,-1]},
+ {root:[-.66,.02,-.08],bend:[-1.04,.48,-.28],tip:[-1.48,.98,-.50],width:.36,depth:.16,widthAxis:[0,0,1]},
+ {root:[.66,.02,-.08],bend:[1.04,.50,-.30],tip:[1.48,1.02,-.52],width:.36,depth:.16,widthAxis:[0,0,-1]},
+ // Front-facing spikes and swept bangs.
+ {root:[-.38,.66,.42],bend:[-.66,1.24,.45],tip:[-.88,2.12,.10],width:.43,depth:.18,widthAxis:[1,0,0]},
+ {root:[.34,.65,.42],bend:[.66,1.22,.44],tip:[.92,2.08,.08],width:.43,depth:.18,widthAxis:[1,0,0]},
+ {root:[-.36,.68,.62],bend:[-.46,.39,1.02],tip:[-.25,.00,1.18],width:.36,depth:.13,widthAxis:[1,0,0],shape:'triangle'},
+ {root:[.06,.76,.66],bend:[.28,.44,1.06],tip:[.60,.14,1.16],width:.34,depth:.12,widthAxis:[1,0,0],shape:'triangle'},
+ {root:[.54,.54,.54],bend:[.86,.30,.90],tip:[1.00,.04,.96],width:.27,depth:.11,widthAxis:[1,0,0],shape:'triangle'},
+ {root:[-.72,.34,.38],bend:[-1.02,.14,.66],tip:[-1.12,-.12,.82],width:.24,depth:.10,widthAxis:[0,0,1],shape:'triangle'},
+ // Temple and ear locks frame the face without hiding the eyes.
+ {root:[-.87,.06,.26],bend:[-1.06,-.12,.44],tip:[-1.20,-.52,.38],width:.25,depth:.12,widthAxis:[0,0,1],shape:'triangle'},
+ {root:[.87,.06,.26],bend:[1.06,-.12,.44],tip:[1.20,-.52,.38],width:.25,depth:.12,widthAxis:[0,0,-1],shape:'triangle'},
+ // Back and nape layers close the silhouette from behind.
+ {root:[-.48,-.16,-.62],bend:[-.70,.32,-.98],tip:[-.88,.94,-1.24],width:.34,depth:.17,widthAxis:[1,0,0]},
+ {root:[.48,-.16,-.62],bend:[.70,.32,-.98],tip:[.88,.94,-1.24],width:.34,depth:.17,widthAxis:[1,0,0]},
+ {root:[-.18,-.30,-.78],bend:[-.34,.08,-1.12],tip:[-.52,.60,-1.42],width:.28,depth:.14,widthAxis:[1,0,0]},
+ {root:[.18,-.30,-.78],bend:[.34,.08,-1.12],tip:[.56,.62,-1.42],width:.28,depth:.14,widthAxis:[1,0,0]},
+ {root:[0,-.28,-.84],bend:[.04,.06,-1.20],tip:[.22,.72,-1.52],width:.32,depth:.15,widthAxis:[1,0,0]},
+];
+
+/** Fit stylized HairDeck-style cards to the actual upper scalp in the supplied body mesh. */
 export function createSsjHair(body:BufferGeometry){
- body.computeBoundingBox();const top=body.boundingBox!.max.y,position=body.getAttribute('position'),scalp=new Box3(),p=new Vector3();
+ body.computeBoundingBox();
+ const top=body.boundingBox!.max.y,position=body.getAttribute('position'),scalp=new Box3(),p=new Vector3();
  for(let i=0;i<position.count;i++)if(position.getY(i)>top-.105)scalp.expandByPoint(p.fromBufferAttribute(position,i));
+ if(scalp.isEmpty())throw new Error('人体模型缺少可用于贴合超赛发型的头皮顶点');
  const center=scalp.getCenter(new Vector3());center.y=top-.105;
  const radii=scalp.getSize(new Vector3()).multiplyScalar(.5);radii.x+=.003;radii.y=.108;radii.z+=.003;
- const point=(v:Point)=>new Vector3(...v).multiply(radii).add(center);
- const geometries:BufferGeometry[]=[],locks:HairLock[]=[];
- // Broad oval sections swell beyond the root, then taper along a curved comb direction.
- const lock=(root:Point,bend:Point,tip:Point,width:number,depth:number)=>{
-  const curve=new CatmullRomCurve3([point(root),point(bend),point(tip)]),vertices:number[]=[],uv:number[]=[],indices:number[]=[],flex:number[]=[];
-  const id=locks.length;locks.push({root:point(root),tip:point(tip)});
-  // Sample the unmarked gold area; volume and shadows come from the mesh.
-  const steps=12,sides=10,u=new Vector3(),v=new Vector3();
-  for(let k=0;k<steps;k++){
-   const t=k/steps,c=curve.getPoint(t),tangent=curve.getTangent(t).normalize();
-   u.set(1,0,0).addScaledVector(tangent,-tangent.x);
-   if(u.lengthSq()<.01)u.set(0,0,1).addScaledVector(tangent,-tangent.z);
-   u.normalize();v.crossVectors(tangent,u).normalize();
-   const taper=Math.pow(1-t,.7)*(.85+.55*Math.sin(Math.PI*t));
-   for(let j=0;j<=sides;j++){
-    const angle=j/sides*Math.PI*2;
-    p.copy(c).addScaledVector(u,Math.cos(angle)*radii.x*width*taper).addScaledVector(v,Math.sin(angle)*radii.z*depth*taper);
-    vertices.push(p.x,p.y,p.z);uv.push(.50+j/sides*.03,.97+t*.01);flex.push(id,Math.pow(Math.max(0,(t-.2)/.8),2));
-    if(k<steps-1&&j<sides){const a=k*(sides+1)+j,b=a+sides+1;indices.push(a,a+1,b,a+1,b+1,b);}
-   }
-  }
-  const end=vertices.length/3;vertices.push(...point(tip).toArray());uv.push(.515,.98);flex.push(id,1);
-  const start=vertices.length/3;vertices.push(...point(root).toArray());uv.push(.515,.97);flex.push(id,0);
-  for(let j=0;j<sides;j++){const a=(steps-1)*(sides+1)+j;indices.push(a,a+1,end,start,j+1,j);}
-  const geometry=new BufferGeometry();geometry.setAttribute('position',new Float32BufferAttribute(vertices,3));geometry.setAttribute('uv',new Float32BufferAttribute(uv,2));geometry.setAttribute('hairFlex',new Float32BufferAttribute(flex,2));geometry.setIndex(indices);geometry.computeVertexNormals();geometries.push(geometry);
- };
- // FighterZ forehead silhouette + the official S.H.Figuarts 360° crown/ear/nape layers.
- lock([0,.85,.05],[-.2,1.65,-.05],[.28,2.75,-.65],.58,.25);
- lock([0,.75,-.35],[0,1.50,-.55],[.10,2.65,-.75],.60,.50);
- lock([-.38,.65,.55],[-.85,1.45,.45],[-1.0,2.40,-.25],.55,.22);
- lock([.38,.65,.45],[.72,1.55,.15],[.95,2.60,-.55],.54,.22);
- lock([-.73,.35,.35],[-1.12,.95,.05],[-1.32,1.80,-.45],.46,.20);
- lock([.73,.35,.35],[1.10,1.02,0],[1.42,1.95,-.55],.44,.20);
- lock([-.90,.02,.05],[-1.24,.30,-.20],[-1.62,.72,-.65],.35,.25);
- lock([.90,.02,.05],[1.23,.35,-.20],[1.62,.87,-.65],.35,.25);
- lock([0,.45,-.78],[.15,1.40,-1.20],[.48,2.58,-1.02],.60,.25);
- lock([-.55,.42,-.62],[-1.0,1.12,-1.10],[-1.05,2.08,-1.05],.48,.22);
- lock([.55,.42,-.62],[1.0,1.12,-1.10],[1.22,2.15,-1.10],.48,.22);
- lock([-.65,-.10,-.60],[-1.0,.35,-1.02],[-1.28,.98,-1.20],.38,.26);
- lock([.65,-.10,-.60],[1.0,.35,-1.02],[1.28,1.05,-1.20],.38,.26);
- lock([-.43,-.30,-.75],[-.68,-.02,-1.12],[-.85,.48,-1.40],.34,.24);
- lock([.43,-.30,-.75],[.68,-.02,-1.12],[.85,.48,-1.40],.34,.24);
- lock([0,-.34,-.90],[0,.02,-1.25],[.12,.72,-1.48],.40,.25);
- // Three overlapping hooked bangs, ending above the original eyelids.
- lock([-.20,1.0,.45],[-.55,.72,1.05],[-.10,.08,1.22],.34,.13);
- lock([.10,.98,.50],[.45,.70,1.10],[.60,.18,1.23],.25,.11);
- lock([.55,.60,.50],[.88,.38,.85],[.98,0,1.0],.20,.10);
+ const point=(v:Point)=>new Vector3(v[0]*radii.x,v[1]*radii.y,v[2]*radii.z).add(center);
+
+ const cards:HairCard[]=SSJ_CARDS.map(spec=>{
+  const curve=new CatmullRomCurve3([point(spec.root),point(spec.bend),point(spec.tip)],false,'centripetal');
+  const count=13,widthAxis=new Vector3(...spec.widthAxis).normalize();
+  const points=Array.from({length:count},(_,i)=>{
+   const t=i/(count-1),centerline=curve.getPoint(t);
+   const swell=Math.pow(Math.max(0,Math.sin(Math.PI*Math.pow(t,.84))),.72);
+   const profile=Math.max(.018,(.16+.84*swell)*Math.pow(1-t,.18));
+   return {position:centerline,width:spec.width*radii.x*profile,thickness:spec.depth*radii.z*Math.max(.025,profile*.86)};
+  });
+  return {points,shape:spec.shape??'triangle',rootWidthDirection:widthAxis};
+ });
+
+ const {geometry:cardGeometry,locks}=createHairCardGeometry(cards);
+ const cardUv=cardGeometry.getAttribute('uv');
+ for(let i=0;i<cardUv.count;i++)cardUv.setXY(i,.50+cardUv.getX(i)*.03,.97+cardUv.getY(i)*.01);
+ cardUv.needsUpdate=true;
+
+ // Gold cap sits over the scalp; the separate cards create the sharp silhouette and cast shadows.
  const cap=new SphereGeometry(1,32,16,0,Math.PI*2,0,1),capPosition=cap.getAttribute('position'),capUv=cap.getAttribute('uv');
  for(let i=0;i<capPosition.count;i++){
-  const x=capUv.getX(i),y=capUv.getY(i),phi=x*Math.PI*2,front=Math.sin(phi),theta=(1-y)*(1.62-.53*Math.max(0,front)+.36*Math.max(0,-front));
-  // The native crown and occiput are fuller than the upper-scalp ellipsoid.
-  p.set(-Math.cos(phi)*Math.sin(theta),Math.cos(theta)*1.12,Math.sin(phi)*Math.sin(theta)*(front<0?1.22:1)).multiply(radii).add(center);capPosition.setXYZ(i,p.x,p.y,p.z);capUv.setXY(i,.50+x*.03,.97+y*.01);
+  const x=capUv.getX(i),y=capUv.getY(i),phi=x*Math.PI*2,front=Math.sin(phi);
+  const theta=(1-y)*(1.62-.53*Math.max(0,front)+.36*Math.max(0,-front));
+  p.set(-Math.cos(phi)*Math.sin(theta),Math.cos(theta)*1.12,Math.sin(phi)*Math.sin(theta)*(front<0?1.22:1)).multiply(radii).add(center);
+  capPosition.setXYZ(i,p.x,p.y,p.z);capUv.setXY(i,.50+x*.03,.97+y*.01);
  }
- cap.setAttribute('hairFlex',new Float32BufferAttribute(new Float32Array(capPosition.count*2),2));cap.computeVertexNormals();geometries.push(cap);
- const geometry=mergeGeometries(geometries)!;geometries.forEach(g=>g.dispose());geometry.computeBoundingBox();geometry.computeBoundingSphere();
+ cap.setAttribute('hairFlex',new Float32BufferAttribute(new Float32Array(capPosition.count*2),2));
+ cap.computeVertexNormals();cap.computeBoundingBox();cap.computeBoundingSphere();
+ const geometry=mergeGeometries([cap,cardGeometry])!;
+ cap.dispose();cardGeometry.dispose();geometry.computeBoundingBox();geometry.computeBoundingSphere();
+
  const collider=new Matrix4().makeScale(radii.x,radii.y*1.12,radii.z*1.1);collider.setPosition(center);
  return {geometry,locks,collider};
 }

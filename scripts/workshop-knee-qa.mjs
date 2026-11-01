@@ -95,7 +95,8 @@ try{
  },side);
  const keyState=()=>page.evaluate(async url=>{
   const {measureSemantic}=await import(url);
-  const e=window.__WS__,ks=[...e.getDoc().keys].sort((a,b)=>a.time-b.time);
+  const e=window.__WS__;e.setPlaying(false);e.seek(e.time);
+  const ks=[...e.getDoc().keys].sort((a,b)=>a.time-b.time);
   const u=e.rig.point('upperleg01_L').sub(e.rig.point('lowerleg01_L'));
   const w=e.rig.point('foot_L').sub(e.rig.point('lowerleg01_L'));
   const internal=Math.acos(Math.max(-1,Math.min(1,u.dot(w)/(u.length()*w.length()))))*180/Math.PI;
@@ -199,7 +200,7 @@ try{
  await page.waitForTimeout(200);
  st=await keyState();
  check('一次撤销整步还原持拍切换',JSON.stringify(st.grips)===JSON.stringify(noGrip),JSON.stringify(st.grips));
- check('撤销不吞并此前的膝盖拖拽写入',JSON.stringify(st.keys[0].target)===JSON.stringify(free1.target));
+ check('撤销不吞并此前的膝盖拖拽写入',JSON.stringify(st.keys[0].target)===JSON.stringify(free1.keys[0].target));
 
  // ---- 5. finish-frame bilateral knee drags lower the body and rebalance
  // from the bundled forehand through the visible preset-copy flow. The test

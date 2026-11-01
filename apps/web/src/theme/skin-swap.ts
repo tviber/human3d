@@ -1,6 +1,7 @@
-import {Group,Matrix4,Mesh,MeshStandardMaterial,SkinnedMesh,SphereGeometry,SRGBColorSpace,TextureLoader,Vector3,type BufferGeometry,type Object3D,type Texture} from 'three';
+import {Group,Matrix4,Mesh,MeshStandardMaterial,SkinnedMesh,SphereGeometry,SRGBColorSpace,TextureLoader,Vector3,type Object3D,type Texture} from 'three';
+import {GLTFLoader,type GLTF} from 'three/addons/loaders/GLTFLoader.js';
 import {webPlatform,type AppPlatform} from '../platform/platform';
-import {createSsjHair} from './ssj-hair';
+import type {HairLock} from './hair-cards';
 import {HairSpring} from './hair-spring';
 
 export type SkinId='default'|'ssj';
@@ -13,13 +14,26 @@ function skinMaterial(map:Texture,source?:MeshStandardMaterial){
  return material;
 }
 
-/** The scalp mesh and solid locks belong to the head bone, independently of the skin texture. */
-function makeHair(root:Object3D,texture:Texture,local:Matrix4,body:BufferGeometry){
+/** Load the generated head-local card asset and restore Three's custom flex attribute. */
+function makeHair(root:Object3D,texture:Texture,asset:GLTF){
  const head=root.getObjectByName('head');if(!head)throw new Error('人体模型缺少头骨');
- const {geometry,locks,collider}=createSsjHair(body);geometry.applyMatrix4(local);
- for(const lock of locks){lock.root.applyMatrix4(local);lock.tip.applyMatrix4(local);}collider.premultiply(local);
+ let source:Mesh|undefined;asset.scene.traverse(object=>{if(!source&&object instanceof Mesh)source=object;});
+ if(!source)throw new Error('超赛发型 GLB 缺少发片网格');
+ const metadata=source.userData as {hairLocks?:{root:number[];tip:number[]}[];hairCollider?:number[]};
+ if(!metadata.hairLocks?.length||metadata.hairCollider?.length!==16||metadata.hairLocks.some(lock=>lock.root?.length!==3||lock.tip?.length!==3))throw new Error('超赛发型 GLB 缺少弹簧骨骼元数据');
+ const geometry=source.geometry.clone(),flex=geometry.getAttribute('_hairflex')??geometry.getAttribute('hairFlex');
+ const position=geometry.getAttribute('position');
+ if(!flex||!position||flex.count!==position.count)throw new Error('超赛发型 GLB 缺少发片弹性数据');
+ for(let i=0;i<flex.count;i++){
+  const id=flex.getX(i),weight=flex.getY(i);
+  if(!Number.isInteger(id)||id<0||id>=metadata.hairLocks.length||!Number.isFinite(weight)||weight<0||weight>1)throw new Error('超赛发型 GLB 含有无效的弹性数据');
+ }
+ geometry.setAttribute('hairFlex',flex);geometry.deleteAttribute('_hairflex');
+ const locks:HairLock[]=metadata.hairLocks.map(lock=>({root:new Vector3().fromArray(lock.root),tip:new Vector3().fromArray(lock.tip)}));
+ const collider=new Matrix4().fromArray(metadata.hairCollider);
+ geometry.computeBoundingBox();geometry.computeBoundingSphere();
  const hair=new Group();hair.name='ssj-hair';
- const mesh=new Mesh(geometry,skinMaterial(texture));mesh.castShadow=true;mesh.frustumCulled=false;hair.add(mesh);head.add(hair);return {hair,physics:new HairSpring(geometry,locks,collider)};
+ const mesh=new Mesh(geometry,skinMaterial(texture));mesh.name='ssj-hair-cards';mesh.castShadow=true;mesh.frustumCulled=false;hair.add(mesh);head.add(hair);return {hair,physics:new HairSpring(geometry,locks,collider)};
 }
 
 /** Project the generated face detail onto eyeballs in the same rest-space registration. */
@@ -40,7 +54,7 @@ function makeEyes(root:Object3D,texture:Texture,bindPose:Map<string,Matrix4>){
 export class SkinSwap{
  private readonly entries:{mesh:SkinnedMesh;original:MeshStandardMaterial;replacement?:MeshStandardMaterial}[]=[];
  private readonly bindPose=new Map<string,Matrix4>();
- private assets?:Promise<Texture[]>;private textures?:Texture[];private hair?:Group;private eyes:Mesh[]=[];private originalEyes:Mesh[]=[];
+ private assets?:Promise<Texture[]>;private hairAsset?:Promise<GLTF>;private textures?:Texture[];private hair?:Group;private eyes:Mesh[]=[];private originalEyes:Mesh[]=[];
  private hairPhysics?:HairSpring;
  private requested:SkinId='default';private active:SkinId='default';private surface=true;private disposed=false;
  constructor(private readonly root:Object3D,private platform:AppPlatform=webPlatform){
@@ -61,12 +75,17 @@ export class SkinSwap{
   if(this.disposed)return;
   this.requested=skin;
   if(skin==='ssj'){
-   const textures=await(this.assets??=this.load());
+   const texturesPromise=this.assets??=this.load();
+   const hairPromise=this.hair?Promise.resolve<GLTF|undefined>(undefined):this.hairAsset??=this.loadHair();
+   const [textures,hairAsset]=await Promise.all([texturesPromise,hairPromise]);
    if(this.disposed||this.requested!==skin)return;
    for(const entry of this.entries)if(!entry.replacement){
     entry.replacement=skinMaterial(textures[0],entry.original);
    }
-   if(!this.hair){const created=makeHair(this.root,textures[1],this.bindPose.get('head')!.clone().invert(),this.entries[0].mesh.geometry);this.hair=created.hair;this.hairPhysics=created.physics;}
+   if(!this.hair){
+    if(!hairAsset)throw new Error('超赛发型模型尚未加载');
+    const created=makeHair(this.root,textures[1],hairAsset);this.hair=created.hair;this.hairPhysics=created.physics;this.hairAsset=undefined;
+   }
    if(!this.eyes.length)this.eyes=makeEyes(this.root,textures[2],this.bindPose);
   }
   for(const entry of this.entries)entry.mesh.material=skin==='ssj'?entry.replacement!:entry.original;
@@ -83,7 +102,13 @@ export class SkinSwap{
    textures.forEach(t=>t.dispose());this.assets=undefined;throw new Error('超赛贴图加载失败，请重试');
   }
   for(const texture of textures){texture.colorSpace=SRGBColorSpace;texture.flipY=false;texture.anisotropy=4;}
-  textures[1].flipY=true;this.textures=textures;if(this.disposed)textures.forEach(t=>t.dispose());return textures;
+  textures[1].flipY=true;this.textures=textures;
+  if(this.disposed){textures.forEach(t=>t.dispose());this.textures=undefined;}
+  return textures;
+ }
+ private async loadHair(){
+  try{return await new GLTFLoader().loadAsync(this.platform.assetUrl('/models/skins/ssj-hair.glb'));}
+  catch{this.hairAsset=undefined;throw new Error('超赛发型模型加载失败，请重试');}
  }
  setSurfaceVisible(visible:boolean){
   const wasVisible=this.hair?.visible;
@@ -98,5 +123,6 @@ export class SkinSwap{
   this.hair?.traverse(o=>{if(o instanceof Mesh){o.geometry.dispose();(o.material as MeshStandardMaterial).dispose();}});this.hair?.removeFromParent();
   this.eyes.forEach(eye=>{eye.removeFromParent();eye.geometry.dispose();(eye.material as MeshStandardMaterial).dispose();});
   this.originalEyes.forEach(eye=>{eye.visible=true;});this.textures?.forEach(t=>t.dispose());
+  this.textures=undefined;this.assets=undefined;this.hairAsset=undefined;
  }
 }

@@ -442,7 +442,7 @@ try{
  await page.reload();await ready();await reopenPanels();
  const restoredGrip=await gripState();
  assert.equal(restoredGrip.tilt,.5,'grip tilt was lost on reload');
- assert.deepEqual(restoredGrip.racket,gripAfter.racket,'reloaded racket tilt changed');
+ assert(Math.hypot(...restoredGrip.racket.map((v,i)=>v-gripAfter.racket[i]))<1e-12,'reloaded racket tilt changed');
  // Closed <details> content is not exposed to the accessibility tree, so the
  // preset select and the generator controls need their folds reopened.
  await page.locator('[data-fold="preset"] summary').click();

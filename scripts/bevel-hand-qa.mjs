@@ -52,7 +52,7 @@ try{
  await page.waitForFunction(()=>window.__WS__.getDoc().keys.every(k=>k.constraints.grip),null,{timeout:10000});
  await page.getByTestId('display-menu').click();
  await page.getByRole('group',{name:'显示选项'}).getByText('拍柄棱面编号').click();
- await page.getByTestId('display-menu').click();
+ await page.getByRole('button',{name:'关闭显示菜单'}).click({position:{x:2,y:80}});
  await page.waitForFunction(()=>window.__WS__.options.bevels===true,null,{timeout:10000});
  await page.evaluate(()=>{window.__WS__.seek(0);window.__WS__.solveCurrent();});
  await page.waitForTimeout(150);

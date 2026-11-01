@@ -5,9 +5,13 @@ import {Quaternion,Vector3} from 'three';
 
 /** A held prop's handle as the hand wraps it: the wrap radius and where the
  * grip centre sits relative to the palm (metres, palmar forward / normal).
- * Props own their handle (see props/racket.ts); the hand-wrap solver stays
- * prop-agnostic and takes it as an argument. */
+ * Props own their handle (see props/racket.ts); the solver takes its size as an
+ * argument and may also receive the actual mounted orientation. */
 export interface HandleGrip{radius:number;forward:number;normal:number}
+/** Racket-specific orientation data in wrist-local coordinates. When present,
+ * the wrap follows the actual mounted handle instead of assuming it stays in
+ * the palm's un-tilted cross-section. */
+export interface GripHandleFrame{center:Vector3;axis:Vector3;forward:Vector3;normal:Vector3;halfLength:number}
 
 /** Palmar grip frame of one hand in wrist-local rest coordinates (which equal
  * world axes at rest). `forward`/`normal`/`center` are polar vectors — the
@@ -37,22 +41,68 @@ const _gripWq=new Quaternion(),_gripPrev=new Vector3(),_gripDes=new Vector3(),
       _gripDes2=new Vector3(),_gripTurn=new Quaternion(),_gripRest=new Vector3(),
       _gripTarget=new Quaternion(),_gripPt=new Vector3();
 const _gripIdent=new Quaternion();
-export function applyGrip(rig:HumanRig,side:'L'|'R',handle:HandleGrip){
-  const {axis,normal,forward,center}=gripFrame(rig,side,handle);
+const OCTAGON_COS=Array.from({length:8},(_,i)=>Math.cos(Math.PI/8+i*Math.PI/4));
+const OCTAGON_SIN=Array.from({length:8},(_,i)=>Math.sin(Math.PI/8+i*Math.PI/4));
+
+/** A tangent point on the regular octagonal contact envelope. When a joint
+ * origin lies inside the envelope, move it toward the nearest boundary; this
+ * is the same outward fallback the circular solver used at the palm roots. */
+function octagonContact(x:number,y:number,radius:number,winding:number){
+  let inside=true,nearestX=0,nearestY=0,nearestD2=Infinity;
+  for(let i=0;i<8;i++){
+    const j=(i+1)%8,ax=OCTAGON_COS[i]*radius,ay=OCTAGON_SIN[i]*radius,
+      bx=OCTAGON_COS[j]*radius,by=OCTAGON_SIN[j]*radius,
+      ex=bx-ax,ey=by-ay;
+    if(ex*(y-ay)-ey*(x-ax)<-1e-10)inside=false;
+    const u=Math.max(0,Math.min(1,((x-ax)*ex+(y-ay)*ey)/(ex*ex+ey*ey)));
+    const qx=ax+u*ex,qy=ay+u*ey,d2=(x-qx)**2+(y-qy)**2;
+    if(d2<nearestD2){nearestD2=d2;nearestX=qx;nearestY=qy;}
+  }
+  if(inside)return {x:nearestX,y:nearestY};
+
+  // A vertex is tangent from an external point when both adjacent vertices
+  // fall on the same side of the line from that point to the vertex.
+  const pointAngle=Math.atan2(y,x);
+  let bestX=nearestX,bestY=nearestY,bestAngle=Infinity;
+  for(let i=0;i<8;i++){
+    const j=(i+1)%8,k=(i+7)%8,vx=OCTAGON_COS[i]*radius,vy=OCTAGON_SIN[i]*radius,
+      dx=vx-x,dy=vy-y,
+      a=dx*(OCTAGON_SIN[j]*radius-y)-dy*(OCTAGON_COS[j]*radius-x),
+      b=dx*(OCTAGON_SIN[k]*radius-y)-dy*(OCTAGON_COS[k]*radius-x);
+    if(a*b< -1e-12)continue;
+    let delta=Math.atan2(vy,vx)-pointAngle;
+    delta=Math.atan2(Math.sin(delta),Math.cos(delta));
+    const score=Math.abs(delta)+(delta*winding<0?Math.PI:0);
+    if(score<bestAngle){bestAngle=score;bestX=vx;bestY=vy;}
+  }
+  return {x:bestX,y:bestY};
+}
+
+export function applyGrip(rig:HumanRig,side:'L'|'R',handle:HandleGrip,heldFrame?:GripHandleFrame){
+  const base=gripFrame(rig,side,handle),{axis,normal,forward,center}=heldFrame??base;
   const wrist=rig.bone(`wrist_${side}`),wq=wrist.getWorldQuaternion(_gripWq);
   const contactRadius=handle.radius;
   for(let finger=1;finger<=5;finger++){
     let previousDirection:Vector3|undefined;
-    const winding=finger===1?-1:1;
+    // The mounted racket's local +X basis is reflected with its sign reversed
+    // on the left, so the same anatomical wrap requires the opposite winding.
+    const winding=(finger===1?-1:1)*(heldFrame&&side==='L'?-1:1);
     for(let joint=1;joint<=3;joint++){
       const name=`finger${finger}-${joint}_${side}`,bone=rig.bone(name);
       const origin=wrist.worldToLocal(rig.pointInto(name,_gripPt)).sub(center);
-      const x=origin.dot(forward),y=origin.dot(normal),distance=Math.hypot(x,y);
-      const theta=Math.atan2(y,x),alpha=Math.acos(Math.min(1,contactRadius/Math.max(contactRadius,distance)));
-      const tangent=theta+winding*alpha;
-      let dx=contactRadius*Math.cos(tangent)-x,dy=contactRadius*Math.sin(tangent)-y;
-      if(Math.hypot(dx,dy)<1e-8){dx=-Math.sin(theta)*winding;dy=Math.cos(theta)*winding;}
-      let desired=_gripDes.copy(forward).multiplyScalar(dx).addScaledVector(normal,dy).normalize();
+      let desired:Vector3;
+      if(heldFrame){
+        const x=origin.dot(forward),y=origin.dot(normal),axial=Math.max(-heldFrame.halfLength,Math.min(heldFrame.halfLength,origin.dot(axis)));
+        const contact=octagonContact(x,y,contactRadius,winding),deltaAxial=axial-origin.dot(axis);
+        desired=_gripDes.copy(forward).multiplyScalar(contact.x-x).addScaledVector(normal,contact.y-y).addScaledVector(axis,deltaAxial).normalize();
+      }else{
+        const x=origin.dot(forward),y=origin.dot(normal),distance=Math.hypot(x,y);
+        const theta=Math.atan2(y,x),alpha=Math.acos(Math.min(1,contactRadius/Math.max(contactRadius,distance)));
+        const tangent=theta+winding*alpha;
+        let dx=contactRadius*Math.cos(tangent)-x,dy=contactRadius*Math.sin(tangent)-y;
+        if(Math.hypot(dx,dy)<1e-8){dx=-Math.sin(theta)*winding;dy=Math.cos(theta)*winding;}
+        desired=_gripDes.copy(forward).multiplyScalar(dx).addScaledVector(normal,dy).normalize();
+      }
       if(previousDirection){const limit=(joint===3?75:100)*Math.PI/180,angle=previousDirection.angleTo(desired);if(angle>limit){_gripTurn.setFromUnitVectors(previousDirection,desired);_gripTurn.slerp(_gripIdent,1-limit/angle);desired=_gripDes2.copy(previousDirection).applyQuaternion(_gripTurn);}}
       previousDirection=_gripPrev.copy(desired);
       const bi=rig.info.bones.find(b=>b.name===name)!;
@@ -74,12 +124,12 @@ export function applyGrip(rig:HumanRig,side:'L'|'R',handle:HandleGrip){
  *
  * `base` writes the hand pose the wrap blends FROM — the authored hand shape
  * (fist ⇄ open) for the gripping hand. Omitted, it is the legacy relaxed pose
- * (relaxHand + identity thumb), so every pre-existing document solves exactly
- * as before. */
-export function blendGrip(rig:HumanRig,side:'L'|'R',amount:number,handle:HandleGrip,base?:()=>void){
+ * (relaxHand + identity thumb). `heldFrame` optionally supplies the mounted
+ * racket orientation and finite octagonal handle length to follow. */
+export function blendGrip(rig:HumanRig,side:'L'|'R',amount:number,handle:HandleGrip,base?:()=>void,heldFrame?:GripHandleFrame){
   const names:string[]=[];
   for(let finger=1;finger<=5;finger++)for(let joint=1;joint<=3;joint++)names.push(`finger${finger}-${joint}_${side}`);
-  applyGrip(rig,side,handle);
+  applyGrip(rig,side,handle,heldFrame);
   const grip=names.map(n=>rig.bone(n).quaternion.clone());
   if(base)base();
   else{

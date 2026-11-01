@@ -3,6 +3,7 @@ import {HumanRig} from './rig';
 import {blendGrip} from './grip';
 import {applyHandShape} from './hand-shape';
 import {PROPS} from './props';
+import {racketGripFrame} from './props/racket';
 import {DEG,LIMITS,angleAt,pelvisDorsiCorrection,solveTwoBone,type DorsiLeg} from './kinematics';
 import type {EffectiveFrame,PoseParams,KeyConstraints,SupportWeights} from './document';
 import {toV} from './document';
@@ -18,6 +19,8 @@ export interface SolveState{support?:SupportWeights;gripAmount?:number;clavicleL
  /** Which hand grips (finger wrap + racket mount + clavicle assist). Absent
   * means 'R' — the pre-WP-D behaviour every existing caller relied on. */
  gripSide?:Side;
+ /** Racket mounting orientation shared with the hand-wrap solver. */
+ gripBevel?:number;gripTilt?:number;
  /** Posterior shift (m) applied instead of this frame's argmin. Absent, or
   * within 1e-9 m of the argmin, leaves the historical solve untouched. */
  pelvisShift?:number}
@@ -147,7 +150,8 @@ export function solvePose(rig:HumanRig,p:PoseParams,c:KeyConstraints,state:Solve
    * so every pre-existing document keeps its exact trajectory. */
   const other=gripSide==='R'?'L':'R';
   const spread=(side:Side)=>applyHandShape(rig,side,p.handSpread?.[side]);
-  blendGrip(rig,gripSide,gripAmount,PROPS.racket.handle,()=>spread(gripSide));
+  const heldFrame=racketGripFrame(rig,gripSide,state.gripBevel,state.gripTilt);
+  blendGrip(rig,gripSide,gripAmount,PROPS.racket.handle,()=>spread(gripSide),heldFrame);
   spread(other);
   rig.syncWorld();
   // Keep the solver's existing lean compensation, then add authored head
@@ -161,7 +165,7 @@ export function solvePose(rig:HumanRig,p:PoseParams,c:KeyConstraints,state:Solve
 /** The single solve entry for a sampled document frame: support fades, the
  * grip ramp and the clavicle assist all come from the frame, never re-derived. */
 export function solveEffectiveFrame(rig:HumanRig,f:EffectiveFrame,pelvisShift?:number){
-  return solvePose(rig,f.pose,f.constraints,{support:f.support,gripAmount:f.gripAmount,clavicleLift:f.clavicleLift,freeArms:f.freeArms,gripSide:f.gripSide,pelvisShift});
+  return solvePose(rig,f.pose,f.constraints,{support:f.support,gripAmount:f.gripAmount,clavicleLift:f.clavicleLift,freeArms:f.freeArms,gripSide:f.gripSide,gripBevel:f.gripBevel,gripTilt:f.gripTilt,pelvisShift});
 }
 
 /** Ankle dorsiflexion (degrees) of the solved rig, from the shank direction

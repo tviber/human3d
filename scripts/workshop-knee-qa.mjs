@@ -5,12 +5,13 @@ import path from 'node:path';
 import {resolveOutputDir,assertTrackedWriteAllowed,atomicWriteFile,ensureOutputDir} from './lib/qa-output.mjs';
 import {verifyWebIdentity} from './lib/worktree-check.mjs';
 
-// Knee-handle drags, the per-key racket toggle and the leg-pole opt-in
-// through the REAL workshop UI (issue #37). Everything is driven by visible
-// controls and real pointer events — 新建, the constraint checkboxes, the
-// display menu, the quick-action buttons, undo — never by calling engine
-// setters, so the shipped write path is what gets tested. Reads of
-// window.__WS__ only observe scene/rig state after a control drove it.
+// Knee-angle handle drags, double-support balance drags, the per-key racket
+// toggle, and removal of raw knee-pole editing through the REAL workshop UI.
+// Everything is driven by visible controls and real pointer events — 新建,
+// preset selection, the constraint checkboxes, quick-action buttons, undo —
+// never by calling engine setters, so the shipped write path is what gets
+// tested. Reads of window.__WS__ only observe scene/rig state after a control
+// drove it.
 //
 //   npm run dev &   (then)   sh scripts/check-process-limit.sh && node scripts/workshop-knee-qa.mjs
 const coreModule=p=>`/@fs/${path.resolve('packages/motion-core/src',p)}`;
@@ -80,37 +81,38 @@ try{
  await movePitch('ArrowRight',12);
  await page.waitForTimeout(100);
  check('脚俯仰回到平放时身体恢复原高度',Math.abs((await footPitchState()).rootY-pitchBase.rootY)<1e-6);
- await openFold('[data-fold="doc"]');
- const durationInput=page.getByRole('spinbutton',{name:/^时长 s/});
+ const durationInput=page.getByRole('spinbutton',{name:'动作总时长（秒）'});
  await durationInput.fill('0.2');await durationInput.press('Enter');await page.waitForTimeout(100);
  await openFold('[data-fold="keys"]');
  await page.getByTestId('keyframe-insert-after').click();
  await page.waitForFunction(()=>window.__WS__?.getDoc().keys.length===3,{timeout:10000});
 
- const kneeSpot=()=>page.evaluate(()=>{
-  const e=window.__WS__,h=e.handles.find(x=>x.kind==='knee'&&x.side==='L');
+ const kneeSpot=(side='L')=>page.evaluate(side=>{
+  const e=window.__WS__,h=e.handles.find(x=>x.kind==='knee'&&x.side===side);
   const p=h.mesh.position.clone().project(e.camera),r=e.renderer.domElement.getBoundingClientRect();
   return {x:r.left+(p.x+1)/2*r.width,y:r.top+(1-p.y)/2*r.height,visible:h.mesh.visible===true,
-   atJoint:h.mesh.position.distanceTo(e.rig.point('lowerleg01_L'))};
- });
- const keyState=()=>page.evaluate(()=>{
+   atJoint:h.mesh.position.distanceTo(e.rig.point(`lowerleg01_${side}`))};
+ },side);
+ const keyState=()=>page.evaluate(async url=>{
+  const {measureSemantic}=await import(url);
   const e=window.__WS__,ks=[...e.getDoc().keys].sort((a,b)=>a.time-b.time);
   const u=e.rig.point('upperleg01_L').sub(e.rig.point('lowerleg01_L'));
   const w=e.rig.point('foot_L').sub(e.rig.point('lowerleg01_L'));
   const internal=Math.acos(Math.max(-1,Math.min(1,u.dot(w)/(u.length()*w.length()))))*180/Math.PI;
   return {grips:ks.map(k=>k.constraints.grip===true),
    keys:ks.map(k=>({id:k.id,time:k.time,pole:{...k.pose.footL.pole},target:{...k.pose.footL.target},yaw:k.pose.footL.yaw,pitch:k.pose.footL.pitch})),
-   kneeFlex:180-internal,
+   kneeFlex:180-internal,ankleFlex:measureSemantic(e.rig,'ankle','flexion','L'),
    hip:e.rig.point('upperleg01_L').toArray(),knee:e.rig.point('lowerleg01_L').toArray(),ankle:e.rig.point('foot_L').toArray()};
- });
- const poleLegVis=()=>page.evaluate(()=>window.__WS__.handles.filter(x=>x.kind==='poleLeg').map(h=>h.mesh.visible===true));
+ },coreModule('semantic-edit.ts'));
 
- // ---- 1. knee handles ride the solved joints; pole floats hidden by default
+ // ---- 1. knee handles ride the solved joints; raw pole editing is absent
  const spot0=await kneeSpot();
  check('膝盖拖点显示且贴在左膝关节上',spot0.visible&&spot0.atJoint<1e-6,`dist=${spot0.atJoint.toFixed(4)}`);
- check('膝极点浮点默认隐藏（显示菜单可开）',(await poleLegVis()).every(v=>v===false));
+ await page.getByTestId('adjustment-tab-left').click();
+ check('膝极点手柄和膝部 XYZ 输入已移除',!(await page.evaluate(()=>window.__WS__.handles.some(h=>h.kind==='poleLeg')))&&
+  await page.getByTestId('limb-L-leg-pole-x').count()===0&&await page.getByTestId('limb-L-leg-pole-y').count()===0&&await page.getByTestId('limb-L-leg-pole-z').count()===0);
 
- // ---- 2. a planted knee can be adjusted precisely, then dragged toward straight
+ // ---- 2. a planted knee uses the angle slider and the same one-axis drag path
  const sliderBase=await keyState();
  await page.getByTestId('adjustment-tab-semantic').click();
  await page.getByTestId('semantic-part-knee').click();
@@ -145,31 +147,19 @@ try{
  await page.evaluate(()=>{const e=window.__WS__;e.setPlaying(false);e.solveCurrent();});
  const planted0=await keyState();
  const bentSpot=await kneeSpot();
- const straightTarget=await page.evaluate(()=>{
-  const e=window.__WS__,hip=e.rig.point('upperleg01_L'),ankle=e.rig.point('foot_L'),knee=e.rig.point('lowerleg01_L');
-  const axis=hip.clone().sub(ankle),along=axis.lengthSq()>1e-10?Math.max(0,Math.min(1,knee.clone().sub(ankle).dot(axis)/axis.lengthSq())):0;
-  const closest=ankle.clone().addScaledVector(axis,along),toward=closest.sub(knee),view=e.camera.getWorldDirection(axis.clone());
-  toward.addScaledVector(view,-toward.dot(view));
-  const distance=toward.length();if(distance<.005)return null;
-  const end=knee.clone().addScaledVector(toward,1.5),project=p=>{const q=p.project(e.camera),r=e.renderer.domElement.getBoundingClientRect();return {x:r.left+(q.x+1)*r.width/2,y:r.top+(1-q.y)*r.height/2};};
-  return {start:project(knee),end:project(end),distance};
- });
- if(!straightTarget)throw new Error('planted knee bend does not project to a usable straightening drag direction');
  await page.mouse.move(bentSpot.x,bentSpot.y);await page.mouse.down();
- await page.mouse.move(straightTarget.end.x,straightTarget.end.y,{steps:8});await page.mouse.up();
+ await page.mouse.move(bentSpot.x,bentSpot.y-50,{steps:8});await page.mouse.up();
  await page.waitForTimeout(150);
  const planted1=await keyState();
  const moved3=(a,b)=>Math.hypot(...['x','y','z'].map((axis,i)=>(a[axis]??a[i])-(b[axis]??b[i])));
- check('沿伸直方向拖动支撑膝球会减小膝屈曲',planted1.kneeFlex<planted0.kneeFlex-10,
+ check('向上拖动支撑膝球会增加膝屈曲',planted1.kneeFlex>planted0.kneeFlex+10,
   `${planted0.kneeFlex.toFixed(1)}°→${planted1.kneeFlex.toFixed(1)}°`);
- check('拖动支撑膝球保持脚目标与朝向',JSON.stringify(planted1.keys[1].target)===JSON.stringify(planted0.keys[1].target)&&
+ check('角度拖动支撑膝球保持脚目标与朝向',JSON.stringify(planted1.keys[1].target)===JSON.stringify(planted0.keys[1].target)&&
    planted1.keys[1].yaw===planted0.keys[1].yaw&&planted1.keys[1].pitch===planted0.keys[1].pitch);
- check('拖动支撑膝球保持脚踝世界位置',moved3(planted1.ankle,planted0.ankle)<.001,
+ check('角度拖动支撑膝球保持脚踝世界位置',moved3(planted1.ankle,planted0.ankle)<.001,
   `Δankle=${(moved3(planted1.ankle,planted0.ankle)*1000).toFixed(2)}mm`);
 
- // ---- 3. free leg: unplant both keys' left foot through the real constraint
- // row, then the knee drag takes the rigid-FK branch (key 0 is free, not a
- // release key, once key 1 is also unplanted)
+ // ---- 3. free leg: unplant both keys and verify a drag changes only knee flexion
  const keyCount=await page.locator('.ws-key').count();
  for(let i=0;i<keyCount;i++){
   await page.locator('.ws-key').nth(i).click();
@@ -183,18 +173,11 @@ try{
  await page.mouse.move(spot1.x,spot1.y);await page.mouse.down();
  await page.mouse.move(spot1.x-50,spot1.y-60,{steps:8});await page.mouse.up();
  await page.waitForTimeout(150);
- const free1=await page.evaluate(async({url})=>{
-  const e=window.__WS__,k=[...e.getDoc().keys].sort((a,b)=>a.time-b.time)[0];
-  const {footLift}=await import(url);
-  return {target:{...k.pose.footL.target},
-   lift:footLift(e.footGeometry('L'),k.pose.footL.target.y,k.pose.footL.yaw,k.pose.footL.pitch),
-   hip:e.rig.point('upperleg01_L').toArray(),knee:e.rig.point('lowerleg01_L').toArray(),ankle:e.rig.point('foot_L').toArray()};
- },{url:coreModule('foot.ts')});
- const flex=s=>{const u=[s.hip[0]-s.knee[0],s.hip[1]-s.knee[1],s.hip[2]-s.knee[2]],w=[s.ankle[0]-s.knee[0],s.ankle[1]-s.knee[1],s.ankle[2]-s.knee[2]];const c=(u[0]*w[0]+u[1]*w[1]+u[2]*w[2])/(Math.hypot(...u)*Math.hypot(...w));return Math.acos(Math.max(-1,Math.min(1,c)))*57.2958;};
- check('离地拖膝移动脚目标（刚性 FK 分支）',moved3(free1.target,free0.keys[0].target)>.005,`Δ=${moved3(free1.target,free0.keys[0].target).toFixed(3)}m`);
- check('离地拖膝保持膝屈曲角',Math.abs(flex(free1)-flex({hip:free0.hip,knee:free0.knee,ankle:free0.ankle}))<.5,
-  `${flex({hip:free0.hip,knee:free0.knee,ankle:free0.ankle}).toFixed(1)}°→${flex(free1).toFixed(1)}°`);
- check('离地拖膝脚底不越触地容差带',free1.lift>=-0.02-1e-6,`lift=${free1.lift.toFixed(4)}`);
+ const free1=await keyState();
+ check('离地膝球向上拖动也只增加屈曲角',free1.kneeFlex>free0.kneeFlex+10,
+  `${free0.kneeFlex.toFixed(1)}°→${free1.kneeFlex.toFixed(1)}°`);
+ check('离地膝铰链拖动保持踝屈伸角',Math.abs(free1.ankleFlex-free0.ankleFlex)<.5,
+  `${free0.ankleFlex.toFixed(1)}°→${free1.ankleFlex.toFixed(1)}°`);
 
  // ---- 4. 本帧持拍/本帧放下 toggles the selected key only; one undo restores
  await page.locator('.ws-key').nth(0).click();
@@ -218,15 +201,80 @@ try{
  check('一次撤销整步还原持拍切换',JSON.stringify(st.grips)===JSON.stringify(noGrip),JSON.stringify(st.grips));
  check('撤销不吞并此前的膝盖拖拽写入',JSON.stringify(st.keys[0].target)===JSON.stringify(free1.target));
 
- // ---- 5. 膝极点 opt-in through the display menu
- await page.getByTestId('display-menu').click();
- await page.locator('.ws-check').filter({hasText:'膝极点'}).locator('input').check();
- await page.waitForTimeout(150);
- check('开启膝极点选项后浮点可见',(await poleLegVis()).every(v=>v===true));
- await page.locator('.ws-check').filter({hasText:'膝极点'}).locator('input').uncheck();
- await page.getByRole('button',{name:'关闭显示菜单'}).click();
- await page.waitForTimeout(150);
- check('关闭膝极点选项后浮点再次隐藏',(await poleLegVis()).every(v=>v===false));
+ // ---- 5. finish-frame bilateral knee drags lower the body and rebalance
+ // from the bundled forehand through the visible preset-copy flow. The test
+ // uses the same solved rig to identify which knee is forward/back, then
+ // drags those visible knee handles with actual pointer events.
+ await openFold('[data-fold="preset"]');
+ await page.getByLabel('初始动作预设').selectOption('forehand');
+ await page.getByLabel('新动作名称').fill('QA 收拍膝盖联动');
+ await page.locator('.ws-preset-start').click();
+ await page.waitForFunction(()=>window.__WS__?.getDoc().name==='QA 收拍膝盖联动',null,{timeout:10000});
+ const finishIndex=await page.evaluate(()=>[...window.__WS__.getDoc().keys].sort((a,b)=>a.time-b.time).findIndex(k=>Math.abs(k.time-5.2)<.001));
+ if(finishIndex<0)throw new Error('forehand preset copy is missing its 5.2s finish frame');
+ await page.locator('.ws-key').nth(finishIndex).click();
+ await page.getByTestId('adjustment-tab-semantic').click();
+ const balanceState=()=>page.evaluate(async({semanticUrl,documentUrl,solverUrl})=>{
+  const [{kneeBalanceSides,measureSemantic},{compileMotion,frameAtCompiled},{analyzePose}]=await Promise.all([
+   import(semanticUrl),import(documentUrl),import(solverUrl)]);
+  const e=window.__WS__,doc=e.getDoc(),keys=[...doc.keys].sort((a,b)=>a.time-b.time),key=keys.at(-1);
+  const compiled=compileMotion(doc,e.restRoot()),frame=frameAtCompiled(compiled,e.time);
+  const analysis=analyzePose(e.rig,frame.pose,frame.constraints,e.racket);
+  const balancePose=structuredClone(key.pose);balancePose.root.y=0;balancePose.lean=0;
+  const vec=v=>[v.x,v.y,v.z],targetResidual=(side)=>{
+   const actual=e.rig.point(`wrist_${side}`),target=frame.pose[`hand${side}`].target;
+   return Math.hypot(actual.x-target.x,actual.y-target.y,actual.z-target.z);
+  };
+  return {time:e.time,plants:{L:key.constraints.plantL,R:key.constraints.plantR},grip:frame.constraints.grip===true,
+   racketPresent:!!e.racket,sides:kneeBalanceSides(e.rig,frame,key.constraints),
+   rootY:e.rig.point('root').y,comY:analysis.com.y,lean:frame.pose.lean,racketTip:vec(analysis.racketTip),
+   otherPoseChannels:balancePose,
+   feet:{L:vec(e.rig.point('foot_L')),R:vec(e.rig.point('foot_R'))},
+   targets:{L:targetResidual('L'),R:targetResidual('R')},
+   kneeFlex:{L:measureSemantic(e.rig,'knee','flexion','L'),R:measureSemantic(e.rig,'knee','flexion','R')},
+   supportSlip:Object.fromEntries(analysis.items.filter(x=>x.code.startsWith('support-slip-')).map(x=>[x.code,x.value]))};
+ },{semanticUrl:coreModule('semantic-edit.ts'),documentUrl:coreModule('document.ts'),solverUrl:coreModule('solver.ts')});
+ const dragKneeDown=async(side,pixels=80)=>{
+  const spot=await kneeSpot(side);
+  if(!spot.visible||spot.atJoint>.002)throw new Error(`${side} knee handle is unavailable or detached`);
+  // Grab just outside the tiny 2 cm sphere to cover the mouse hit margin,
+  // then drag by real pointer events like an imprecise everyday interaction.
+  const grabX=spot.x+14;
+  await page.mouse.move(grabX,spot.y);await page.mouse.down();
+  await page.mouse.move(grabX,spot.y+pixels,{steps:8});await page.mouse.up();
+  await page.waitForTimeout(150);
+ };
+ const stance0=await balanceState();
+ check('正手收拍末帧左右脚均锁定支撑',stance0.time===5.2&&stance0.plants.L===true&&stance0.plants.R===true,
+  `t=${stance0.time}, plantL=${stance0.plants.L}, plantR=${stance0.plants.R}`);
+ check('收拍握拍目标仍挂接球拍',stance0.grip&&stance0.racketPresent,`grip=${stance0.grip}, racket=${stance0.racketPresent}`);
+ check('按身体前后方向识别收拍的后膝与前膝',stance0.sides?.back==='R'&&stance0.sides?.front==='L',JSON.stringify(stance0.sides));
+ if(!stance0.sides)throw new Error('forehand finish does not qualify for the double-support balance gesture');
+ await dragKneeDown(stance0.sides.back);
+ const backKneeDown=await balanceState();
+ const drift3=(a,b)=>Math.hypot(...['x','y','z'].map((axis,i)=>(a[axis]??a[i])-(b[axis]??b[i])));
+ check('下拖后膝降低骨盆与整体重心并带动躯干后倾',backKneeDown.rootY<stance0.rootY-.005&&
+  backKneeDown.comY<stance0.comY-.003&&backKneeDown.lean<stance0.lean-2,
+  `rootY ${stance0.rootY.toFixed(3)}→${backKneeDown.rootY.toFixed(3)}, COM ${stance0.comY.toFixed(3)}→${backKneeDown.comY.toFixed(3)}, lean ${stance0.lean.toFixed(1)}°→${backKneeDown.lean.toFixed(1)}°`);
+ check('后膝下拖保持双脚锚点、支撑状态和手部目标',
+  backKneeDown.plants.L===true&&backKneeDown.plants.R===true&&
+  drift3(backKneeDown.feet.L,stance0.feet.L)<.001&&drift3(backKneeDown.feet.R,stance0.feet.R)<.001&&
+  ['L','R'].every(side=>backKneeDown.targets[side]<=stance0.targets[side]+.01)&&drift3(backKneeDown.racketTip,stance0.racketTip)<.01&&
+  JSON.stringify(backKneeDown.otherPoseChannels)===JSON.stringify(stance0.otherPoseChannels),
+  `脚漂 ${(Math.max(drift3(backKneeDown.feet.L,stance0.feet.L),drift3(backKneeDown.feet.R,stance0.feet.R))*1000).toFixed(2)}mm`);
+ await dragKneeDown(stance0.sides.front);
+ const frontKneeDown=await balanceState();
+ check('再下拖前膝使躯干从后倾回到直立方向且重心仍低',
+  frontKneeDown.lean>backKneeDown.lean+2&&Math.abs(frontKneeDown.lean-stance0.lean)<3&&frontKneeDown.comY<stance0.comY-.003,
+  `lean ${backKneeDown.lean.toFixed(1)}°→${frontKneeDown.lean.toFixed(1)}°（基准 ${stance0.lean.toFixed(1)}°），COM=${frontKneeDown.comY.toFixed(3)}`);
+ check('前膝下拖仍保持双脚锚点、支撑状态、手部目标和膝关节限位',
+  frontKneeDown.plants.L===true&&frontKneeDown.plants.R===true&&
+  drift3(frontKneeDown.feet.L,stance0.feet.L)<.001&&drift3(frontKneeDown.feet.R,stance0.feet.R)<.001&&
+  ['L','R'].every(side=>frontKneeDown.targets[side]<=stance0.targets[side]+.01)&&
+  drift3(frontKneeDown.racketTip,stance0.racketTip)<.01&&
+  JSON.stringify(frontKneeDown.otherPoseChannels)===JSON.stringify(stance0.otherPoseChannels)&&
+  Object.values(frontKneeDown.kneeFlex).every(a=>a>=0&&a<=135),
+  `最大脚漂 ${(Math.max(drift3(frontKneeDown.feet.L,stance0.feet.L),drift3(frontKneeDown.feet.R,stance0.feet.R))*1000).toFixed(2)}mm, knees=${JSON.stringify(frontKneeDown.kneeFlex)}`);
 
  if(errors.length)throw new Error(`workshop page reported errors: ${errors.join(' | ')}`);
  const failed=checks.filter(c=>!c.ok);

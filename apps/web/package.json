@@ -1,9 +1,9 @@
 {
   "name": "@human3d/web",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "KINESIS web app: the motion lab and the motion workshop, one Vite build with two entry pages.",
+  "description": "h3d web app: the motion lab and the motion workshop, one Vite build with two entry pages.",
   "scripts": {
     "predev": "sh ../../scripts/check-process-limit.sh",
     "prebuild": "sh ../../scripts/check-process-limit.sh",

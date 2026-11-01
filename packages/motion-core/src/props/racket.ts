@@ -1,6 +1,6 @@
 import {BufferGeometry, Float32BufferAttribute, Group, LineBasicMaterial, LineSegments, Mesh, MeshStandardMaterial, Quaternion, TubeGeometry, CatmullRomCurve3, Vector3, CylinderGeometry, TorusGeometry} from 'three';
 import type {HumanRig} from '../rig';
-import {gripFrame,type HandleGrip} from '../grip';
+import {gripFrame,type GripHandleFrame,type HandleGrip} from '../grip';
 
 /** The tennis racket as a held prop (plugin). Everything racket-specific lives
  * here: the frame geometry, the handle the hand wraps (RACKET_HANDLE), the
@@ -19,16 +19,14 @@ export const RACKET_TIP_LOCAL=new Vector3(0,.61,0);
  * numbering is RELATIVE TO THE PALM, not to fixed geometry: bevel 1 is the
  * facet resting against the palm at the default mount, and 2…8 continue in 45°
  * steps. Two consequences, both deliberate:
- *  - a document that never touches the channel is byte-identical to before
- *    (bevel 1 = no extra roll), and
+ *  - a document that never touches the channel keeps the same serialized
+ *    shape (bevel 1 remains the absent default), and
  *  - the same bevel number means the same grip on either hand, so mirroring a
  *    document keeps its bevel (measured: the right palm rests on the local −X
  *    facet, the left — whose mount is the x-mirror — on local +X; both are
  *    facet centres of a prism built with thetaStart=π/8).
- * Rotating the racket never moves it relative to the hand: the tip sits on the
- * axis, the finger wrap solves around a circular handle, and no solved bone
- * reads the string-bed orientation. The bevel is an authoring choice, not a
- * solve input (see docs/decisions/0010-racket-bevels-hand-shape.md). */
+ * The selected facet remains seated toward the thumb-index web while the grip
+ * solver follows the mounted shaft axis and octagonal section when tilted. */
 export const RACKET_BEVELS=8;
 /** Canonical bevel: the facet in the palm at the default mount. */
 export const RACKET_BEVEL_DEFAULT=1;
@@ -53,13 +51,9 @@ export function normalizeBevel(bevel?:number|null){
  * from the palm on both hands AND the mirrored document's racket is the exact
  * x-mirror of the source's (numbers travel with the geometry). */
 const bevelSign=(side:'L'|'R')=>side==='R'?1:-1;
-/** Rotation about the handle axis that brings bevel `bevel` into the palm,
- * as a LOCAL post-rotation of the mounted racket (roll about local +Y).
- * Applied by mountRacket after the canonical mount, so it turns the string bed
- * and nothing else: the tip sits ON the axis (position unchanged) and the
- * finger wrap solves around a circular handle, so no solved bone reads it.
- * The sign is per side — see bevelSign: the left roll is the reflection of the
- * right one (R_y(α) conjugates to R_y(−α) across x=0). */
+/** Canonical fallback roll for bevel `bevel` about local +Y. The actual mount
+ * derives its roll from the live web proxy; this retains the palm-relative
+ * numbering convention if that proxy degenerates. */
 export function bevelRoll(side:'L'|'R',bevel?:number){
  return -bevelSign(side)*(normalizeBevel(bevel)-1)*BEVEL_STEP;
 }
@@ -120,6 +114,41 @@ function racketLocalTransform(rig:HumanRig){
   quaternion.premultiply(new Quaternion().setFromAxisAngle(frame.axis,twist));
   return {position:frame.center.clone(),quaternion};
 }
+/** The single authoritative local mount transform. Both the rendered racket
+ * and the grip solver consume this exact orientation, so tilt and bevel cannot
+ * drift away from the finger-wrap frame. */
+function racketMountTransform(rig:HumanRig,side:'L'|'R',bevel?:number,gripTilt?:number){
+  const t=racketLocalTransform(rig);
+  if(side==='L'){
+    t.position.x=-t.position.x;
+    t.quaternion.set(t.quaternion.x,-t.quaternion.y,-t.quaternion.z,t.quaternion.w);
+  }
+  const tiltDegrees=normalizeGripTilt(gripTilt),tilt=tiltDegrees*Math.PI/180;
+  if(tilt!==0)t.quaternion.multiply(new Quaternion().setFromAxisAngle(new Vector3(1,0,0),tilt));
+  // The selected bevel faces the live skeletal thumb-index web proxy, even at
+  // zero tilt. Using the current wrist-local roots matches the visible pose;
+  // the radial projection removes the along-shaft offset before choosing roll.
+  const wristBone=rig.bone(`wrist_${side}`),thumb=wristBone.worldToLocal(rig.point(`finger1-1_${side}`)),index=wristBone.worldToLocal(rig.point(`finger2-1_${side}`));
+  const web=thumb.add(index).multiplyScalar(.5).sub(t.position),axis=new Vector3(0,1,0).applyQuaternion(t.quaternion).normalize();
+  const radial=web.addScaledVector(axis,-web.dot(axis));
+  let roll=bevelRoll(side,bevel);
+  if(radial.lengthSq()>1e-12){
+    radial.normalize().applyQuaternion(t.quaternion.clone().invert());
+    const facet=bevelDirection(side,bevel),delta=Math.atan2(radial.x,radial.z)-Math.atan2(facet.x,facet.z);
+    roll=Math.atan2(Math.sin(delta),Math.cos(delta));
+  }
+  if(roll!==0)t.quaternion.multiply(new Quaternion().setFromAxisAngle(new Vector3(0,1,0),roll));
+  return t;
+}
+/** Grip axes expressed in the gripping wrist's local coordinates. The left
+ * frame is derived from the actual mirrored mount, whose +Y points opposite
+ * `gripFrame(L).axis`; do not reconstruct it by applying the right formula. */
+export function racketGripFrame(rig:HumanRig,side:'L'|'R'='R',bevel?:number,gripTilt?:number):GripHandleFrame{
+  const {position,quaternion}=racketMountTransform(rig,side,bevel,gripTilt);
+  return {center:position,axis:new Vector3(0,1,0).applyQuaternion(quaternion).normalize(),
+    normal:new Vector3(1,0,0).applyQuaternion(quaternion).normalize(),
+    forward:new Vector3(0,0,1).applyQuaternion(quaternion).normalize(),halfLength:.0725};
+}
 /** (Re)mount a racket on the requested wrist. The left mount is the exact
  * x-mirror of the right transform — bilateral wrist local frames coincide
  * with world axes at rest, so negating position.x and the quaternion's y/z
@@ -135,18 +164,11 @@ function racketLocalTransform(rig:HumanRig){
  * the grip origin or rotating the wrist/fingers. The x-reflection leaves a
  * local X rotation unchanged, so the same tilt on either side preserves the
  * exact mirrored mount. `bevel` then rolls around the tilted handle axis to
- * seat the requested facet; its side-signed roll preserves that same mirror. */
+ * seat the requested facet toward the projected thumb-index web; the mirrored
+ * web produces the opposite roll on the left. */
 export function mountRacket(rig:HumanRig,racket:Group,side:'L'|'R'='R',bevel?:number,gripTilt?:number){
-  const t=racketLocalTransform(rig);
+  const t=racketMountTransform(rig,side,bevel,gripTilt);
   racket.position.copy(t.position);racket.quaternion.copy(t.quaternion);
-  if(side==='L'){
-    racket.position.x=-racket.position.x;
-    racket.quaternion.set(racket.quaternion.x,-racket.quaternion.y,-racket.quaternion.z,racket.quaternion.w);
-  }
-  const tilt=normalizeGripTilt(gripTilt)*Math.PI/180;
-  if(tilt!==0)racket.quaternion.multiply(new Quaternion().setFromAxisAngle(new Vector3(1,0,0),tilt));
-  const roll=bevelRoll(side,bevel);
-  if(roll!==0)racket.quaternion.multiply(new Quaternion().setFromAxisAngle(new Vector3(0,1,0),roll));
   racket.removeFromParent();
   rig.bone(`wrist_${side}`).add(racket);
 }

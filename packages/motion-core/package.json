@@ -1,6 +1,6 @@
 {
   "name": "@human3d/motion-core",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "private": true,
   "type": "module",
   "description": "Pure motion domain: workshop documents, FK/IK solving, interpolation, pose-package protocol, delivered-package validation, quality probe and exports. No DOM, no node — three is used as a math library only.",

@@ -1,10 +1,10 @@
 import {describe,it,expect,beforeAll} from 'vitest';
 import {RACKET_TIP_LOCAL} from './props/racket';
 import fs from 'node:fs';
-import {Quaternion,Vector3} from 'three';
+import {CylinderGeometry,Mesh,Quaternion,Vector3} from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {HumanRig} from './rig';
-import {attachRacket,bevelDirection,bevelRoll,RACKET_BEVELS} from './props/racket';
+import {attachRacket,bevelDirection,bevelRoll,RACKET_BEVELS,RACKET_GRIP_TILT_LIMIT_DEG} from './props/racket';
 import {gripFrame} from './grip';
 import {RACKET_HANDLE} from './props/racket';
 import {blankDocument,frameAt,parseDoc,serializeDoc,validateDocShape,type FootTarget,type HandTarget,type V3,type WorkshopDoc} from './document';
@@ -77,6 +77,72 @@ const expectMirror=(L:ReturnType<typeof solved>,R:ReturnType<typeof solved>,posT
   const q=L.quat.get(n)!;
   expect(q.angleTo(mirrorQuat(R.quat.get(mirrorName(n))!)),`orientation ${n}`).toBeLessThan(angTol);
  }
+};
+
+/** Closest distance from a wrist-local point to the finite tapered octagonal
+ * handle prism. CylinderGeometry uses thetaStart=π/8, eight sides, a 145 mm
+ * length and radii 18 mm (cap) / 16 mm (head). */
+const HANDLE_FINGER_RADIUS=.004;
+const racketHandleGeometry=(racket:ReturnType<typeof attachRacket>)=>{
+ const handle=racket.children.find(child=>child instanceof Mesh&&child.geometry instanceof CylinderGeometry&&Math.abs(child.geometry.parameters.height-.145)<1e-9);
+ expect(handle,'racket must contain its finite cylindrical handle').toBeDefined();
+ return (handle as Mesh).geometry as CylinderGeometry;
+};
+const handlePolygon=(y:number,geometry:CylinderGeometry)=>{
+ const {height,radialSegments,thetaStart,radiusTop,radiusBottom}=geometry.parameters,half=height/2,clamped=Math.max(-half,Math.min(half,y));
+ const radius=radiusTop+(half-clamped)/height*(radiusBottom-radiusTop),vertices:Vector3[]=[];
+ for(let i=0;i<radialSegments;i++){
+  const theta=thetaStart+i*Math.PI*2/radialSegments;
+  vertices.push(new Vector3(Math.sin(theta)*radius,0,Math.cos(theta)*radius));
+ }
+ return vertices;
+};
+const distanceToSegment2=(p:Vector3,a:Vector3,b:Vector3)=>{
+ const d=b.clone().sub(a),u=Math.max(0,Math.min(1,((p.x-a.x)*d.x+(p.z-a.z)*d.z)/(d.x*d.x+d.z*d.z||1)));
+ return Math.hypot(p.x-a.x-u*d.x,p.z-a.z-u*d.z);
+};
+const pointInsidePolygon=(p:Vector3,vertices:Vector3[])=>{
+ let sign=0;
+ for(let i=0;i<vertices.length;i++){
+  const a=vertices[i],b=vertices[(i+1)%vertices.length],cross=(b.x-a.x)*(p.z-a.z)-(b.z-a.z)*(p.x-a.x);
+  if(Math.abs(cross)<1e-12)continue;
+  const current=Math.sign(cross);if(sign&&current!==sign)return false;sign=current;
+ }
+ return true;
+};
+const pointToHandleDistance=(p:Vector3,geometry:CylinderGeometry)=>{
+ const half=geometry.parameters.height/2,y=Math.max(-half,Math.min(half,p.y)),poly=handlePolygon(y,geometry),radial=pointInsidePolygon(p,poly)?0:Math.min(...poly.map((v,i)=>distanceToSegment2(p,v,poly[(i+1)%poly.length]))),axial=Math.abs(p.y-y);
+ return Math.hypot(radial,axial);
+};
+/** Finger-segment capsule clearance against the actual finite racket prism.
+ * The 4 mm radius is a conservative skeletal proxy for the visible finger pad. */
+const expectGripFingerClearance=(side:'L'|'R',racket:ReturnType<typeof attachRacket>)=>{
+ racket.updateMatrixWorld(true);const geometry=racketHandleGeometry(racket);
+ for(let finger=1;finger<=5;finger++)for(let joint=1;joint<=3;joint++){
+  const name=`finger${finger}-${joint}_${side}`,bone=rig.bone(name),info=rig.info.bones.find(b=>b.name===name)!;
+  const worldA=rig.point(name),worldB=new Vector3().fromArray(info.tail).sub(rig.rest.get(name)!).applyMatrix4(bone.matrixWorld);
+  const a=racket.worldToLocal(worldA.clone()),b=racket.worldToLocal(worldB.clone());
+  for(let sample=0;sample<=40;sample++){
+   const p=a.clone().lerp(b,sample/40),clearance=pointToHandleDistance(p,geometry);
+   expect(clearance,`${name} capsule clearance at segment sample ${sample}`).toBeGreaterThanOrEqual(HANDLE_FINGER_RADIUS-1e-4);
+  }
+ }
+};
+/** A skeletal web proxy: midpoint between the thumb and index base origins.
+ * Its radial direction from the closest point on the tilted shaft is compared
+ * with the selected bevel's contact point, not treated as literal skin. */
+const expectWebAtSelectedBevel=(side:'L'|'R',bevel:number,racket:ReturnType<typeof attachRacket>)=>{
+ racket.updateMatrixWorld(true);
+ const wrist=rig.bone(`wrist_${side}`),thumb=wrist.worldToLocal(rig.point(`finger1-1_${side}`)),index=wrist.worldToLocal(rig.point(`finger2-1_${side}`)),web=thumb.add(index).multiplyScalar(.5),webWorld=wrist.localToWorld(web.clone()),inRacket=racket.worldToLocal(webWorld);
+ const closestAxisY=Math.max(-racketHandleGeometry(racket).parameters.height/2,Math.min(racketHandleGeometry(racket).parameters.height/2,inRacket.y));
+ const webRadial=new Vector3(inRacket.x,0,inRacket.z),magnitude=webRadial.length();
+ expect(magnitude,'thumb-index web proxy must sit off the handle axis').toBeGreaterThan(1e-4);
+ webRadial.divideScalar(magnitude);
+ const selected=bevelDirection(side,bevel).setY(0).normalize();
+ const angle=webRadial.angleTo(selected),contactDistance=2*RACKET_HANDLE.radius*Math.sin(angle/2);
+ // A 35° radial tolerance is 13.3 mm between skeletal proxy and selected
+ // contact point at the 22 mm finger-wrap radius.
+ expect(contactDistance,`bevel ${bevel} web-to-facet proxy at shaft y=${closestAxisY.toFixed(3)}`).toBeLessThanOrEqual(2*RACKET_HANDLE.radius*Math.sin(35*Math.PI/360)+1e-9);
 };
 
 describe('gripSide — parse and normalize',()=>{
@@ -233,20 +299,46 @@ describe('gripSide — racket mount',()=>{
    rR.removeFromParent();rL.removeFromParent();
   }
  });
- it('tilts the racket shaft at the grip without moving the wrist or changing the solved bones',()=>{
+ it('tilts the racket around the palm-held grip and carries the finger wrap with the shaft',()=>{
   const doc=symmetricDoc(),base=attachRacket(rig,'R'),tilted=attachRacket(rig,'R',undefined,24);
   const before=solved(doc,.5);
-  const baseTip=base.localToWorld(RACKET_TIP_LOCAL.clone());
-  const baseQ=base.getWorldQuaternion(new Quaternion());
+  const baseTip=base.localToWorld(RACKET_TIP_LOCAL.clone()),baseQ=base.getWorldQuaternion(new Quaternion());
+  const baseCenter=base.getWorldPosition(new Vector3());
   const tiltedDoc={...doc,gripTilt:24};
   const after=solved(tiltedDoc,.5);
   const tiltedTip=tilted.localToWorld(RACKET_TIP_LOCAL.clone());
-  expect(tilted.getWorldPosition(new Vector3()).distanceTo(base.getWorldPosition(new Vector3()))).toBeLessThan(1e-9);
+  expect(tilted.getWorldPosition(new Vector3()).distanceTo(baseCenter)).toBeLessThan(1e-9);
   expect(tiltedTip.distanceTo(baseTip)).toBeGreaterThan(.05);
-  expect(tilted.getWorldQuaternion(new Quaternion()).angleTo(baseQ)).toBeCloseTo(24*Math.PI/180,6);
-  for(const [name,p]of before.pos)expect(after.pos.get(name)!.distanceTo(p),`bone ${name}`).toBeLessThan(1e-9);
-  for(const [name,q]of before.quat)expect(after.quat.get(name)!.angleTo(q),`bone ${name} orientation`).toBeLessThan(1e-7);
+  const baseAxis=new Vector3(0,1,0).applyQuaternion(baseQ),tiltedAxis=new Vector3(0,1,0).applyQuaternion(tilted.getWorldQuaternion(new Quaternion()));
+  expect(tiltedAxis.angleTo(baseAxis)).toBeCloseTo(24*Math.PI/180,6);
+  const fingerBones=Array.from(before.quat.keys()).filter(name=>/^finger[1-5]-/.test(name));
+  expect(Math.max(...fingerBones.map(name=>before.quat.get(name)!.angleTo(after.quat.get(name)!)))).toBeGreaterThan(.02);
+  for(const [name,p]of before.pos)if(!/^finger[1-5]-/.test(name))expect(after.pos.get(name)!.distanceTo(p),`non-finger bone ${name}`).toBeLessThan(1e-9);
+  for(const [name,q]of before.quat)if(!/^finger[1-5]-/.test(name))expect(after.quat.get(name)!.angleTo(q),`non-finger bone ${name} orientation`).toBeLessThan(1e-7);
+  const gripCenter=rig.bone('wrist_R').localToWorld(gripFrame(rig,'R',RACKET_HANDLE).center.clone());
+  expect(tilted.getWorldPosition(new Vector3()).distanceTo(gripCenter)).toBeLessThan(1e-9);
   base.removeFromParent();tilted.removeFromParent();
+ });
+ it('keeps tilted octagonal handles outside finger capsules and seats the selected facet at the web',()=>{
+  for(const tilt of [-RACKET_GRIP_TILT_LIMIT_DEG,0,RACKET_GRIP_TILT_LIMIT_DEG])for(const bevel of [1,3,8]){
+   const doc=symmetricDoc();doc.gripTilt=tilt;doc.gripBevel=bevel;
+   const rR=attachRacket(rig,'R',bevel,tilt),rL=attachRacket(rig,'L',bevel,tilt);
+   const R=solved(doc,.5);
+   expectGripFingerClearance('R',rR);expectWebAtSelectedBevel('R',bevel,rR);
+   const world=(racket:typeof rR,localX:number)=>({
+    tip:racket.localToWorld(RACKET_TIP_LOCAL.clone()),
+    facet:racket.localToWorld(new Vector3(localX,.084,0)),
+    q:racket.getWorldQuaternion(new Quaternion()),
+   });
+   const racketR=world(rR,.03);
+   const L=solved({...doc,gripSide:'L'},.5);
+   expectMirror(L,R);
+   expectGripFingerClearance('L',rL);expectWebAtSelectedBevel('L',bevel,rL);
+   const racketL=world(rL,-.03);
+   for(const k of ['tip','facet']as const)expect(racketL[k].distanceTo(new Vector3(-racketR[k].x,racketR[k].y,racketR[k].z)),`tilt ${tilt} bevel ${bevel} racket ${k}`).toBeLessThan(1e-9);
+   expect(racketL.q.angleTo(mirrorQuat(racketR.q)),`tilt ${tilt} bevel ${bevel} racket rotation`).toBeLessThan(1e-6);
+   rR.removeFromParent();rL.removeFromParent();
+  }
  });
  it('mounts on wrist_L with the mirrored transform',()=>{
   const doc=symmetricDoc();

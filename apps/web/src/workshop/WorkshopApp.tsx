@@ -171,6 +171,22 @@ function KeyframeTimeInput({time,max,disabled,onCommit}:{time:number;max:number;
   onChange={e=>setDraft(e.target.value)} onBlur={e=>{if(!cancel.current)onCommit(e.currentTarget.valueAsNumber);cancel.current=false;setDraft(String(time));}}
   onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();e.currentTarget.blur();}else if(e.key==='Escape'){cancel.current=true;e.currentTarget.blur();}}}/>;
 }
+/** Keep the total duration editable beside playback controls. Commit only a
+ * complete number so clearing or typing a decimal never retimes the document
+ * through an accidental intermediate value. */
+function DurationInput({duration,disabled,onCommit}:{duration:number;disabled:boolean;onCommit:(duration:number)=>void}){
+ const [draft,setDraft]=useState(String(duration)),cancel=useRef(false);
+ useEffect(()=>setDraft(String(duration)),[duration]);
+ return <label className="ws-duration"><span>总时长</span><input type="number" aria-label="动作总时长（秒）" data-testid="motion-duration"
+  min={WORKSHOP_LIMITS.minDuration} max={WORKSHOP_LIMITS.maxDuration} step=".1" disabled={disabled} value={draft}
+  onChange={e=>setDraft(e.target.value)} onBlur={e=>{
+   const raw=e.currentTarget.value,value=e.currentTarget.valueAsNumber;
+   if(!cancel.current&&raw.trim()!==''&&Number.isFinite(value)){const next=clampDuration(value);if(next!==duration)onCommit(next);setDraft(String(next));}
+   else setDraft(String(duration));
+   cancel.current=false;
+  }}
+  onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();e.currentTarget.blur();}else if(e.key==='Escape'){cancel.current=true;e.currentTarget.blur();}}}/><small>s</small></label>;
+}
 /** Key → seek on tap; a key moves only after a 6 px horizontal drag (so a
  * fingertip tap never retimes); empty track drags scrub. Each key carries a
  * 44 px-tall invisible hit area around the 13 px diamond. */
@@ -270,7 +286,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
  const subtleOk=typeof globalThis.crypto?.subtle?.digest==='function';
  // Session-only display toggles (never persisted) — same convention as the
  // engine's WorkshopOptions defaults.
- const [opts,setOpts]=useState({handles:true,trajectories:false,balance:false,onion:false,onionCount:2,onionMode:'keys' as 'keys'|'step',onionStep:.1,bevels:false,legPole:false});
+ const [opts,setOpts]=useState({handles:true,trajectories:false,balance:false,onion:false,onionCount:2,onionMode:'keys' as 'keys'|'step',onionStep:.1,bevels:false});
  const [optsOpen,setOptsOpen]=useState(false);
  // Issue #23: phone layout = viewport + bottom sheets; Review mode blocks every
  // viewport write. Same query as the CSS breakpoint in workshop.css.
@@ -1060,7 +1076,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
  const sheetHead=(title:string)=><div className="ws-sheet-head"><strong>{title}</strong><button type="button" aria-label="关闭面板" onClick={()=>setSheet(null)}><X size={18}/></button></div>;
  return <div inert={restoring} aria-busy={restoring} className={`ws-shell ${generationLockedUi?'ws-generation-locked':''} ${compact?'ws-compact':''} ${sheet?`ws-sheet-${sheet}`:''} ws-mode-${mode}`} data-mode={mode}>
   <header className="ws-header">
-   <div className="brand"><Activity size={25} strokeWidth={2}/><span>KINESIS</span><i/><h1>动作工作台</h1><small>关键帧动作编辑器</small></div>
+   <div className="brand"><Activity size={25} strokeWidth={2}/><span>h3d</span><i/><h1>动作工作台</h1><small>关键帧动作编辑器</small></div>
    <nav><a href="/" className="ws-back" aria-disabled={leaving} onClick={e=>{e.preventDefault();void returnToLab();}}><ArrowLeft size={14}/>返回实验室</a></nav>
    <div className="ws-save-state" data-testid="save-state" data-state={L.saveState} role="status" aria-live="polite"><span>{L.saveState==='error'?`保存失败：${L.lastError}`:L.saveState==='saving'?leaving?'保存中 · 完成后返回实验室…':'保存中…':'已保存到本机'}</span><button type="button" disabled={L.saveState==='saved'} aria-hidden={L.saveState==='saved'} onClick={()=>exportDoc()}><Download size={12}/>导出当前动作 JSON</button></div>
   </header>
@@ -1289,7 +1305,6 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
      <summary>动作属性 · 高级导出 <small>时长 / 循环 / 坐标系 / GLB</small></summary>
      <div className="ws-fold-body">
      <section className="ws-card ws-doc-card" inert={generationLockedUi}><div inert={review}><h2>动作属性</h2>
-     <label className="ws-field"><span>时长 s（{WORKSHOP_LIMITS.minDuration}–{WORKSHOP_LIMITS.maxDuration}）</span><input type="number" min={WORKSHOP_LIMITS.minDuration} max={WORKSHOP_LIMITS.maxDuration} step=".1" value={d.duration} onChange={e=>edit(dd=>retimeKeys(dd,clampDuration(Number(e.target.value))))}/></label>
      <p className="ws-note">{d.keys.length} 个关键帧 · {d.inbetweens?'Hermite 补间':'逐帧保持'}</p>
      <Row label="循环播放" detail={loopBlockers(d).join('；')||'首帧位于 0 s，末帧早于时长'} checked={d.loop} disabled={!d.loop&&loopBlockers(d).length>0} onChange={v=>edit(dd=>{if(v&&loopBlockers(dd).length)return;dd.loop=v;})}/>
      <label className="ws-field"><span>左手坐标系</span><select value={d.handFrames.L} onChange={e=>edit(dd=>{dd.handFrames.L=e.target.value as HandFrame;})}><option value="pelvis">骨盆坐标（推荐）</option><option value="world">世界坐标（旧版）</option></select></label>
@@ -1363,8 +1378,8 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
      <p><i style={{background:'#ec8c39'}}/>手腕（IK 末端）</p>
      <p><i style={{background:'#e2543a'}}/>脚踝（支撑贴地 · 离地可三维拖动）</p>
      <p><i style={{background:'#0891b2'}}/>摆动路径点（离地帧存储的脚位，摆动中点）</p>
-     <p><i style={{background:'#4a9e6b'}}/>肘 / 膝极点（膝极点默认隐藏，「显示」可开）</p>
-     <p><i style={{background:'#9ccc65'}}/>膝盖（支撑脚固定时屈伸 · 离地整腿跟随）</p>
+     <p><i style={{background:'#4a9e6b'}}/>肘部弯曲引导点</p>
+     <p><i style={{background:'#9ccc65'}}/>膝盖（双支撑分腿时下拖调重心；其他状态调屈伸）</p>
      <p><i style={{background:'#d23c3c'}}/>拍头 · <em style={{color:'#f0b429'}}>触球点</em></p>
      <p className="ws-note">直接拖动末端，IK 自动解算整条链；在空白处拖动仍是旋转视角。</p>
      </section>
@@ -1391,7 +1406,6 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
        <Row label="运动轨迹线" checked={opts.trajectories} onChange={v=>setOpt({trajectories:v})}/>
        <Row label="重心 / 支撑" checked={opts.balance} onChange={v=>setOpt({balance:v})}/>
        {!review?<Row label="编辑手柄" checked={opts.handles} onChange={v=>setOpt({handles:v})}/>:null}
-       {!review?<Row label="膝极点（高级）" detail="显示腿弯曲方向的原始极点手柄；通常直接拖膝盖点即可" checked={opts.legPole} onChange={v=>setOpt({legPole:v})}/>:null}
        <Row label="拍柄棱面编号" detail="在拍柄 8 个棱面上标出 1–8，用来选择贴掌面" checked={opts.bevels} onChange={v=>setOpt({bevels:v})}/>
        <Row label="洋葱皮" detail="叠加前后姿态的幽灵骨架" checked={opts.onion} onChange={v=>setOpt({onion:v})}/>
        {opts.onion?<>
@@ -1492,21 +1506,19 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
         if(planted)footOwner=contactStartKey(d,side,sel.time);
         else if(isReleaseKey(d,si,side))footOwner=sel; // release-key target is the stored swing waypoint
         footOwner??=sel;
-        const foot=footOwner.pose[footName],pole=sel.pose[footName].pole;
+        const foot=footOwner.pose[footName];
         const write=(target:V3,axis:'x'|'y'|'z',value:number)=>editAtKey(sel,()=>{target[axis]=value;});
         return <div className="ws-limb-side" data-testid={`limb-controls-${side}`} key={side}>
          <div className="ws-sub ws-limb-controls"><h3>{cn}侧四肢姿态精调 <small>IK 目标与弯曲方向</small></h3>
          <p className="ws-note">以下为 IK 末端与方向提示；肘部引导点不直接指定大臂角度。大臂向后摆动请使用上方关节旋转，手部末端会随之移动。</p>
-         <p className="ws-note">支撑脚锁定时，沿膝盖到髋—踝直线方向拖膝盖球可伸直；反方向拖会增加屈曲。脚的位置与朝向保持锁定，骨盆随动。离地腿按住 Shift（⇧）上下拖可调膝屈曲。精确角度可在「语义」页选择「膝 / 小腿」。</p>
+         <p className="ws-note">双脚稳定支撑且前后分腿时，下拖后侧膝会降低骨盆并让躯干后倾；再下拖前侧膝会继续降低重心并带躯干回直立。其他姿势下，向上拖会弯膝、向下拖会伸膝。膝位置由髋、踝和屈伸角共同求解；精确角度可在「语义」页调整，不直接编辑膝盖 XYZ 或极点。</p>
          <VectorSliders title={`${cn}前臂（小臂）末端目标`} value={hand.target} testPrefix={`limb-${side}-arm-target`}
           onChange={(axis,value)=>write(hand.target,axis,value)}/>
          <VectorSliders title={`${cn}肘部弯曲引导点`} value={hand.pole} testPrefix={`limb-${side}-arm-pole`}
           onChange={(axis,value)=>write(hand.pole,axis,value)}/>
          <VectorSliders title={`${cn}小腿末端目标`} value={foot.target} testPrefix={`limb-${side}-leg-target`}
           onChange={(axis,value)=>write(foot.target,axis,value)}/>
-         <VectorSliders title={`${cn}膝部弯曲引导点`} value={pole} testPrefix={`limb-${side}-leg-pole`}
-          onChange={(axis,value)=>write(pole,axis,value)}/>
-         {footOwner!==sel?<p className="ws-note" style={{color:'var(--amber)'}}>{cn}脚处于支撑锁定：脚踝目标写入 {footOwner.time.toFixed(2)}s 的支撑开始帧；膝部引导点仍写入当前帧。</p>:null}
+         {footOwner!==sel?<p className="ws-note" style={{color:'var(--amber)'}}>{cn}脚处于支撑锁定：脚踝目标写入 {footOwner.time.toFixed(2)}s 的支撑开始帧；膝屈伸角仍写入当前帧。</p>:null}
          </div>
         </div>;
        })}
@@ -1588,7 +1600,10 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
     <button aria-label="回到开头" onClick={()=>engine.current?.seek(0)}><RotateCcw size={17}/></button>
     <button aria-label="撤销" title="撤销 (Ctrl+Z)" disabled={review||!books.current.of(d.id).canUndo()} onClick={undo}><Undo2 size={17}/></button>
     <button aria-label="重做" title="重做 (Ctrl+Shift+Z)" disabled={review||!books.current.of(d.id).canRedo()} onClick={redo}><Redo2 size={17}/></button>
-    <span className="ws-time">{fmt(frame.time)}<i>/</i>{fmt(d.duration)}</span>
+    <span className="ws-time">{fmt(frame.time)}<i>/</i></span>
+    <DurationInput duration={d.duration} disabled={!info||review||generationLockedUi} onCommit={value=>{
+     edit(dd=>retimeKeys(dd,value));engine.current?.seek(Math.min(frame.time,value));
+    }}/>
    </div>
    <Timeline doc={displayDoc} time={frame.time} selected={sel?.id??''} retime={!review} onSelect={selectKey} onSeek={t=>engine.current?.seek(t)} onRetime={(id,t)=>changeKeyTime(id,t,false)} onBeginRetime={()=>engine.current?.beginInteractiveEdit()} onEndRetime={()=>engine.current?.endInteractiveEdit()}/>
    <div className="ws-actions" inert={review}>

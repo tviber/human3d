@@ -4,9 +4,12 @@ import {Quaternion,Vector3} from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {HumanRig} from './rig';
 import {footGeometry,footLowestY} from './foot';
-import {blankDocument,defaultDocument,frameAt,mirrorDoc,serializeDoc,type WorkshopDoc} from './document';
-import {solveEffectiveFrame} from './solver';
-import {applySemanticEdit,groundFoot,measureSemantic,SEMANTIC_MOTIONS,type SemanticEdit,type SemanticPart} from './semantic-edit';
+import {blankDocument,compileMotion,defaultDocument,frameAt,frameAtCompiled,mirrorDoc,serializeDoc,type WorkshopDoc} from './document';
+import {analyzePose,solveEffectiveFrame} from './solver';
+import {applySemanticEdit,applyKneeBalanceEdit,captureKneeBalanceState,groundFoot,kneeBalanceSides,measureSemantic,SEMANTIC_MOTIONS,type SemanticEdit,type SemanticPart} from './semantic-edit';
+import {buildPelvisSchedule} from './pelvis-schedule';
+import {motionFileById} from './motion-files';
+import {LIMITS} from './kinematics';
 
 let rig:HumanRig;
 beforeAll(async()=>{
@@ -16,6 +19,11 @@ beforeAll(async()=>{
 },30000);
 const origin=()=>rig.rest.get('root')!;
 const solveAt=(doc:WorkshopDoc,t:number)=>solveEffectiveFrame(rig,frameAt(doc,t,origin()));
+const solveScheduledAt=(doc:WorkshopDoc,t:number)=>{
+ const compiled=compileMotion(doc,origin()),schedule=buildPelvisSchedule(rig,compiled),frame=frameAtCompiled(compiled,t);
+ solveEffectiveFrame(rig,frame,schedule.passthrough?undefined:schedule.at(t));
+ return {frame,analysis:analyzePose(rig,frame.pose,frame.constraints),schedule};
+};
 
 describe('semantic pose edits through the production sampler and solver',()=>{
  it('delivers every whitelisted motion on both sides with a readback equal to the request',()=>{
@@ -202,5 +210,128 @@ function swingDoc(side:'L'|'R'){
   const kneeRel1=rig.point('lowerleg01_L').sub(rig.point('root'));
   expect(kneeRel1.z-kneeRel0.z).toBeGreaterThan(.15); // thigh ≈0.45 m · sin 30°
   expect(rig.point('root').distanceTo(pelvis0)).toBeLessThan(.002); // the pelvis does not move
+ });
+});
+
+describe('bilateral knee balance edits on the real forehand finish',()=>{
+ const doc=motionFileById('forehand')!.document!;
+ const finish=doc.keys.find(key=>key.id==='forehand-k48')!;
+ const finishTime=finish.time;
+ it('lowers and rebalances the forehand finish while keeping both supports and arm targets valid',()=>{
+  expect(finishTime).toBe(5.2);
+  expect(finish.constraints.plantL).toBe(true);expect(finish.constraints.plantR).toBe(true);
+  const start=captureKneeBalanceState(rig,doc,finish.id,origin());
+  expect(start.frontBack?.back).toBe('R');expect(start.frontBack?.front).toBe('L');
+
+  const rear=applyKneeBalanceEdit(rig,doc,finish.id,{dropMeters:.012,leanDegrees:-12},start,origin());
+  expect(rear.report.ok,`${rear.report.reason}; report=${JSON.stringify(rear.report)}; baseline=${JSON.stringify(start)}`).toBe(true);
+  expect(rear.report.rootY).toBeLessThan(start.rootY-.01);
+  expect(rear.report.comY).toBeLessThan(start.comY-.006);
+  expect(rear.report.lean).toBeLessThan(start.lean-10);
+  expect(rear.report.footDriftMm).toBeLessThan(1);
+  expect(rear.report.solePenetrationMm).toBeLessThanOrEqual(5);
+  expect(rear.report.kneeFlexion.L).toBeGreaterThanOrEqual(LIMITS.kneeFlexion[0]);
+  expect(rear.report.kneeFlexion.L).toBeLessThanOrEqual(LIMITS.kneeFlexion[1]);
+  expect(rear.report.kneeFlexion.R).toBeGreaterThanOrEqual(LIMITS.kneeFlexion[0]);
+  expect(rear.report.kneeFlexion.R).toBeLessThanOrEqual(LIMITS.kneeFlexion[1]);
+  expect(rear.report.ankleFlexion.L).toBeGreaterThanOrEqual(LIMITS.ankleFlexion[0]);
+  expect(rear.report.ankleFlexion.L).toBeLessThanOrEqual(LIMITS.ankleFlexion[1]);
+  expect(rear.report.ankleFlexion.R).toBeGreaterThanOrEqual(LIMITS.ankleFlexion[0]);
+  expect(rear.report.ankleFlexion.R).toBeLessThanOrEqual(LIMITS.ankleFlexion[1]);
+  expect(rear.report.wristResidualMm.L).toBeLessThanOrEqual(start.wristResidualMm.L+5);
+  expect(rear.report.wristResidualMm.R).toBeLessThanOrEqual(start.wristResidualMm.R+5);
+  const rearKey=rear.doc.keys.find(key=>key.id===finish.id)!;
+  expect(rearKey.constraints).toEqual(finish.constraints);
+  expect(rearKey.pose.root.x).toBe(finish.pose.root.x);expect(rearKey.pose.root.z).toBe(finish.pose.root.z);
+  const nonBalanceChannels=(key:typeof finish)=>{const pose=structuredClone(key.pose);pose.root.y=0;pose.lean=0;return pose;};
+  expect(nonBalanceChannels(rearKey)).toEqual(nonBalanceChannels(finish));
+
+  const mid=captureKneeBalanceState(rig,rear.doc,finish.id,origin());
+  const front=applyKneeBalanceEdit(rig,rear.doc,finish.id,{dropMeters:.012,leanDegrees:12},mid,origin());
+  expect(front.report.ok,`${front.report.reason}; report=${JSON.stringify(front.report)}; baseline=${JSON.stringify(mid)}`).toBe(true);
+  expect(front.report.lean).toBeCloseTo(start.lean,0);
+  expect(front.report.comY).toBeLessThan(start.comY-.012);
+  expect(front.report.footDriftMm).toBeLessThan(1);
+  expect(front.report.solePenetrationMm).toBeLessThanOrEqual(5);
+  expect(front.report.wristResidualMm.L).toBeLessThanOrEqual(start.wristResidualMm.L+5);
+  expect(front.report.wristResidualMm.R).toBeLessThanOrEqual(start.wristResidualMm.R+5);
+  const frontKey=front.doc.keys.find(key=>key.id===finish.id)!;
+  expect(frontKey.constraints).toEqual(finish.constraints);
+  expect(nonBalanceChannels(frontKey)).toEqual(nonBalanceChannels(finish));
+ });
+
+ it('classifies front and back from yaw-aware body-forward and swaps them after mirroring',()=>{
+  const source=structuredClone(doc);
+  const base=solveScheduledAt(source,finishTime);
+  const plain=kneeBalanceSides(rig,base.frame,finish.constraints);
+  expect(plain?.front).toBe('L');expect(plain?.back).toBe('R');
+
+  // Turn the body around while preserving the world foot anchors. A +Z-only
+  // or hard-coded L/R classifier would still call L the front leg here.
+  const reversed=frameAt(source,finishTime,origin());reversed.pose.yaw=180;
+  solveEffectiveFrame(rig,reversed);
+  const turned=kneeBalanceSides(rig,reversed,finish.constraints);
+  expect(turned?.front).toBe('R');expect(turned?.back).toBe('L');
+
+  const mirrored=mirrorDoc(source),mirroredState=captureKneeBalanceState(rig,mirrored,finish.id,origin());
+  expect(mirroredState.frontBack?.front).toBe('R');
+  expect(mirroredState.frontBack?.back).toBe('L');
+ });
+
+ it('falls back when support is not bilateral or the feet have no clear forward split',()=>{
+  const single=blankDocument(rig.rest,'单支撑','single-support'),singleKey=single.keys[0];
+  singleKey.constraints.plantL=false;
+  singleKey.pose.footL.target.y+=.12;singleKey.pose.footL.pitch=30;
+  const one=solveScheduledAt(single,singleKey.time);
+  expect(singleKey.constraints.plantL).toBe(false);expect(singleKey.constraints.plantR).toBe(true);
+  expect(one.frame.support.L).toBeLessThan(.98);expect(one.frame.support.R).toBeGreaterThanOrEqual(.98);
+  expect(kneeBalanceSides(rig,one.frame,singleKey.constraints)).toBeUndefined();
+
+  const ambiguous=structuredClone(doc),ambiguousFinish=ambiguous.keys.find(item=>item.id===finish.id)!;
+  // Every key is bilateral-planted, so the sampler uses its contact-start
+  // keys as anchors and ignores finish-only target edits. Make the authored
+  // anchors themselves share local-forward depth to construct a truly tied
+  // stance at the selected finish key.
+  for(const key of ambiguous.keys){
+   const depth=(key.pose.footL.target.z+key.pose.footR.target.z)/2;
+   key.pose.footL.target.z=depth;key.pose.footR.target.z=depth;
+  }
+  const tied=solveScheduledAt(ambiguous,finishTime);
+  expect(ambiguousFinish.constraints.plantL).toBe(true);expect(ambiguousFinish.constraints.plantR).toBe(true);
+  expect(kneeBalanceSides(rig,tied.frame,ambiguousFinish.constraints)).toBeUndefined();
+ });
+
+ it('rejects an out-of-range follow-up without losing the last valid preview',()=>{
+  const start=captureKneeBalanceState(rig,doc,finish.id,origin());
+  const valid=applyKneeBalanceEdit(rig,doc,finish.id,{dropMeters:.012,leanDegrees:-12},start,origin());
+  expect(valid.report.ok,`${valid.report.reason}; report=${JSON.stringify(valid.report)}; baseline=${JSON.stringify(start)}`).toBe(true);
+  const lastValidState=captureKneeBalanceState(rig,valid.doc,finish.id,origin());
+  const rejected=applyKneeBalanceEdit(rig,valid.doc,finish.id,{dropMeters:1,leanDegrees:-180},lastValidState,origin());
+  expect(rejected.report.ok).toBe(false);
+  expect(serializeDoc(rejected.doc)).toBe(serializeDoc(valid.doc));
+  expect(rejected.report.reason).toBeTruthy();
+ });
+
+ it('keeps balance changes continuous through neighboring sampled frames',()=>{
+  const start=captureKneeBalanceState(rig,doc,finish.id,origin());
+  const rear=applyKneeBalanceEdit(rig,doc,finish.id,{dropMeters:.012,leanDegrees:-12},start,origin());
+  expect(rear.report.ok,`${rear.report.reason}; report=${JSON.stringify(rear.report)}; baseline=${JSON.stringify(start)}`).toBe(true);
+  const middle=captureKneeBalanceState(rig,rear.doc,finish.id,origin());
+  const changed=applyKneeBalanceEdit(rig,rear.doc,finish.id,{dropMeters:.012,leanDegrees:12},middle,origin());
+  expect(changed.report.ok,`${changed.report.reason}; report=${JSON.stringify(changed.report)}; baseline=${JSON.stringify(middle)}`).toBe(true);
+  const times=[5.1,5.125,5.15,5.175,5.2];
+  const samples=times.map(time=>{
+   const solved=solveScheduledAt(changed.doc,time);
+   return {rootY:rig.point('root').y,lean:solved.frame.pose.lean,support:solved.frame.support,constraints:solved.frame.constraints,
+    leftFoot:rig.point('foot_L').clone(),rightFoot:rig.point('foot_R').clone()};
+  });
+  for(let i=1;i<samples.length;i++){
+   expect(samples[i].constraints.plantL).toBe(true);expect(samples[i].constraints.plantR).toBe(true);
+   expect(samples[i].support.L).toBeGreaterThan(.95);expect(samples[i].support.R).toBeGreaterThan(.95);
+   expect(Math.abs(samples[i].rootY-samples[i-1].rootY)).toBeLessThan(.02);
+   expect(Math.abs(samples[i].lean-samples[i-1].lean)).toBeLessThan(8);
+   expect(samples[i].leftFoot.distanceTo(samples[i-1].leftFoot)).toBeLessThan(.03);
+   expect(samples[i].rightFoot.distanceTo(samples[i-1].rightFoot)).toBeLessThan(.03);
+  }
  });
 });

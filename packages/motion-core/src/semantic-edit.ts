@@ -1,8 +1,8 @@
 import {Euler,Quaternion,Vector3} from 'three';
 import type {HumanRig} from './rig';
-import type {WorkshopDoc} from './document';
+import type {EffectiveFrame,KeyConstraints,V3,WorkshopDoc} from './document';
 import {compileMotion,contactStartKey,frameAt,frameAtCompiled,isReleaseKey,keyAt,sortedKeys} from './document';
-import {rotateArmAbout,rotateHandFrame,rotateLegAbout,solveEffectiveFrame} from './solver';
+import {analyzePose,rotateArmAbout,rotateHandFrame,rotateLegAbout,solveEffectiveFrame} from './solver';
 import {buildPelvisSchedule} from './pelvis-schedule';
 import {handFrame} from './hand-frame';
 import {DEG,angleAt,WRIST_BEND_LIMIT_DEG,LIMITS} from './kinematics';
@@ -68,6 +68,7 @@ const CHILD_JOINTS:Partial<Record<SemanticPart,[SemanticPart,SemanticMotion][]>>
 const CHILD_TOLERANCE_DEG=1.5;
 
 const q=new Quaternion();
+const asV3=(v:Vector3):V3=>({x:v.x,y:v.y,z:v.z});
 const world=(rig:HumanRig,bone:string)=>rig.bone(bone).getWorldQuaternion(new Quaternion());
 const signedAbout=(a:Vector3,b:Vector3,axis:Vector3)=>Math.atan2(new Vector3().crossVectors(a,b).dot(axis),a.dot(b))/DEG;
 function solvedHand(rig:HumanRig,side:Side){
@@ -394,6 +395,124 @@ export function applySemanticEdit(rig:HumanRig,doc:WorkshopDoc,keyId:string,edit
 export interface GroundReport{ok:boolean;dropMm:number;reason?:string;detail:string;
  /** Largest knee-angle change of a planted leg caused by the body moving down / up (°). */
  plantedKneeDeg:number}
+
+const KNEE_BALANCE_ROOT_Y:[number,number]=[-.55,.35];
+const KNEE_BALANCE_LEAN_LIMIT=45;
+const KNEE_BALANCE_FOOT_TOLERANCE_MM=1;
+const KNEE_BALANCE_SOLE_TOLERANCE_MM=5;
+
+/** A bilateral planted-knee gesture is only unambiguous when both solved feet
+ * are fully supported and visibly staggered along the body's own forward axis.
+ * The pelvis world quaternion carries yaw, so this also works for mirrored and
+ * turned poses. Call after solving `frame` on `rig`. */
+export interface KneeBalanceSides{front:Side;back:Side;separationM:number}
+export function kneeBalanceSides(rig:HumanRig,frame:EffectiveFrame,selectedConstraints:Pick<KeyConstraints,'plantL'|'plantR'>=frame.constraints,minSeparationM=.06):KneeBalanceSides|undefined{
+ if(!selectedConstraints.plantL||!selectedConstraints.plantR||frame.support.L<.98||frame.support.R<.98)return;
+ for(const side of ['L','R'] as const){
+  const geo=footGeometry(rig.rest,side),ankle=rig.point(`foot_${side}`),lowestNamed=Math.min(...geo.names.map(n=>rig.point(n).y));
+  const lowest=footLowestY(geo,lowestNamed,ankle.y,rig.bone(`foot_${side}`).getWorldQuaternion(new Quaternion()));
+  if(footDepth(geo,lowest)*1000>KNEE_BALANCE_SOLE_TOLERANCE_MM)return;
+ }
+ const forward=new Vector3(0,0,1).applyQuaternion(world(rig,'root')).normalize();
+ const delta=rig.point('foot_L').sub(rig.point('foot_R')).dot(forward);
+ if(Math.abs(delta)<minSeparationM)return;
+ return delta>0
+  ?{front:'L',back:'R',separationM:delta}
+  :{front:'R',back:'L',separationM:-delta};
+}
+
+export interface KneeBalanceState{
+ frontBack?:KneeBalanceSides;
+ /** Authored root offset, plus its solved world-space height. */
+ rootY:number;pelvisY:number;lean:number;comY:number;
+ feet:Record<Side,V3>;
+ ankleFlexion:Record<Side,number>;
+ wristResidualMm:Record<Side,number>;
+}
+export interface KneeBalanceEdit{dropMeters:number;leanDegrees:number}
+export interface KneeBalanceEditReport{
+ ok:boolean;reason?:string;
+ rootY:number;pelvisY:number;lean:number;comY:number;
+ footDriftMm:number;solePenetrationMm:number;
+ kneeFlexion:Record<Side,number>;ankleFlexion:Record<Side,number>;
+ wristResidualMm:Record<Side,number>;
+}
+export interface KneeBalanceEditResult{
+ doc:WorkshopDoc;report:KneeBalanceEditReport;schedule:ReturnType<typeof buildPelvisSchedule>;
+}
+/** Capture the selected key's real solved baseline once at pointer-down. The
+ * following per-move command uses these world anchors to protect both feet and
+ * compares hand reach to this same pose instead of repeatedly sampling the
+ * source document. */
+export function captureKneeBalanceState(rig:HumanRig,doc:WorkshopDoc,keyId:string,origin:Vector3=rig.rest.get('root')!):KneeBalanceState{
+ const key=keyAt(doc,keyId);if(!key)throw new Error(`关键帧 ${keyId} 不存在`);
+ const compiled=compileMotion(doc,origin),schedule=buildPelvisSchedule(rig,compiled);
+ const frame=frameAtCompiled(compiled,key.time),shift=schedule.passthrough?undefined:schedule.at(key.time);
+ solveEffectiveFrame(rig,frame,shift);
+ const residual=(side:Side)=>{
+  const target=side==='L'?frame.pose.handL.target:frame.pose.handR.target;
+  return rig.point(`wrist_${side}`).distanceTo(new Vector3(target.x,target.y,target.z))*1000;
+ };
+ return {
+  frontBack:kneeBalanceSides(rig,frame,key.constraints),
+  rootY:key.pose.root.y,pelvisY:rig.point('root').y,
+  lean:measureSemantic(rig,'trunk','lean'),comY:analyzePose(rig,frame.pose,frame.constraints).com.y,
+  feet:{L:asV3(rig.point('foot_L')),R:asV3(rig.point('foot_R'))},
+  ankleFlexion:{L:measureSemantic(rig,'ankle','flexion','L'),R:measureSemantic(rig,'ankle','flexion','R')},
+  wristResidualMm:{L:residual('L'),R:residual('R')},
+ };
+}
+
+/** Lower the pelvis and rebalance the trunk using existing WorkshopDoc fields.
+ * Every candidate is cloned from the gesture's starting document and validated
+ * through the production sampler, pelvis schedule, and solver before commit. */
+export function applyKneeBalanceEdit(
+ rig:HumanRig,doc:WorkshopDoc,keyId:string,edit:KneeBalanceEdit,state:KneeBalanceState,
+ origin:Vector3=rig.rest.get('root')!,
+):KneeBalanceEditResult{
+ if(!Number.isFinite(edit.dropMeters)||!Number.isFinite(edit.leanDegrees))throw new Error('姿态调整必须是有限数值');
+ const key=keyAt(doc,keyId);if(!key)throw new Error(`关键帧 ${keyId} 不存在`);
+ const next=JSON.parse(JSON.stringify(doc)) as WorkshopDoc;
+ const candidateKey=keyAt(next,keyId)!;
+ candidateKey.pose.root.y-=edit.dropMeters;
+ candidateKey.pose.lean+=edit.leanDegrees;
+ const compiled=compileMotion(next,origin),schedule=buildPelvisSchedule(rig,compiled);
+ const frame=frameAtCompiled(compiled,candidateKey.time),shift=schedule.passthrough?undefined:schedule.at(candidateKey.time);
+ solveEffectiveFrame(rig,frame,shift);
+ const rootY=candidateKey.pose.root.y,pelvisY=rig.point('root').y;
+ const lean=measureSemantic(rig,'trunk','lean'),comY=analyzePose(rig,frame.pose,frame.constraints).com.y;
+ const feet={L:rig.point('foot_L').clone(),R:rig.point('foot_R').clone()};
+ const footDriftMm=Math.max(feet.L.distanceTo(new Vector3(state.feet.L.x,state.feet.L.y,state.feet.L.z)),feet.R.distanceTo(new Vector3(state.feet.R.x,state.feet.R.y,state.feet.R.z)))*1000;
+ const solePenetrationMm=Math.max(...(['L','R'] as const).map(side=>{
+  const geo=footGeometry(rig.rest,side),ankle=rig.point(`foot_${side}`),lowestNamed=Math.min(...geo.names.map(n=>rig.point(n).y));
+  const lowest=footLowestY(geo,lowestNamed,ankle.y,rig.bone(`foot_${side}`).getWorldQuaternion(new Quaternion()));
+  return footDepth(geo,lowest)*1000;
+ }));
+ const kneeFlexion={L:measureSemantic(rig,'knee','flexion','L'),R:measureSemantic(rig,'knee','flexion','R')};
+ const ankleFlexion={L:measureSemantic(rig,'ankle','flexion','L'),R:measureSemantic(rig,'ankle','flexion','R')};
+ const ankleExcess=(degrees:number)=>Math.max(0,LIMITS.ankleFlexion[0]-degrees,degrees-LIMITS.ankleFlexion[1]);
+ const wristResidualMm={L:0,R:0};
+ for(const side of ['L','R'] as const){
+  const target=side==='L'?frame.pose.handL.target:frame.pose.handR.target;
+  wristResidualMm[side]=rig.point(`wrist_${side}`).distanceTo(new Vector3(target.x,target.y,target.z))*1000;
+ }
+ let reason:string|undefined;
+ if(!state.frontBack)reason='双脚前后间距不明确，不能使用重心联动';
+ else if(!candidateKey.constraints.plantL||!candidateKey.constraints.plantR||frame.support.L<.98||frame.support.R<.98)reason='双脚未处于稳定支撑';
+ else if(rootY<KNEE_BALANCE_ROOT_Y[0]||rootY>KNEE_BALANCE_ROOT_Y[1])reason='骨盆高度达到求解范围';
+ else if(Math.abs(candidateKey.pose.lean)>KNEE_BALANCE_LEAN_LIMIT)reason='躯干倾斜达到重心联动限位';
+ else if(edit.dropMeters>0&&!(rootY<state.rootY-1e-6&&comY<state.comY-1e-4))reason='重心未能随骨盆下沉';
+ else if(edit.leanDegrees<0&&!(lean<state.lean-.1))reason='躯干未能向后倾斜';
+ else if(edit.leanDegrees>0&&!(lean>state.lean+.1))reason='躯干未能向前回正';
+ else if(footDriftMm>=KNEE_BALANCE_FOOT_TOLERANCE_MM)reason=`支撑脚移动 ${footDriftMm.toFixed(1)} mm`;
+ else if(solePenetrationMm>KNEE_BALANCE_SOLE_TOLERANCE_MM)reason=`脚底入地 ${solePenetrationMm.toFixed(1)} mm`;
+ else if(Object.values(kneeFlexion).some(v=>v<LIMITS.kneeFlexion[0]-.5||v>LIMITS.kneeFlexion[1]+.5))reason='膝关节超过屈伸限位';
+ else if((['L','R'] as const).some(side=>ankleExcess(ankleFlexion[side])>ankleExcess(state.ankleFlexion[side])+.5))reason='踝关节屈伸比基准进一步超出参考限位';
+ else if((['L','R'] as const).some(side=>wristResidualMm[side]>state.wristResidualMm[side]+1))reason='手腕目标变得不可达';
+ const report:KneeBalanceEditReport={ok:!reason,reason,rootY,pelvisY,lean,comY,footDriftMm,solePenetrationMm,kneeFlexion,ankleFlexion,wristResidualMm};
+ return {doc:reason?(JSON.parse(JSON.stringify(doc)) as WorkshopDoc):next,report,schedule};
+}
+
 /** 「落地」: translate THIS key's whole body vertically — pelvis, both hand
  * targets/poles, knee poles and every foot that is not on a contact — until
  * the lowest sole of `side`'s free foot touches the rest floor. A pure
@@ -401,6 +520,7 @@ export interface GroundReport{ok:boolean;dropMm:number;reason?:string;detail:str
  * is planted re-bends to reach its (unchanged) contact, and that change is
  * reported. Other keys are never touched. `side:'both'` grounds the lower of
  * the two free feet. Pure in the document, like applySemanticEdit. */
+
 export function groundFoot(rig:HumanRig,doc:WorkshopDoc,keyId:string,side:Side|'both',origin:Vector3=rig.rest.get('root')!,pelvisShift?:number):{doc:WorkshopDoc;report:GroundReport}{
  const next=JSON.parse(JSON.stringify(doc)) as WorkshopDoc;
  const key=keyAt(next,keyId);if(!key)throw new Error(`关键帧 ${keyId} 不存在`);

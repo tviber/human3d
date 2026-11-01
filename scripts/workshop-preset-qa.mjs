@@ -238,14 +238,14 @@ try{
  assert.equal((await read()).doc.keys[0].interpolation,'linear');
  await interpolation.scrollIntoViewIfNeeded();
  await page.screenshot({path:outputFile('segment-interpolation.png')});
- // Exercise the new coordinate controls through real keyboard input. Each
- // side's forearm/lower-leg target and elbow/knee pole must write its own key data.
+ // Exercise the end-effector coordinates through real keyboard input. Each
+ // side's hand/foot target and elbow pole writes its own key; knee XYZ is absent.
  assert.equal(await page.getByTestId('limb-controls-L').count(),0,'common tab should not contain left-only controls');
  assert.equal(await page.getByTestId('limb-controls-R').count(),0,'common tab should not contain right-only controls');
  const limbEdits=[];
  let sideTabsAndScroll=false;
  for(const side of ['L','R'])for(const [kind,field,axis] of [
-  ['arm','target','x'],['arm','pole','z'],['leg','target','x'],['leg','pole','z'],
+  ['arm','target','x'],['arm','pole','z'],['leg','target','x'],
  ]){
   await page.getByTestId(`adjustment-tab-${side==='L'?'left':'right'}`).click();
   const section=page.getByTestId(`limb-controls-${side}`);
@@ -266,6 +266,11 @@ try{
   const afterValue=(await read()).doc.keys[0].pose[key][field][axis];
   assert.notEqual(afterValue,beforeValue,`${testId} did not update the selected key`);
   limbEdits.push(testId);
+ }
+ for(const side of ['L','R']){
+  await page.getByTestId(`adjustment-tab-${side==='L'?'left':'right'}`).click();
+  for(const axis of ['x','y','z'])
+   assert.equal(await page.getByTestId(`limb-${side}-leg-pole-${axis}`).count(),0,`knee pole ${axis.toUpperCase()} control should be absent`);
  }
  await page.getByTestId('adjustment-tab-left').click();
  const limbControls=page.getByTestId('limb-controls-L');

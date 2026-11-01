@@ -13,7 +13,7 @@ const out=name=>assertTrackedWriteAllowed(path.join(output.dir,name),{root,updat
 const base=new URL(process.env.QA_WEB_URL??'http://127.0.0.1:5173/');assert((await verifyWebIdentity(root,base)).ok);
 const browser=await launchQaBrowser(chromium,{...(process.env.QA_BROWSER_CHANNEL?{channel:process.env.QA_BROWSER_CHANNEL}:{})});
 const context=await browser.newContext({viewport:{width:1440,height:1000}}),errors=[];
-const ready=async p=>{await p.waitForFunction(()=>window.__WS__?.ready||window.__LAB__?.ready,null,{timeout:60000});assert.match(await p.title(),/KINESIS/);assert.equal(await p.locator('vite-error-overlay').count(),0);};
+const ready=async p=>{await p.waitForFunction(()=>window.__WS__?.ready||window.__LAB__?.ready,null,{timeout:60000});assert.match(await p.title(),/h3d/);assert.equal(await p.locator('vite-error-overlay').count(),0);};
 const open=async(ctx,route)=>{const p=await ctx.newPage();p.on('pageerror',e=>errors.push(e.message));p.on('console',m=>{if(m.type()==='error')errors.push(m.text());});await p.goto(new URL(route,base).href);await ready(p);return p;};
 const saved=p=>p.getByTestId('save-state').filter({hasText:'已保存到本机'}).waitFor();
 const file=p=>p.evaluate(()=>JSON.parse(localStorage.getItem('kinesis-workshop-library')));

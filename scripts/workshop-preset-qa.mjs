@@ -57,7 +57,7 @@ try{
  await page.goto(new URL('/workshop.html',webBase).href);
  const ready=()=>page.waitForFunction(()=>window.__WS__?.ready,{timeout:60000});
  await ready();
- assert.match(await page.title(),/KINESIS/);
+ assert.match(await page.title(),/h3d/);
  assert.equal(new URL(page.url()).pathname,'/workshop.html');
  assert.equal(await page.getByRole('heading',{name:'动作工作台',exact:true}).count(),1);
  assert.equal(await page.locator('vite-error-overlay').count(),0);

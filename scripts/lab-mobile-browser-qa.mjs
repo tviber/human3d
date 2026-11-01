@@ -14,7 +14,7 @@ const browser=await launchQaBrowser(chromium,{...(process.env.QA_BROWSER_CHANNEL
 const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true}),errors=[];
 const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
 try{
- await page.goto(base.href);await page.waitForFunction(()=>window.__LAB__?.ready,null,{timeout:60000});assert.match(await page.title(),/KINESIS/);assert.equal(await page.locator('vite-error-overlay').count(),0);
+ await page.goto(base.href);await page.waitForFunction(()=>window.__LAB__?.ready,null,{timeout:60000});assert.match(await page.title(),/h3d/);assert.equal(await page.locator('vite-error-overlay').count(),0);
  await page.getByTestId('sheet-library').tap();await page.locator('.motion-row').filter({hasText:'正手挥拍'}).first().tap();await page.getByRole('button',{name:'暂停',exact:true}).tap();
  for(const width of [375,390,760,761,1280]){
   await page.setViewportSize({width,height:844});

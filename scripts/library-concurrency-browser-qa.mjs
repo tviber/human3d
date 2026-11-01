@@ -9,7 +9,7 @@ const base=new URL(process.env.QA_WEB_URL??'http://127.0.0.1:5173/');
 assert((await verifyWebIdentity(process.cwd(),base)).ok);
 const browser=await launchQaBrowser(chromium,{...(process.env.QA_BROWSER_CHANNEL?{channel:process.env.QA_BROWSER_CHANNEL}:{})});
 const context=await browser.newContext({viewport:{width:1440,height:1000}}),errors=[];
-const open=async route=>{const p=await context.newPage();p.on('pageerror',e=>errors.push(e.message));p.on('console',m=>{if(m.type()==='error')errors.push(m.text());});await p.goto(new URL(route,base).href);await p.waitForFunction(()=>window.__WS__?.ready||window.__LAB__?.ready,null,{timeout:60000});assert.match(await p.title(),/KINESIS/);assert.equal(await p.locator('vite-error-overlay').count(),0);return p;};
+const open=async route=>{const p=await context.newPage();p.on('pageerror',e=>errors.push(e.message));p.on('console',m=>{if(m.type()==='error')errors.push(m.text());});await p.goto(new URL(route,base).href);await p.waitForFunction(()=>window.__WS__?.ready||window.__LAB__?.ready,null,{timeout:60000});assert.match(await p.title(),/h3d/);assert.equal(await p.locator('vite-error-overlay').count(),0);return p;};
 const file=p=>p.evaluate(()=>JSON.parse(localStorage.getItem('kinesis-workshop-library')));
 const panel=async p=>{const button=p.getByTestId('sheet-left');if(await button.getAttribute('aria-expanded')!=='true')await button.click();await p.locator('.ws-left').waitFor({state:'visible'});};
 // The keyframe list is a collapsed fold by default (issue #30 PR-B).

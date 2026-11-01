@@ -61,7 +61,7 @@ const snapshot=page=>page.evaluate(()=>({doc:JSON.stringify(window.__WS__.getDoc
 try{
  const desktop=await browser.newContext({viewport:{width:1440,height:1000},deviceScaleFactor:1});
  const page=await desktop.newPage();watch(page);await page.goto(new URL('/',base).href);await page.waitForFunction(()=>window.__LAB__?.ready,{timeout:60000});
- assert.match(await page.title(),/KINESIS/);assert((await page.locator('body').innerText()).includes('人体运动实验室'));assert.equal(await page.locator('vite-error-overlay').count(),0);
+ assert.match(await page.title(),/h3d/);assert((await page.locator('body').innerText()).includes('人体运动实验室'));assert.equal(await page.locator('vite-error-overlay').count(),0);
  await page.evaluate(()=>{window.__LAB__.setPlaying(false);window.__LAB__.seek(0);});await page.getByRole('button',{name:'正面',exact:true}).click();
  assert.deepEqual(await state(page,'__LAB__'),{hovered:null,selected:null,active:null});await page.screenshot({path:out('desktop-default.png')});checks.default=true;
  const chest=await hover(page,'__LAB__','pectoralis_L');await page.waitForTimeout(200);await page.screenshot({path:out('desktop-hover.png')});assert.match(await page.locator('.anatomy-selection').innerText(),/左胸大肌/);checks.hover=true;

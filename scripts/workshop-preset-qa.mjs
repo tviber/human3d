@@ -420,7 +420,8 @@ try{
  await page.getByTestId('adjustment-tab-common').click();
  const gripTilt=page.getByTestId('grip-tilt');
  const gripState=()=>page.evaluate(()=>{
-  const e=window.__WS__,side=e.getDoc().gripSide==='L'?'L':'R';
+  const e=window.__WS__;e.setPlaying(false);e.seek(e.time);
+  const side=e.getDoc().gripSide==='L'?'L':'R';
   return {tilt:e.getDoc().gripTilt??0,pose:JSON.stringify(e.getDoc().keys[0].pose),
    racket:e.racket.quaternion.toArray(),tip:e.racket.localToWorld(e.racket.position.clone().set(0,.61,0)).toArray(),
    wrist:e.rig.bone(`wrist_${side}`).quaternion.toArray()};

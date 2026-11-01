@@ -5,12 +5,12 @@ import {LIBRARY_KEY} from './library';
 import {POSE_LIBRARY_KEY} from './pose-library';
 import {RESTORE_POINT_KEY} from './library-backup';
 import type {RigInfo} from '@human3d/motion-core';
-import '../tailwind.css';
 import '../style.css';
 import './workshop.css';
 import '../components/ui/ui.css';
-import '../theme/panels.css';
-import '../theme/scroll-regions.css';
+import '../layout/panels.css';
+import '../layout/scroll-regions.css';
+import '../redesign.css';
 const host=document.getElementById('root')!;
 webPlatform.fetchAsset('/models/rig.json')
  .then(r=>{if(!r.ok)throw new Error('人体骨架加载失败');return r.json() as Promise<RigInfo>;})

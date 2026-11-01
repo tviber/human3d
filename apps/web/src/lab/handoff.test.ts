@@ -1,7 +1,7 @@
 import {describe,it,expect} from 'vitest';
 import {MOTIONS} from '@human3d/motion-core';
 import {workshopEditability} from './handoff';
-import {savedMotionSpec} from '../workshop/library';
+import {savedMotionSpec} from '../motions/saved-motion';
 
 describe('workshopEditability',()=>{
  it('opens the existing saved document instead of offering a new preset copy',()=>{

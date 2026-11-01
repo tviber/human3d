@@ -3,7 +3,6 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {defineConfig} from 'vite';
 import react from '@vitejs/plugin-react';
-import tailwindcss from '@tailwindcss/vite';
 /** The web app lives in apps/web but keeps consuming the repo-level `public/`
  * assets (models, dynamics records) and emitting `dist/` at the repo root —
  * the dev server and the preview keep the same URLs and output layout the QA
@@ -73,7 +72,7 @@ export function resolveBuildOutDir(repoRoot:string,requested?:string):string{
 }
 const buildOutDir=resolveBuildOutDir(repoRoot,process.env.HUMAN3D_BUILD_OUT_DIR);
 export default defineConfig({
- plugins:[react(), tailwindcss()],
+ plugins:[react()],
  publicDir:path.resolve(repoRoot,'public'),
  build:{
   outDir:buildOutDir,

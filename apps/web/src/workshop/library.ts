@@ -1,5 +1,5 @@
-import type {MotionSpec,WorkshopDoc} from '@human3d/motion-core';
-import {blankDocument,canonicalizeHands,defaultDocument,MOTION_FILES,newDocId,normalizeDoc,parseDoc,sortedKeys} from '@human3d/motion-core';
+import type {WorkshopDoc} from '@human3d/motion-core';
+import {blankDocument,canonicalizeHands,defaultDocument,MOTION_FILES,newDocId,normalizeDoc,parseDoc} from '@human3d/motion-core';
 import type {Vector3} from 'three';
 import type {DraftOwner,StorageLike,StorageLock} from '../platform/platform';
 export type {StorageLike} from '../platform/platform';
@@ -17,13 +17,6 @@ export interface QuarantineEntry{id:string;name:string;reason:string;raw:unknown
 export interface LibraryFile{schemaVersion:2;activeId:string;docs:WorkshopDoc[];quarantine:QuarantineEntry[]}
 export const LIBRARY_KEY='kinesis-workshop-library';
 export const DRAFT_PREFIX=LIBRARY_KEY+':draft:';
-export const SAVED_MOTION_PREFIX='local:';
-/** Both pages play the saved document itself through the normal document source. */
-export function savedMotionSpec(doc:WorkshopDoc):MotionSpec{
- return {id:SAVED_MOTION_PREFIX+doc.id,name:doc.name,english:'我的动作',duration:doc.duration,description:'在动作工作台中创建并保存的动作，可继续编辑或删除。',method:'工作台关键帧 · 本机保存',focus:['手工编辑'],oneShot:!doc.loop,
-  phases:sortedKeys(doc).map(k=>({time:k.time,label:k.label||'关键帧'})),source:{kind:'document',document:doc},
-  capabilities:doc.keys.some(k=>k.constraints.grip)?{prop:{kind:'racket',trail:true,handView:true,side:doc.gripSide??'R',...(doc.gripBevel!==undefined?{bevel:doc.gripBevel}:{}),...(doc.gripTilt!==undefined?{gripTilt:doc.gripTilt}:{})}}:undefined};
-}
 /** Only bundled trajectories have editable workshop keys. */
 export const WORKSHOP_PRESETS=MOTION_FILES.filter(f=>f.kind==='workshop-motion'&&f.document);
 /** The library's lead group: reusable basic actions (≤3 keys each) that the

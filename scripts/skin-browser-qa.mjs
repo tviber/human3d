@@ -40,7 +40,7 @@ try{
   page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error'&&!fault)errors.push(m.text());});
   const requests=[];page.on('request',r=>{if(r.url().includes('/models/skins/'))requests.push(r.url());});
   await page.goto(new URL(route,base).href);await page.waitForFunction(key=>window[key]?.ready,key,{timeout:60000});
-  assert.equal(new URL(page.url()).pathname,route);assert.match(await page.title(),/KINESIS/);assert((await page.locator('body').innerText()).includes('超赛皮肤'));assert.equal(await page.locator('vite-error-overlay').count(),0);
+  assert.equal(new URL(page.url()).pathname,route);assert.match(await page.title(),/h3d/);assert((await page.locator('body').innerText()).includes('超赛皮肤'));assert.equal(await page.locator('vite-error-overlay').count(),0);
   assert.equal(requests.length,0,'default viewer eagerly loaded unused skin textures');
   assert.equal(await page.evaluate(key=>window[key].model.getObjectsByProperty('name','ssj-hair').length,key),0,'default skin must start bald');
   await page.evaluate(key=>{

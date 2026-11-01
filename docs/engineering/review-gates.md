@@ -10,8 +10,8 @@ Issue → task-slice / 契约与方案预审
   → Fast Review（只找确定的 blockers；不做昂贵验证）
       ├─ REWORK → 修复 → 只复审相关差异与新风险
       ├─ ESCALATE → 重新规划/冻结接口，禁止盲目循环
-      └─ PROCEED → affected checks → Final Review
-                        → Ready PR → 完整必需 CI/真实路径验收 → Merge
+      └─ PROCEED → affected checks → Draft PR 调试（局部测试 / 手动选定 browser-qa suite）
+                        → Final Review → Ready PR → 完整必需 CI/真实路径验收 → Merge
 ```
 
 ## 不可突破的约束
@@ -20,6 +20,7 @@ Issue → task-slice / 契约与方案预审
 - 仅 REWORK 阶段避免*不必要的*全量测试/生产构建/浏览器 E2E/完整 CI；高风险真实路径测试仍必须在合并前完成。
 - Reviewer 尽量独立于 Implementer，基于明确的 base/head SHA、实际 diff 与任务契约判断；不以「看起来 OK」或虚构分数作为通过依据。
 - 完整必需检查绑定**最终待合并 head SHA**；新提交使旧结果过期。未执行的验证不得写为通过；被 CI 跳过的 job 不构成绕过必需门禁的路径。
+- browser-qa 调试时保持 PR 为 Draft；Draft 上自动跳过 browser-qa。按失败 suite 手动 dispatch（例如 `gh workflow run browser-qa --ref <branch> -f suites=knee`）仅作诊断证据，不能替代 Ready PR 对最终 head 的全量 browser-qa。修复稳定后标记 Ready，执行完整必需 CI 后再合并。
 
 ## Fast Review（开发期证伪）
 

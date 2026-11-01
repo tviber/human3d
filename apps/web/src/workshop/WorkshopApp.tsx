@@ -43,9 +43,6 @@ type GenerationProgress=MotionGenProgress|{evals:0;maxEvals:number;phase:'loadin
 
 /** Phone / short-landscape layout. Mirrors the CSS breakpoint in workshop.css. */
 const COMPACT_QUERY='(max-width: 760px), (pointer: coarse) and (max-height: 540px)';
-function useMedia(query:string){
- return useMediaMatches(query);
-}
 /** Session-only review note (issue #23 PR-D): never written into WorkshopDoc. */
 interface ReviewNote{id:string;docId:string;keyId:string;keyLabel:string;time:number;view:string;part:string;issue:string;text:string}
 const NOTE_PARTS=['右臂','左臂','右手腕','左手腕','躯干','骨盆','右腿','左腿','右脚','左脚','球拍'];
@@ -195,6 +192,18 @@ function Timeline({doc,time,selected,retime,onSelect,onSeek,onRetime,onBeginReti
  const [dragKey,setDragKey]=useState<string|null>(null);
  const press=useRef<{x:number;id:string;moved:boolean}|null>(null),scrub=useRef(false);
  const frac=(x:number)=>{const r=track.current!.getBoundingClientRect();return Math.max(0,Math.min(1,(x-r.left)/r.width));};
+ const seekFromPointer=(clientX:number,pointerType:string)=>{
+  const position=frac(clientX),time=position*doc.duration;
+  if(pointerType==='mouse'&&track.current){
+   const rect=track.current.getBoundingClientRect();
+   const nearest=sortedKeys(doc).reduce<{key:WorkshopKey;distance:number}|undefined>((best,key)=>{
+    const distance=Math.abs(key.time/doc.duration*rect.width-position*rect.width);
+    return !best||distance<best.distance?{key,distance}:best;
+   },undefined);
+   if(nearest&&nearest.distance<=14){onSelect(nearest.key.id);onSeek(nearest.key.time);return;}
+  }
+  onSeek(time);
+ };
  const move=(ev:{clientX:number})=>{
   if(scrub.current&&track.current){onSeek(frac(ev.clientX)*doc.duration);return;}
   if(!dragKey||!retime||!track.current)return;
@@ -209,13 +218,13 @@ function Timeline({doc,time,selected,retime,onSelect,onSeek,onRetime,onBeginReti
  };
  const end=()=>{const moved=press.current?.moved;scrub.current=false;setDragKey(null);if(moved)onEndRetime();setTimeout(()=>{press.current=null;},0);};
  return <div className="ws-track-wrap">
-  <div ref={track} className="ws-track" data-testid="timeline-track" onPointerDown={e=>{if(e.target===e.currentTarget){scrub.current=true;e.currentTarget.setPointerCapture(e.pointerId);onSeek(frac(e.clientX)*doc.duration);}}} onPointerMove={move} onPointerUp={end} onPointerCancel={end}>
+  <div ref={track} className="ws-track" data-testid="timeline-track" onPointerDown={e=>{e.preventDefault();if(e.target===e.currentTarget){scrub.current=true;e.currentTarget.setPointerCapture(e.pointerId);seekFromPointer(e.clientX,e.pointerType);}}} onPointerMove={move} onPointerUp={end} onPointerCancel={end}>
    <div className="ws-progress" style={{width:`${time/doc.duration*100}%`}}/>
    <div className="ws-cursor" style={{left:`${time/doc.duration*100}%`}}/>
    {sortedKeys(doc).map(k=><button key={k.id} className={`ws-key ${k.id===selected?'sel':''} ${k.constraints.contact?'contact':''}`} style={{left:`${k.time/doc.duration*100}%`}}
      aria-label={`选择关键帧 ${k.label||fmt(k.time)}`} aria-pressed={k.id===selected}
      title={`${k.label||'关键帧'} · ${k.time.toFixed(2)}s`}
-     onPointerDown={e=>{e.stopPropagation();press.current={x:e.clientX,id:k.id,moved:false};onSelect(k.id);setDragKey(k.id);(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);}}
+     onPointerDown={e=>{e.preventDefault();e.stopPropagation();press.current={x:e.clientX,id:k.id,moved:false};onSelect(k.id);setDragKey(k.id);(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);}}
      onPointerMove={move} onPointerUp={end} onPointerCancel={end}
      onClick={()=>{if(press.current?.moved)return;onSelect(k.id);onSeek(k.time);}}/>)}
   </div>
@@ -290,7 +299,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
  const [optsOpen,setOptsOpen]=useState(false);
  // Issue #23: phone layout = viewport + bottom sheets; Review mode blocks every
  // viewport write. Same query as the CSS breakpoint in workshop.css.
- const compact=useMedia(COMPACT_QUERY);
+ const compact=useMediaMatches(COMPACT_QUERY);
  const [mode,setMode]=useState<'review'|'edit'>('review');
  const panelGroup=useRef<GroupImperativeHandle|null>(null);
  const libraryPanel=useRef<PanelImperativeHandle|null>(null),inspectorPanel=useRef<PanelImperativeHandle|null>(null);
@@ -1076,7 +1085,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
  const sheetHead=(title:string)=><div className="ws-sheet-head"><strong>{title}</strong><button type="button" aria-label="关闭面板" onClick={()=>setSheet(null)}><X size={18}/></button></div>;
  return <div inert={restoring} aria-busy={restoring} className={`ws-shell ${generationLockedUi?'ws-generation-locked':''} ${compact?'ws-compact':''} ${sheet?`ws-sheet-${sheet}`:''} ws-mode-${mode}`} data-mode={mode}>
   <header className="ws-header">
-   <div className="brand"><Activity size={25} strokeWidth={2}/><span>h3d</span><i/><h1>动作工作台</h1><small>关键帧动作编辑器</small></div>
+   <a className="brand brand-home" href="/" aria-label="返回人体运动实验室首页" onClick={e=>{e.preventDefault();void returnToLab();}}><Activity size={25} strokeWidth={2}/><span>h3d</span><i/><h1>动作工作台</h1><small>关键帧动作编辑器</small></a>
    <nav><a href="/" className="ws-back" aria-disabled={leaving} onClick={e=>{e.preventDefault();void returnToLab();}}><ArrowLeft size={14}/>返回实验室</a></nav>
    <div className="ws-save-state" data-testid="save-state" data-state={L.saveState} role="status" aria-live="polite"><span>{L.saveState==='error'?`保存失败：${L.lastError}`:L.saveState==='saving'?leaving?'保存中 · 完成后返回实验室…':'保存中…':'已保存到本机'}</span><button type="button" disabled={L.saveState==='saved'} aria-hidden={L.saveState==='saved'} onClick={()=>exportDoc()}><Download size={12}/>导出当前动作 JSON</button></div>
   </header>

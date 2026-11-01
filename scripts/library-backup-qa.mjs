@@ -37,7 +37,7 @@ const launch=async(viewport,isMobile=false)=>{
 };
 try{
  let page=await launch({width:1440,height:1000});
- assert.match(await page.title(),/KINESIS/);
+ assert.match(await page.title(),/h3d/);
  assert.equal(await page.locator('vite-error-overlay').count(),0);
  const initial=await page.evaluate(()=>({mode:document.querySelector('.ws-shell').dataset.mode,editable:window.__WS__.editable,options:window.__WS__.options,width:document.querySelector('#ws-stage').clientWidth,library:document.querySelector('#ws-library').clientWidth,inspector:document.querySelector('#ws-inspector').clientWidth}));
  assert.equal(initial.mode,'review');assert.equal(initial.editable,false);assert.equal(initial.options.trajectories,false);assert.equal(initial.options.balance,false);assert(initial.width>1300);assert.equal(initial.library,0);assert.equal(initial.inspector,0);

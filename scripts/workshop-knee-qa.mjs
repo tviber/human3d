@@ -93,17 +93,21 @@ try{
   return {x:r.left+(p.x+1)/2*r.width,y:r.top+(1-p.y)/2*r.height,visible:h.mesh.visible===true,
    atJoint:h.mesh.position.distanceTo(e.rig.point(`lowerleg01_${side}`))};
  },side);
- const keyState=()=>page.evaluate(async url=>{
-  const {measureSemantic}=await import(url);
-  const e=window.__WS__,ks=[...e.getDoc().keys].sort((a,b)=>a.time-b.time);
+ const keyState=()=>page.evaluate(async({semanticUrl,footUrl})=>{
+  const [{measureSemantic},{footGeometry,footLift}]=await Promise.all([import(semanticUrl),import(footUrl)]);
+  const e=window.__WS__;e.setPlaying(false);e.seek(e.time);
+  const ks=[...e.getDoc().keys].sort((a,b)=>a.time-b.time);
   const u=e.rig.point('upperleg01_L').sub(e.rig.point('lowerleg01_L'));
   const w=e.rig.point('foot_L').sub(e.rig.point('lowerleg01_L'));
   const internal=Math.acos(Math.max(-1,Math.min(1,u.dot(w)/(u.length()*w.length()))))*180/Math.PI;
-  return {grips:ks.map(k=>k.constraints.grip===true),
-   keys:ks.map(k=>({id:k.id,time:k.time,pole:{...k.pose.footL.pole},target:{...k.pose.footL.target},yaw:k.pose.footL.yaw,pitch:k.pose.footL.pitch})),
+  return {time:e.time,grips:ks.map(k=>k.constraints.grip===true),
+   plants:ks.map(k=>({L:k.constraints.plantL===true,R:k.constraints.plantR===true})),
+   keys:ks.map(k=>({id:k.id,time:k.time,pole:{...k.pose.footL.pole},target:{...k.pose.footL.target},yaw:k.pose.footL.yaw,pitch:k.pose.footL.pitch,root:{...k.pose.root}})),
+   hint:document.querySelector('.ws-feedback span')?.textContent??'',
+   leftLift:footLift(footGeometry(e.rig.rest,'L'),ks[0].pose.footL.target.y,ks[0].pose.footL.yaw,ks[0].pose.footL.pitch),
    kneeFlex:180-internal,ankleFlex:measureSemantic(e.rig,'ankle','flexion','L'),
    hip:e.rig.point('upperleg01_L').toArray(),knee:e.rig.point('lowerleg01_L').toArray(),ankle:e.rig.point('foot_L').toArray()};
- },coreModule('semantic-edit.ts'));
+ },{semanticUrl:coreModule('semantic-edit.ts'),footUrl:coreModule('foot.ts')});
 
  // ---- 1. knee handles ride the solved joints; raw pole editing is absent
  const spot0=await kneeSpot();
@@ -144,8 +148,19 @@ try{
  check('语义调膝保持脚踝世界位置',Math.hypot(bent0.ankle[0]-sliderBase.ankle[0],bent0.ankle[1]-sliderBase.ankle[1],bent0.ankle[2]-sliderBase.ankle[2])<.001);
  await page.getByTestId('semantic-commit').click();
  await page.waitForTimeout(150);
- await page.evaluate(()=>{const e=window.__WS__;e.setPlaying(false);e.solveCurrent();});
+ const keyCount=await page.locator('.ws-key').count();
+ // Keep one leg planted so this deliberately exercises the angle-only knee
+ // gesture. The fresh document starts in bilateral support, which correctly
+ // routes knee drags to the separate balance gesture instead.
+ for(let i=0;i<keyCount;i++){
+  await page.locator('.ws-key').nth(i).click();
+  await page.getByTestId('adjustment-tab-right').click();
+  const rightBox=page.locator('.ws-check').filter({hasText:'右脚支撑锁定'}).locator('input');
+  if(await rightBox.isChecked())await rightBox.uncheck();
+ }
+ await page.evaluate(()=>{const e=window.__WS__;e.setPlaying(false);e.seek(.1);e.solveCurrent();});
  const planted0=await keyState();
+ check('支撑角度拖动场景只有左脚锁定',planted0.plants.every(p=>p.L&&!p.R),JSON.stringify(planted0.plants));
  const bentSpot=await kneeSpot();
  await page.mouse.move(bentSpot.x,bentSpot.y);await page.mouse.down();
  await page.mouse.move(bentSpot.x,bentSpot.y-50,{steps:8});await page.mouse.up();
@@ -159,23 +174,32 @@ try{
  check('角度拖动支撑膝球保持脚踝世界位置',moved3(planted1.ankle,planted0.ankle)<.001,
   `Δankle=${(moved3(planted1.ankle,planted0.ankle)*1000).toFixed(2)}mm`);
 
- // ---- 3. free leg: unplant both keys and verify a drag changes only knee flexion
- const keyCount=await page.locator('.ws-key').count();
+ // ---- 3. free leg: unplant both keys, raise the swing foot clear of ground,
+ // then verify a drag changes only knee flexion. The new document's default
+ // ankle target puts the sole 35mm below ground, so the semantic edit is
+ // correctly rejected until the real UI's swing-height control clears it.
  for(let i=0;i<keyCount;i++){
   await page.locator('.ws-key').nth(i).click();
   await page.getByTestId('adjustment-tab-left').click();
   const box=page.locator('.ws-check').filter({hasText:'左脚支撑锁定'}).locator('input');
   if(await box.isChecked())await box.uncheck();
  }
+ await page.locator('.ws-key').first().click();
+ await page.getByTestId('adjustment-tab-left').click();
+ const swingLift=page.locator('.ws-slider').filter({hasText:'左脚抬升高度'}).locator('input');
+ for(let i=0;i<24;i++)await swingLift.press('ArrowRight');
+ await page.waitForTimeout(150);
  await page.evaluate(()=>{const e=window.__WS__;e.setPlaying(false);e.seek(0);e.solveCurrent();});
  const free0=await keyState();
+ check('自由膝角度拖动先将离地脚抬出地面',free0.leftLift>=.12,`lift=${(free0.leftLift*1000).toFixed(0)}mm`);
+ check('离地角度拖动场景左右脚均未锁定',free0.plants.every(p=>!p.L&&!p.R),JSON.stringify(free0.plants));
  const spot1=await kneeSpot();
  await page.mouse.move(spot1.x,spot1.y);await page.mouse.down();
  await page.mouse.move(spot1.x-50,spot1.y-60,{steps:8});await page.mouse.up();
  await page.waitForTimeout(150);
  const free1=await keyState();
  check('离地膝球向上拖动也只增加屈曲角',free1.kneeFlex>free0.kneeFlex+10,
-  `${free0.kneeFlex.toFixed(1)}°→${free1.kneeFlex.toFixed(1)}°`);
+  `${free0.kneeFlex.toFixed(1)}°→${free1.kneeFlex.toFixed(1)}°; time=${free1.time}; keys=${JSON.stringify(free1.keys)}; hint=${free1.hint}`);
  check('离地膝铰链拖动保持踝屈伸角',Math.abs(free1.ankleFlex-free0.ankleFlex)<.5,
   `${free0.ankleFlex.toFixed(1)}°→${free1.ankleFlex.toFixed(1)}°`);
 
@@ -199,7 +223,7 @@ try{
  await page.waitForTimeout(200);
  st=await keyState();
  check('一次撤销整步还原持拍切换',JSON.stringify(st.grips)===JSON.stringify(noGrip),JSON.stringify(st.grips));
- check('撤销不吞并此前的膝盖拖拽写入',JSON.stringify(st.keys[0].target)===JSON.stringify(free1.target));
+ check('撤销不吞并此前的膝盖拖拽写入',JSON.stringify(st.keys[0].target)===JSON.stringify(free1.keys[0].target));
 
  // ---- 5. finish-frame bilateral knee drags lower the body and rebalance
  // from the bundled forehand through the visible preset-copy flow. The test

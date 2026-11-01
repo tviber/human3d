@@ -47,7 +47,7 @@ try {
 const page=await browser.newPage({viewport:{width:1536,height:1024},deviceScaleFactor:1});
 const errors=[],warnings=[];page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());if(m.type()==='warning')warnings.push(m.text());});
 await page.goto(webUrl('/'));await page.waitForFunction(()=>window.__LAB__?.ready,{timeout:60000});await page.locator('.loading-state').waitFor({state:'hidden'});
-assert.match(await page.title(),/KINESIS/);const bundledMotionCount=await page.locator('.motion-row').count();assert(bundledMotionCount>=8,'expected the bundled motion library');assert.equal(await page.locator('vite-error-overlay').count(),0);
+assert.match(await page.title(),/h3d/);const bundledMotionCount=await page.locator('.motion-row').count();assert(bundledMotionCount>=8,'expected the bundled motion library');assert.equal(await page.locator('vite-error-overlay').count(),0);
 // Issue #30 PR-B: the 观察面板 collapses by default on desktop — expand it
 // once; the debug/speed/seek checks below operate on its controls.
 await page.getByRole('button',{name:'展开动作库面板'}).click();

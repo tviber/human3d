@@ -14,7 +14,7 @@ const identity=await verifyWebIdentity(root,base);assert(identity.ok,identity.de
 const browser=await launchQaBrowser(chromium,{...(process.env.QA_BROWSER_CHANNEL?{channel:process.env.QA_BROWSER_CHANNEL}:{})});
 const errors=[],context=await browser.newContext({viewport:{width:1440,height:1000}});
 const open=async(route)=>{const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});await page.goto(new URL(route,base).href);return page;};
-const ready=async(page,key)=>{await page.waitForFunction(key=>window[key]?.ready,key,{timeout:60000});assert.match(await page.title(),/KINESIS/);assert.equal(await page.locator('vite-error-overlay').count(),0);};
+const ready=async(page,key)=>{await page.waitForFunction(key=>window[key]?.ready,key,{timeout:60000});assert.match(await page.title(),/h3d/);assert.equal(await page.locator('vite-error-overlay').count(),0);};
 const file=page=>page.evaluate(()=>JSON.parse(localStorage.getItem('kinesis-workshop-library')));
 const pose=(page,key)=>page.evaluate(key=>{const e=window[key];e.setPlaying(false);e.seek(0);return [...e.rig.bones.keys()].map(n=>e.rig.point(n).toArray());},key);
 try{

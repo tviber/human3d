@@ -215,7 +215,11 @@ describe('POST /v1/motions — workshop-doc action',()=>{
   expect(angled.id).not.toBe(zero.id);
   expect(angled.action.definitionSHA256).not.toBe(zero.action.definitionSHA256);
   expect(angled.action.parameters.presentation).toHaveProperty('gripTilt',24);
-  expect(angled.tracks).toEqual(zero.tracks);
+  expect(angled.tracks.translation).toEqual(zero.tracks.translation);
+  const fingerTracks=(pkg:PosePackage)=>pkg.tracks.rotations.filter(track=>track.bone.startsWith('finger'));
+  const otherTracks=(pkg:PosePackage)=>pkg.tracks.rotations.filter(track=>!track.bone.startsWith('finger'));
+  expect(otherTracks(angled)).toEqual(otherTracks(zero));
+  expect(fingerTracks(angled)).not.toEqual(fingerTracks(zero));
  });
  it('keeps an explicitly spelled R identical to the omitted default',()=>{
   const doc=blankDocument(ctx.rig.rest,'同义','same-solve');

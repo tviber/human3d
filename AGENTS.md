@@ -61,6 +61,7 @@
 - **生命周期**：worktree 实现（可做最小 Red→Green/定向测试）→ **Fast Review**（只找确定 blocker，禁跑全仓测试/build/E2E/bench）→ `REWORK` 只复审差异与新风险 / `ESCALATE` 回规划 → `PROCEED` → affected checks → **Final Review** → Ready PR → 完整必需 CI → Merge。细则与 verdict 契约见 [review-gates.md](docs/engineering/review-gates.md)。
 - **何时可跳过昂贵测试**：Level 0（纯文档/注释）只需 diff + `docs:check`；Level 1–2 按 test-matrix 跑受影响模块；REWORK 轮不重复未变区域的完整验证。
 - **何时不可跳过**：Level 3（协议、运动语义、IK、动力学、持久化、关键交互路径）必须验证真实路径，不得用 mock 替代；合并前的完整必需 CI 与高风险真实路径验收不可省。
+- **浏览器 QA 调试循环**：PR 调试期间保持 Draft；Draft 上的 `browser-qa` 不自动运行。先跑定向 Vitest；需要真实 UI 时在 Actions 手动触发 `browser-qa` 并选失败 suite，例如 `gh workflow run browser-qa --ref <branch> -f suites=knee`（可选 `preset,mobile,backup,concurrency,bevel,knee,review-bundle`，逗号分隔）。部分 suite 运行只用于诊断，不是合并门禁。修复并 Fast/Final Review 后将 PR 标为 Ready；Ready 会运行全量 `browser-qa`，并等待最终 head 的全部必需 CI 成功后再合并。全量 browser-qa 会在前序 suite 失败后继续执行剩余 suite，以便一次收集所有失败；取消仍会停止后续步骤。
 - 资源不足可把重型验证移交 CI/其他机器，但必须记录为未执行项。
 - 失败先查根因再决定重试，不无限重试；不反复执行未受影响的全量集合。
 

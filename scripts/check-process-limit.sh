@@ -68,7 +68,10 @@ candidates=$(printf '%s\n' "$process_list" | H3D_ROOTS="$roots" awk '
     if(tolower(args) ~ /(tsserver|typingsinstaller|language-server)/)next
     for(i=1;i<=n;i++)if(roots[i]!=""&&index(args,roots[i] "/")){print "A " pid " " args;next}
     for(i=3;i<=NF;i++)if($i ~ /^(\.\/)?(scripts|apps|packages|tests|spec|node_modules)\//){print "C " pid " " args;next}
-    if(name ~ /^(npm|npx|pnpm|yarn|vite|vitest|tsx)([._-]|$)/)print "C " pid " " args
+    # `npm exec <third-party-tool>` may be launched from the checkout by an
+    # editor/MCP host; its cwd alone does not make it a repository task.
+    # Keep npm script runners and direct build/test tools counted.
+    if(name ~ /^(npm|npx|pnpm|yarn|vite|vitest|tsx)([._-]|$)/ && tolower(args) !~ /^(npm|npx) exec /)print "C " pid " " args
   }')
 
 owned=''

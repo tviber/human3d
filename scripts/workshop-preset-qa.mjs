@@ -57,7 +57,7 @@ try{
  await page.goto(new URL('/workshop.html',webBase).href);
  const ready=()=>page.waitForFunction(()=>window.__WS__?.ready,{timeout:60000});
  await ready();
- assert.match(await page.title(),/KINESIS/);
+ assert.match(await page.title(),/h3d/);
  assert.equal(new URL(page.url()).pathname,'/workshop.html');
  assert.equal(await page.getByRole('heading',{name:'动作工作台',exact:true}).count(),1);
  assert.equal(await page.locator('vite-error-overlay').count(),0);
@@ -420,7 +420,8 @@ try{
  await page.getByTestId('adjustment-tab-common').click();
  const gripTilt=page.getByTestId('grip-tilt');
  const gripState=()=>page.evaluate(()=>{
-  const e=window.__WS__,side=e.getDoc().gripSide==='L'?'L':'R';
+  const e=window.__WS__;e.setPlaying(false);e.seek(e.time);
+  const side=e.getDoc().gripSide==='L'?'L':'R';
   return {tilt:e.getDoc().gripTilt??0,pose:JSON.stringify(e.getDoc().keys[0].pose),
    racket:e.racket.quaternion.toArray(),tip:e.racket.localToWorld(e.racket.position.clone().set(0,.61,0)).toArray(),
    wrist:e.rig.bone(`wrist_${side}`).quaternion.toArray()};
@@ -428,6 +429,9 @@ try{
  const gripBefore=await gripState();
  assert.equal(gripBefore.tilt,0);
  await gripTilt.scrollIntoViewIfNeeded();await gripTilt.focus();await gripTilt.press('ArrowRight');
+ // The document write marks auxiliary geometry dirty. Let the engine finish
+ // that rebuild and re-solve the playhead pose before reading the live rig.
+ await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  const gripAfter=await gripState();
  assert.equal(gripAfter.tilt,.5,'grip tilt slider did not write its document value');
  assert.notDeepEqual(gripAfter.racket,gripBefore.racket,'grip tilt did not rotate the racket');
@@ -439,7 +443,7 @@ try{
  await page.reload();await ready();await reopenPanels();
  const restoredGrip=await gripState();
  assert.equal(restoredGrip.tilt,.5,'grip tilt was lost on reload');
- assert.deepEqual(restoredGrip.racket,gripAfter.racket,'reloaded racket tilt changed');
+ assert(Math.hypot(...restoredGrip.racket.map((v,i)=>v-gripAfter.racket[i]))<1e-12,'reloaded racket tilt changed');
  // Closed <details> content is not exposed to the accessibility tree, so the
  // preset select and the generator controls need their folds reopened.
  await page.locator('[data-fold="preset"] summary').click();

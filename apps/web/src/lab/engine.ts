@@ -13,7 +13,7 @@ import {ClipSource,DocumentSource,DynamicsSource,PoseFade,PosePackageSource,crea
 import {bindSceneBackground} from '../theme/scene-background';
 import {applyHeroicShape} from '../theme/shape-preset';
 import {SkinSwap,type SkinId} from '../theme/skin-swap';
-import {SAVED_MOTION_PREFIX} from '../workshop/library';
+import {SAVED_MOTION_PREFIX} from '../motions/saved-motion';
 import {loadAnatomyAtlas} from '../theme/anatomy-skin';
 import {AnatomySelection} from '../theme/anatomy-selection';
 import {subtleDigest} from '@human3d/motion-core';

@@ -152,7 +152,7 @@ try{
  // routes knee drags to the separate balance gesture instead.
  for(let i=0;i<keyCount;i++){
   await page.locator('.ws-key').nth(i).click();
-  await page.getByTestId('adjustment-tab-left').click();
+  await page.getByTestId('adjustment-tab-right').click();
   const rightBox=page.locator('.ws-check').filter({hasText:'右脚支撑锁定'}).locator('input');
   if(await rightBox.isChecked())await rightBox.uncheck();
  }

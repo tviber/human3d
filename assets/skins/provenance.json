@@ -16,9 +16,9 @@
   "hairReference": "https://dba.bn-ent.net/character/",
   "runtimeAssets": [
     "../../public/models/skins/ssj-body.png",
-    "../../public/models/skins/ssj-hair.png",
     "../../public/models/skins/ssj-eyes.png"
   ],
+  "retiredHairTexture": "../../public/models/skins/ssj-hair.png; removed after replacing the texture atlas with vertex-colored HairDeck-style cards",
   "faceRegistration": "Original bald human.glb orthographic face, [-.16,.16] x [1.49,1.81], direct projection without face deformation or landmark warping",
   "faceRevision": "Native facial features recoloured; original nose, mouth, silhouette and UV retained",
   "hairReferences": [
@@ -26,5 +26,5 @@
     "https://tamashiiweb.com/item/14415/?sa=JAPAN",
     "https://tamashiiweb.com/en/360/?name=images_shf_ss_goku_lss"
   ],
-  "hairSculptRevision": "Observed official front, side and rear views. Curved broad-section swept crown, asymmetric forehead bangs, short layered ear and nape locks; original bald face surface unchanged. The existing generated texture supplies gold, not hair shape."
+  "hairSculptRevision": "Deterministic TypeScript HairDeck-style card layout and mesh generation. The Apache-2.0 card mesher uses four-sided ribbons, Bishop frames, per-card UVs and vertex color variation; a fitted root shell fills scalp gaps. Broad swept crown spikes, five staggered forehead locks, temple strips and five rear/nape locks preserve the original face surface. GLTFExporter writes the standalone GLB; no CUDA inference or hair albedo texture is used."
 }

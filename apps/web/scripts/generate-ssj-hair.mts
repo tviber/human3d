@@ -3,7 +3,7 @@ import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {GLTFExporter} from 'three/addons/exporters/GLTFExporter.js';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
-import {Group,Matrix4,Mesh,MeshStandardMaterial,SkinnedMesh} from 'three';
+import {DoubleSide,Group,Matrix4,Mesh,MeshStandardMaterial,SkinnedMesh} from 'three';
 import {createSsjHair} from '../src/theme/ssj-hair';
 
 const repository=resolve(dirname(fileURLToPath(import.meta.url)),'../../..');
@@ -41,13 +41,13 @@ for(const lock of locks){lock.root.applyMatrix4(headLocal);lock.tip.applyMatrix4
 collider.premultiply(headLocal);
 
 const group=new Group();group.name='SSJ hair cards';
-const mesh=new Mesh(geometry,new MeshStandardMaterial({color:0xffffff,roughness:.88,metalness:0}));
+const mesh=new Mesh(geometry,new MeshStandardMaterial({color:0xf3c647,roughness:.76,metalness:0,vertexColors:true,side:DoubleSide}));
 mesh.name='ssj-hair-cards';
 mesh.userData={
  hairLocks:locks.map(lock=>({root:lock.root.toArray(),tip:lock.tip.toArray()})),
  hairCollider:collider.elements.slice(),
  coordinateSpace:'head-local',
- generator:'human3d TypeScript HairDeck card-mesher port',
+ generator:'human3d TypeScript HairDeck card layout and mesher',
 };
 group.add(mesh);
 

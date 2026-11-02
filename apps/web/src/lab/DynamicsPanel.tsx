@@ -1,8 +1,9 @@
 import type {DynamicsCase,DynamicsReadout} from './dynamics';
 import {muscleName} from './dynamics';
+import {ArrowUpRight} from 'lucide-react';
 export function DynamicsPanel({data,objectDescription,onCase,onResearch}:{data:DynamicsReadout;objectDescription?:string;onCase:(value:DynamicsCase)=>void;onResearch:()=>void}){
  return <section className="dynamics-panel" aria-label="肌骨力学数据">
-  <div className="dynamics-title"><h2>力学观测</h2><button onClick={onResearch}>依据与边界 ↗</button></div>
+  <div className="dynamics-title"><h2>力学观测</h2><button onClick={onResearch}>依据与边界<ArrowUpRight size={14}/></button></div>
   <p className="dynamics-caption">MuJoCo 正向仿真回放 · 降阶肌骨模型</p>
   {objectDescription?<p className="experiment-note">{objectDescription}</p>:null}
   <div className="dynamics-cases" aria-label="肌力对照"><button aria-pressed={data.case==='baseline'} disabled={data.loading} onClick={()=>onCase('baseline')}>基准肌力</button><button aria-pressed={data.case==='weak'} disabled={data.loading} onClick={()=>onCase('weak')}>右臂肌力 90%</button></div>

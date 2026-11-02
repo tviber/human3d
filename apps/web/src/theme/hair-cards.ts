@@ -18,6 +18,8 @@ export interface HairCard{
  points:readonly HairCardPoint[];
  shape:HairCardShape;
  rootWidthDirection:Vector3;
+ /** Per-card sRGB-neutral multiplier, matching HairDeck's card-to-card value variation. */
+ brightness?:number;
 }
 
 const STENCIL=[-1/12,2/3,0,-2/3,1/12] as const;
@@ -68,12 +70,14 @@ function bishopFrames(direction:Vector3,tangents:readonly Vector3[]){
 /** Convert a set of centerline cards into one indexed Three.js geometry. */
 export function createHairCardGeometry(cards:readonly HairCard[]){
  if(!cards.length)throw new Error('At least one hair card is required');
- const positions:number[]=[],uvs:number[]=[],flex:number[]=[],indices:number[]=[],locks:HairLock[]=[];
+ const positions:number[]=[],uvs:number[]=[],colors:number[]=[],flex:number[]=[],indices:number[]=[],locks:HairLock[]=[];
  let vertexOffset=0;
 
  for(const card of cards){
   const points=card.points;
   if(points.length<3)throw new Error('Hair cards need at least three centerline points');
+  const brightness=card.brightness??.9;
+  if(!Number.isFinite(brightness)||brightness<.7||brightness>1)throw new Error('Hair-card brightness must be between 0.7 and 1');
   if(points.some(point=>!Number.isFinite(point.width)||!Number.isFinite(point.thickness)||point.width<=0||point.thickness<=0))
    throw new Error('Hair-card width and thickness must be positive finite numbers');
   const tangents=points.map((_,i)=>tangentAt(points,i));
@@ -105,6 +109,7 @@ export function createHairCardGeometry(cards:readonly HairCard[]){
    for(let corner=0;corner<4;corner++){
     positions.push(corners[corner].x,corners[corner].y,corners[corner].z);
     uvs.push(UV_U[corner],v);
+    colors.push(brightness,brightness,brightness);
     flex.push(cardId,bend);
    }
   }
@@ -123,6 +128,7 @@ export function createHairCardGeometry(cards:readonly HairCard[]){
  const geometry=new BufferGeometry();
  geometry.setAttribute('position',new Float32BufferAttribute(positions,3));
  geometry.setAttribute('uv',new Float32BufferAttribute(uvs,2));
+ geometry.setAttribute('color',new Float32BufferAttribute(colors,3));
  geometry.setAttribute('hairFlex',new Float32BufferAttribute(flex,2));
  geometry.setIndex(indices);
  geometry.computeVertexNormals();geometry.computeBoundingBox();geometry.computeBoundingSphere();

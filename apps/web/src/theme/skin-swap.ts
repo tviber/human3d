@@ -1,4 +1,4 @@
-import {Group,Matrix4,Mesh,MeshStandardMaterial,SkinnedMesh,SphereGeometry,SRGBColorSpace,TextureLoader,Vector3,type Object3D,type Texture} from 'three';
+import {DoubleSide,Group,Matrix4,Mesh,MeshStandardMaterial,SkinnedMesh,SphereGeometry,SRGBColorSpace,TextureLoader,Vector3,type Object3D,type Texture} from 'three';
 import {GLTFLoader,type GLTF} from 'three/addons/loaders/GLTFLoader.js';
 import {webPlatform,type AppPlatform} from '../platform/platform';
 import type {HairLock} from './hair-cards';
@@ -15,7 +15,7 @@ function skinMaterial(map:Texture,source?:MeshStandardMaterial){
 }
 
 /** Load the generated head-local card asset and restore Three's custom flex attribute. */
-function makeHair(root:Object3D,texture:Texture,asset:GLTF){
+function makeHair(root:Object3D,asset:GLTF){
  const head=root.getObjectByName('head');if(!head)throw new Error('人体模型缺少头骨');
  let source:Mesh|undefined;asset.scene.traverse(object=>{if(!source&&object instanceof Mesh)source=object;});
  if(!source)throw new Error('超赛发型 GLB 缺少发片网格');
@@ -33,7 +33,8 @@ function makeHair(root:Object3D,texture:Texture,asset:GLTF){
  const collider=new Matrix4().fromArray(metadata.hairCollider);
  geometry.computeBoundingBox();geometry.computeBoundingSphere();
  const hair=new Group();hair.name='ssj-hair';
- const mesh=new Mesh(geometry,skinMaterial(texture));mesh.name='ssj-hair-cards';mesh.castShadow=true;mesh.frustumCulled=false;hair.add(mesh);head.add(hair);return {hair,physics:new HairSpring(geometry,locks,collider)};
+ const material=new MeshStandardMaterial({color:0xf3c647,roughness:.76,metalness:0,vertexColors:true,side:DoubleSide});
+ const mesh=new Mesh(geometry,material);mesh.name='ssj-hair-cards';mesh.castShadow=true;mesh.frustumCulled=false;hair.add(mesh);head.add(hair);return {hair,physics:new HairSpring(geometry,locks,collider)};
 }
 
 /** Project the generated face detail onto eyeballs in the same rest-space registration. */
@@ -84,9 +85,9 @@ export class SkinSwap{
    }
    if(!this.hair){
     if(!hairAsset)throw new Error('超赛发型模型尚未加载');
-    const created=makeHair(this.root,textures[1],hairAsset);this.hair=created.hair;this.hairPhysics=created.physics;this.hairAsset=undefined;
+    const created=makeHair(this.root,hairAsset);this.hair=created.hair;this.hairPhysics=created.physics;this.hairAsset=undefined;
    }
-   if(!this.eyes.length)this.eyes=makeEyes(this.root,textures[2],this.bindPose);
+   if(!this.eyes.length)this.eyes=makeEyes(this.root,textures[1],this.bindPose);
   }
   for(const entry of this.entries)entry.mesh.material=skin==='ssj'?entry.replacement!:entry.original;
   this.active=skin;this.setSurfaceVisible(this.surface);this.resetHair();
@@ -96,13 +97,13 @@ export class SkinSwap{
  settleHair(){if(this.hair?.visible){this.hair.updateWorldMatrix(true,false);this.hairPhysics?.settle(this.hair.matrixWorld);}}
  private async load(){
   const loader=new TextureLoader();
-  const results=await Promise.allSettled(['/models/skins/ssj-body.png','/models/skins/ssj-hair.png','/models/skins/ssj-eyes.png'].map(path=>loader.loadAsync(this.platform.assetUrl(path))));
+  const results=await Promise.allSettled(['/models/skins/ssj-body.png','/models/skins/ssj-eyes.png'].map(path=>loader.loadAsync(this.platform.assetUrl(path))));
   const textures=results.flatMap(r=>r.status==='fulfilled'?[r.value]:[]);
   if(results.some(r=>r.status==='rejected')){
    textures.forEach(t=>t.dispose());this.assets=undefined;throw new Error('超赛贴图加载失败，请重试');
   }
   for(const texture of textures){texture.colorSpace=SRGBColorSpace;texture.flipY=false;texture.anisotropy=4;}
-  textures[1].flipY=true;this.textures=textures;
+  this.textures=textures;
   if(this.disposed){textures.forEach(t=>t.dispose());this.textures=undefined;}
   return textures;
  }

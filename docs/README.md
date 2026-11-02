@@ -8,6 +8,7 @@
 |---|---|---|
 | 改求解/文档采样/镜像（solver/document/mirrorDoc/gripSide） | [domain/motion-model.md](domain/motion-model.md) → [domain/solver.md](domain/solver.md) | 接触区间、坐标系一致性、SERVICE_VERSION bump；learning [1][8][16] |
 | 改协议/姿态包/导出/服务端 | [domain/pose-package.md](domain/pose-package.md) → [validation.md](validation.md) → `spec/` | 字节对等、身份哈希、密度上限、两道校验门 |
+| 导入/重定向外部角色骨架 | [domain/character-rig.md](domain/character-rig.md) | VRM payload 识别、骨架准入和 core rest-relative adapter；工作台与目标 IK 尚未接入 |
 | 改工作台 UI/交互/持久化 | [domain/workshop.md](domain/workshop.md) → [WORKSHOP.md](WORKSHOP.md) → [QA.md](QA.md) | 真实 UI 写路径、显示/编辑分离、隔离区、撤销语义 |
 | 改包结构/依赖方向/构建 | [ARCHITECTURE.md](ARCHITECTURE.md) → `tests/architecture.test.ts` | 单向依赖、core 纯度、边界自动强制 |
 | 改宿主耦合/移植小程序 | [engineering/miniapp-port.md](engineering/miniapp-port.md) → `apps/web/src/platform/platform.ts` | 宿主 API 全走 `AppPlatform`，单点替换 |
@@ -26,7 +27,7 @@
 |---|---|---|
 | [engineering/](engineering/) | 流程约定：review-protocol（审查协议 + 模板）、task-protocol（owner lane/ledger）、review-gates（验证生命周期）、ci-lifecycle（Draft/Ready CI 矩阵）、test-matrix、worktree-policy | 接任务/提交前 |
 | [agent/](agent/) | agent 动作审阅环：视觉坐标自校准、坐标约定速查、review bundle 与结构化 review.json、有界返工（issue #32 A+B） | agent 制作/审阅新动作前 |
-| [domain/](domain/) | 领域不变量：motion-model / solver / pose-package / workshop | 改对应代码前按需读 |
+| [domain/](domain/) | 领域不变量：motion-model / solver / pose-package / character-rig / workshop | 改对应代码前按需读 |
 | [decisions/](decisions/) | ADR：已确认方案、被否方案与依据（0001–0010） | 要改某个设计前提时 |
 | [history/](history/) | 冻结的完整调查史（investigate.md）与 PR 审查记录（issue-11-pr13-16-review.md） | 只在需要历史证据时，非默认必读 |
 | [learning.md](learning.md) | 17 条工程规则（Orders）+ 类别索引 | 改核心代码前 |

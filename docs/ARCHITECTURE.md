@@ -23,8 +23,8 @@ apps/server @human3d/server ─┘
 
 | 包 | 拥有 | 边界规则 |
 |---|---|---|
-| `packages/motion-core` | `document.ts`（WorkshopDoc 采样器）、`solver.ts`（FK/IK 求解与合理性检查）、`kinematics/rig/hand-frame/racket`、`protocol/pose-package/package-inspect/package-const`、`motion-file(s)/motions/muscle-action/semantic-map`、`validate.ts`（交付包语义校验）、`quality-probe/random-document`、`package-export`、`glb-export`（子路径 `@human3d/motion-core/glb`） | **纯**：不得 import DOM / node 模块；three 只作数学库；跨包消费者一律从包名导入，不写深路径 |
-| `apps/web` | `src/lab/`（实验室引擎 `engine.ts`、动力学回放 `dynamics.ts`、React 面板）、`src/playback/`（播放源 `motion-source.ts` + `PoseFade`）、`src/workshop/`（场景 `engine.ts`、`WorkshopApp.tsx`、`library.ts`、`history.ts`）、`src/motions/`（实验室与工作台共享的已保存动作投影）、`src/layout/`（共享面板与滚动区样式）、两个入口页与 `vite.config.ts` | 可 import motion-core；生产代码不得 import `@human3d/server`（仅测试用其 devDependency） |
+| `packages/motion-core` | `document.ts`（WorkshopDoc 采样器）、`solver.ts`（FK/IK 求解与合理性检查）、`kinematics/rig/hand-frame/racket`、`protocol/pose-package/package-inspect/package-const`、`motion-file(s)/motions/muscle-action/semantic-map/character-rig/character-rig-adapter`、`validate.ts`（交付包语义校验）、`quality-probe/random-document`、`package-export`、`glb-export`（子路径 `@human3d/motion-core/glb`） | **纯**：不得 import DOM / node 模块；three 只作数学库；跨包消费者一律从包名导入，不写深路径 |
+| `apps/web` | `src/lab/`（实验室引擎 `engine.ts`、动力学回放 `dynamics.ts`、React 面板）、`src/playback/`（播放源 `motion-source.ts` + `PoseFade`）、`src/workshop/`（场景 `engine.ts`、`WorkshopApp.tsx`、`library.ts`、`history.ts`、本地角色 GLB/VRM 检查 `character-import.ts`）、`src/motions/`（实验室与工作台共享的已保存动作投影）、`src/layout/`（共享面板与滚动区样式）、两个入口页与 `vite.config.ts` | 可 import motion-core；生产代码不得 import `@human3d/server`（仅测试用其 devDependency） |
 | `apps/server` | `serve.ts`（loopback HTTP，`node:http`）、`service.ts`（目录 / 求解编排 / 幂等）、`contract.ts`（Ajv 严格编译 `spec/`）、`rig-manifest.ts`（node:crypto 身份哈希）、`errors.ts` | 可 import motion-core；不得 import web |
 
 测试按"最高依赖"落位：core / server / web 各自的 `*.test.ts` 就近放包内，仓库根 `tests/` 另放跨包边界与工具链检查。core 的测试可读夹具（`node:fs`），生产代码不行。

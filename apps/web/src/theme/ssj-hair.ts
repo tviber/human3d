@@ -66,9 +66,15 @@ export function createSsjHair(body:BufferGeometry){
  const center=scalp.getCenter(new Vector3());center.y=top-.105;
  const radii=scalp.getSize(new Vector3()).multiplyScalar(.5);radii.x+=.003;radii.y=.108;radii.z+=.003;
  const point=(v:Point)=>new Vector3(v[0]*radii.x,v[1]*radii.y,v[2]*radii.z).add(center);
+ const physicalLength=(card:CardSpec)=>Math.hypot((card.tip[0]-card.root[0])*radii.x,(card.tip[1]-card.root[1])*radii.y,(card.tip[2]-card.root[2])*radii.z);
+ const clearTip=(v:Point):Point=>{
+  const radius=Math.hypot(v[0],v[1]/1.12,v[2]/1.1);
+  if(radius>=1.04)return v;
+  const scale=1.04/radius;return [v[0]*scale,v[1]*scale,v[2]*scale];
+ };
 
- const cards:HairCard[]=SSJ_CARDS.map((spec,index)=>{
-  const curve=new CatmullRomCurve3([point(spec.root),point(spec.bend),point(spec.tip)],false,'centripetal');
+ const cards:HairCard[]=[...SSJ_CARDS].sort((a,b)=>physicalLength(b)-physicalLength(a)).map((spec,index)=>{
+  const curve=new CatmullRomCurve3([point(spec.root),point(spec.bend),point(clearTip(spec.tip))],false,'centripetal');
   const count=17,widthAxis=new Vector3(...spec.widthAxis).normalize();
   const points=Array.from({length:count},(_,i)=>{
    const t=i/(count-1),centerline=curve.getPoint(t);

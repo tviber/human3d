@@ -19,6 +19,8 @@ export * from './grip';
 export * from './hand-shape';
 export * from './props';
 export * from './semantic-map';
+export * from './character-rig';
+export * from './character-rig-adapter';
 export * from './muscle-action';
 export * from './protocol';
 export * from './package-const';

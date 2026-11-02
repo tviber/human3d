@@ -11,6 +11,7 @@
 | core 求解/几何 | `solver.ts`、`kinematics.ts`、`rig.ts`、`hand-frame.ts`、`foot.ts`、`props/racket.ts`、`grip.ts`、`limits.ts` | L3 | `kinematics.test.ts`、`solver-hints.test.ts`、`grip-side.test.ts`、`quality.test.ts`、`solver-baseline.test.ts` | 真实路径验证不可省（review-gates L3） |
 | 协议/姿态包/导出 | `protocol.ts`、`pose-package.ts`、`package-const.ts`、`package-inspect.ts`、`package-export.ts`、`glb-export.ts`、`validate.ts`（core 内） | L3 | `package-export.test.ts`、`glb-export.test.ts`、`validate.test.ts`、`property.test.ts`、`compiled.test.ts` + `npm run spec:check` | 改 `spec/` 契约按「spec/协议」行 |
 | 生成器/质量度量 | `generate.ts`、`quality-probe.ts`、`random-document.ts`、`semantic-map.ts`、`muscle-action.ts` | L2–L3 | `generate.test.ts`、`compiled.test.ts`、`quality.test.ts`（低资源加 `--maxWorkers=1`） | 度量语义变化 → evidence 基线重生成 |
+| 外部角色档案/导入/适配 | `packages/motion-core/src/character-rig*.ts`、`apps/web/src/workshop/character-import.ts` | L2（适配器不改 canonical solver） | `character-rig.test.ts`、`character-rig-adapter.test.ts`、`character-import.test.ts`、`tsc -b` | 改目标骨架求解或约束语义时升级 L3，并按 core 求解行验证及处理 `SERVICE_VERSION` |
 | web 工作台 | `apps/web/src/workshop/` | L3（交互） | `workshop.test.ts`、`mirror.test.ts`；真实交互路径按 [../domain/workshop.md](../domain/workshop.md) 补 QA 断言 | 持久化/撤销/写路径 → 浏览器 QA |
 | web 实验室/播放 | `apps/web/src/lab/`、`playback/`、入口页 | L2 | `motion-source.test.ts` + `tsc -b` | 播放源/包导入 → 浏览器 QA |
 | server 服务/契约 | `apps/server/src/` | L3 | `service.test.ts`、`contract.test.ts`（= `spec:check`）、`validate.test.ts`、`property.test.ts` | 协议语义 → `SERVICE_VERSION` + golden |

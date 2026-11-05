@@ -683,7 +683,7 @@ describe('motion library',()=>{
  });
  it('surfaces storage failures instead of claiming the motion was saved',()=>{
   const failing:StorageLike={getItem:()=>null,setItem:()=>{throw new Error('quota');}};
-  const l=lib(failing);
+  const l=new MotionLibrary(rig.rest,failing).load();
   expect(l.lastError).toBe('quota');
   l.create('X');expect(l.lastError).toBe('quota');
  });

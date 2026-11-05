@@ -13,7 +13,6 @@
 | DM Sans | Google Fonts respective authors | SIL Open Font License 1.1 | 本地字体；中文使用系统字体回退；完整许可见 public/fonts/OFL.txt |
 | MyoSim `myo-sim==0.2.3` 完整肌骨 XML 与参数 | MyoHub；[官方仓库](https://github.com/MyoHub/myo_sim) | Apache-2.0；原许可副本 `assets/source/dynamics/MYO-SIM-LICENSE.txt` | 保留 416 执行器、424 肌腱路径、51 关节约束 / 耦合、104 刚体惯性；网页使用派生降阶模型 |
 | MuJoCo `3.6.0` | Google DeepMind；[官方文档](https://mujoco.readthedocs.io/) | Apache-2.0；未复制其程序代码 | Python 仿真与记录导出；浏览器仅读取状态 |
-| HairDeck hair-card mesher | Yuze He、Yixiang Wei、Wang Zhao、Chuhao Chen、Yanning Zhou、Yong-Jin Liu；[项目](https://github.com/hyz317/HairDeck) | Apache-2.0；TypeScript 几何移植见 `apps/web/src/theme/hair-cards.ts`，许可副本 `assets/source/HAIRDECK-LICENSE.txt` | 超赛发片的平行运输截面、三角面、封口与弧长 UV；未引入 HairDeck 扩散模型、权重或第三方数据 |
 | 棒球投球、直拳生物力学论文 | [棒球投球综述](https://pmc.ncbi.nlm.nih.gov/articles/PMC9950989/)、[直拳测力研究](https://pmc.ncbi.nlm.nih.gov/articles/PMC9798280/)、[精英拳手直拳研究](https://pmc.ncbi.nlm.nih.gov/articles/PMC13285485/) | 只链接并摘述；没有复制图表或全文 | 用于动作时序与关节姿态检查，不是网页动作捕捉输入 |
 | 球拍、关键姿态、应用源码 | 本项目 | MIT，见根目录 LICENSE | 原创程序化球拍与动作逻辑 |
 | docs/ui-concept.png | 使用内置 ImageGen 生成 | 设计参考，不是模型或动画数据 | 不作为应用中的静态界面使用 |

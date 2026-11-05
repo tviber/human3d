@@ -10,18 +10,16 @@ describe('workshopEditability',()=>{
   const doc={...source.source.document,id:'我的动作 / 1'},spec=savedMotionSpec(doc);
   expect(workshopEditability(spec)).toEqual({editable:true,url:`/workshop.html?doc=${encodeURIComponent(doc.id)}`,reason:''});
  });
- it('offers navigation for bundled workshop-document motions, carrying the motion id',()=>{
+ it('keeps bundled actions playable in the lab without exposing a workshop preset copy',()=>{
   const forehand=MOTIONS.find(m=>m.id==='forehand')!;
   expect(forehand.source?.kind).toBe('document');
-  expect(workshopEditability(forehand)).toEqual({editable:true,url:'/workshop.html?from=forehand',reason:''});
+  expect(workshopEditability(forehand)).toEqual({editable:false,url:'/workshop.html',reason:'内置动作仅供实验室预览；工作台从空白动作开始创作。'});
  });
- it('covers every editable motion with a from-parameterized url',()=>{
+ it('does not offer any bundled document motion as a workshop preset',()=>{
   const editable=MOTIONS.filter(m=>m.source?.kind==='document');
-  // Generic set only: the 17 player presets were ablated (#30/#21) — the guard
-  // still catches a registry that silently shrinks below the generic motions.
   expect(editable.length).toBeGreaterThan(10);
   for(const m of editable)
-   expect(workshopEditability(m)).toEqual({editable:true,url:`/workshop.html?from=${encodeURIComponent(m.id)}`,reason:''});
+   expect(workshopEditability(m)).toEqual({editable:false,url:'/workshop.html',reason:'内置动作仅供实验室预览；工作台从空白动作开始创作。'});
  });
  it('explains the limitation AND carries context for the dynamics replay and external clip',()=>{
   for(const [id,fragment] of [['baseball-throw','肌骨正向仿真'],['punch','肌骨正向仿真'],['walk','外部剪辑']] as const){

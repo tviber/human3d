@@ -23,7 +23,7 @@ function assertRestoredDoc(actual,expected){
  * must come back IDENTICAL except the hand frames, which the library projects
  * onto an orthonormal pair both on rehydrate and in its history snapshots; that
  * projection is not a bit-exact fixed point of decimal JSON round-tripping, so
- * a direction can move by one ULP (~1e-16). Bundled presets carry the same
+ * a direction can move by one ULP (~1e-16). Registry motion fixtures carry the same
  * property at HEAD, so the tolerance belongs to the comparison, not to the
  * documents: everything else is compared exactly. */
 function assertSameDoc(actual,expected,label){
@@ -38,10 +38,10 @@ function assertSameDoc(actual,expected,label){
  assert.deepEqual(a,b,label);
 }
 
-// Real UI regression: preset -> independent document -> pointer edit ->
-// undo/redo -> reload. Engine access below is read-only except playback/view.
+// Real UI regression: import a user-selected motion -> duplicate -> pointer
+// edit -> undo/redo -> reload. Engine access below is read-only except playback/view.
 const repoRoot=process.cwd();
-const output=resolveOutputDir('workshop-preset',process.argv.slice(2),repoRoot,process.env);
+const output=resolveOutputDir('workshop-authoring',process.argv.slice(2),repoRoot,process.env);
 if(output.args.length)throw new Error(`unexpected arguments: ${output.args.join(' ')}`);
 ensureOutputDir(output.dir,{root:repoRoot,updateEvidence:output.updateEvidence});
 const outputFile=name=>assertTrackedWriteAllowed(path.join(output.dir,name),{root:repoRoot,updateEvidence:output.updateEvidence});
@@ -86,62 +86,48 @@ try{
    wrist:e.rig.point('wrist_L').toArray(),
    storage:JSON.parse(localStorage.getItem('kinesis-workshop-library'))};
  });
- const presets=await page.evaluate(async url=>{
-  const {MOTION_FILES}=await import(url);
-  return MOTION_FILES.map(p=>({id:p.id,name:p.name,kind:p.kind,category:p.category,capabilities:p.capabilities,document:p.document}));
- },`/@fs/${path.resolve(repoRoot,'packages/motion-core/src/motion-files.ts')}`);
- // Issue #30 PR-B: user motions lead the panel; the preset entry lives in a
- // collapsed fold below it and opens on demand.
- const presetFold=page.locator('[data-fold="preset"]');
- await presetFold.evaluate(el=>{el.open=true;});
- const select=page.getByRole('combobox',{name:'初始动作预设'});
- const startButton=page.getByRole('button',{name:'从预设开始',exact:true});
- const presetBox=await startButton.boundingBox(),firstMotionBox=await page.locator('.ws-lib-row').first().boundingBox();
- assert(presetBox&&firstMotionBox&&presetBox.y>firstMotionBox.y,
-  'preset start fold must sit below the user motion list (user data first)');
- const presetIds=presets.filter(p=>p.kind==='workshop-motion'&&p.document);
- const expectedPresetIds=[
-  ...presetIds.filter(p=>p.category==='basic'),
-  ...presetIds.filter(p=>p.capabilities?.prop?.kind==='racket'),
-  ...presetIds.filter(p=>p.category!=='basic'&&!p.capabilities?.prop),
- ].map(p=>p.id);
- assert.deepEqual(await select.locator('option').evaluateAll(opts=>opts.map(o=>o.value)),expectedPresetIds);
+ assert.equal(await page.locator('[data-fold="preset"]').count(),0,'built-in action presets should be absent');
+ assert.equal(await page.getByTestId('adjustment-tab-semantic').count(),0,'the semantic adjustment tab should be absent');
  const before=(await read()).doc;
- const preset=presets.find(p=>p.id==='forehand');
- await select.selectOption(preset.id);
- await page.getByRole('textbox',{name:'新动作名称',exact:true}).fill('QA 预设调整');
- await startButton.click();
+ // CI imports a fixture through the same file picker exposed to users. It is
+ // not offered as a built-in starter action in the product UI.
+ const chooserPromise=page.waitForEvent('filechooser');
+ await page.getByTestId('motion-import').click();
+ await (await chooserPromise).setFiles(path.join(repoRoot,'assets/motions/forehand.json'));
+ await page.waitForFunction(()=>JSON.parse(localStorage.getItem('kinesis-workshop-library')??'null')?.docs?.length===2,undefined,{timeout:5000});
+ const source=await read();
+ assert.notEqual(source.doc.id,before.id);
+ assert.equal(source.doc.name,'正手挥拍');
+ assert(source.doc.keys.length>2,'the imported multi-key fixture did not load');
+ await page.getByRole('button',{name:`复制 ${source.doc.name}`,exact:true}).click();
  const created=await read();
- assert.notEqual(created.doc.id,preset.document.id);
- assert.equal(created.doc.name,'QA 预设调整');
+ assert.notEqual(created.doc.id,source.doc.id);
+ assert.equal(created.doc.name,`${source.doc.name} 副本`);
  assert.equal(created.playing,false);assert.equal(created.time,0);
- assert.deepEqual({...created.doc,id:preset.document.id,name:preset.document.name,
-  keys:created.doc.keys.map((k,i)=>({...k,id:preset.document.keys[i].id}))},preset.document);
- // The creation save is async — wait for it to reach storage, then compare a
+ assert.deepEqual({...created.doc,id:source.doc.id,name:source.doc.name,
+  keys:created.doc.keys.map((k,i)=>({...k,id:source.doc.keys[i].id}))},source.doc);
+ // The duplicate save is async — wait for it to reach storage, then compare a
  // FRESH read (the snapshot above was taken before the flush).
  await page.waitForFunction(id=>{
   const stored=JSON.parse(localStorage.getItem('kinesis-workshop-library')??'null');
-  return stored?.docs?.length===2&&stored.docs.some(d=>d.id===id)&&stored.activeId===id;
+  return stored?.docs?.length===3&&stored.docs.some(d=>d.id===id)&&stored.activeId===id;
  },created.doc.id,{timeout:5000});
  const createdStored=await read();
- assert.equal(createdStored.storage.docs.length,2);
+ assert.equal(createdStored.storage.docs.length,3);
  assert.deepEqual(createdStored.storage.docs.find(d=>d.id===before.id),before);
+ assert.deepEqual(createdStored.storage.docs.find(d=>d.id===source.doc.id),source.doc);
  assert.equal(createdStored.storage.activeId,created.doc.id);
- assert(created.doc.keys.every(k=>!preset.document.keys.some(s=>s.id===k.id)));
+ assert(created.doc.keys.every(k=>!source.doc.keys.some(s=>s.id===k.id)));
  assert.equal(await page.locator('.ws-key.sel').count(),1);
- await page.getByRole('button',{name:'撤销',exact:true}).click();
- assert.deepEqual((await read()).doc,before);
- await page.getByRole('button',{name:'重做',exact:true}).click();
- assert.equal((await read()).doc.id,created.doc.id);
- // The motion name and the per-key interpolation live on the 通用 tab.
+ // The motion name and per-key interpolation live on the 通用 tab.
  await page.getByTestId('adjustment-tab-common').click();
  const motionName=page.getByTestId('active-motion-name');
- await motionName.fill('重命名后的预设副本');
- assert.equal((await read()).doc.name,'重命名后的预设副本');
+ await motionName.fill('重命名后的动作副本');
+ assert.equal((await read()).doc.name,'重命名后的动作副本');
  await page.getByRole('button',{name:'撤销',exact:true}).click();
- assert.equal((await read()).doc.name,'QA 预设调整');
+ assert.equal((await read()).doc.name,`${source.doc.name} 副本`);
  await page.getByRole('button',{name:'重做',exact:true}).click();
- assert.equal((await read()).doc.name,'重命名后的预设副本');
+ assert.equal((await read()).doc.name,'重命名后的动作副本');
 
  // Head turns are written by the common-tab sliders and the matching canvas
  // point. Keep these on the selected key and exercise the point with pointer
@@ -212,7 +198,7 @@ try{
  await page.mouse.move(spot.x,spot.y);await page.mouse.down();
  await page.mouse.move(spot.x+45,spot.y-35,{steps:10});await page.mouse.up();
  const edited=await read(),targetAfter=edited.doc.keys[0].pose.handL.target;
- assert(Math.hypot(targetAfter.x-targetBefore.x,targetAfter.y-targetBefore.y,targetAfter.z-targetBefore.z)>.005,'pointer drag did not adjust the preset copy');
+ assert(Math.hypot(targetAfter.x-targetBefore.x,targetAfter.y-targetBefore.y,targetAfter.z-targetBefore.z)>.005,'pointer drag did not adjust the imported action copy');
  // The library persists asynchronously (throttled during the drag, flushed at
  // drag end), so wait for the dragged value to reach storage instead of racing
  // the save with an immediate read.
@@ -226,7 +212,7 @@ try{
  await page.getByRole('button',{name:'重做',exact:true}).click();
  assert.deepEqual((await read()).doc.keys[0].pose.handL.target,targetAfter);
  // The selected key owns the curve from its time to the next key. Change it
- // through the real select control and verify save, undo, redo, and reload.
+ // through the real control and verify save, undo, redo, and reload.
  await page.waitForTimeout(600); // start a distinct history transaction from the pointer drag
  const interpolation=page.getByTestId('selected-key-interpolation');
  assert(await interpolation.isEnabled(),'interpolation selector should be enabled when in-betweens are on');
@@ -294,40 +280,41 @@ try{
  assert(await replantWarning.isVisible(),'a large planted recontact move should show lift-off guidance');
  assert.match(await replantWarning.textContent(),/滑步.*插入离地帧/);
  const finalEdited=await read();
- // Creating the same preset again must stay independent of the edited copy.
- await startButton.click();
+ // Duplicating the original import again must stay independent of the edited copy.
+ await page.getByRole('button',{name:`复制 ${source.doc.name}`,exact:true}).click();
  const repeated=await read();
  assert.notEqual(repeated.doc.id,created.doc.id);
- assert.equal(repeated.doc.name,`${preset.name} 副本`);
+ assert.equal(repeated.doc.name,`${source.doc.name} 副本`);
  assert.deepEqual(repeated.doc.keys[0].pose.handL.target,targetBefore);
- // The creation save is async — wait for the third document to reach storage,
+ // The creation save is async — wait for the fourth document to reach storage,
  // then assert on a fresh read.
  await page.waitForFunction(id=>{
   const stored=JSON.parse(localStorage.getItem('kinesis-workshop-library')??'null');
-  return stored?.docs?.length===3&&stored.docs.some(d=>d.id===id);
+  return stored?.docs?.length===4&&stored.docs.some(d=>d.id===id);
  },repeated.doc.id,{timeout:5000});
- assert.equal((await read()).storage.docs.length,3);
- await page.getByRole('button',{name:'撤销',exact:true}).click();
+ assert.equal((await read()).storage.docs.length,4);
+ await page.locator(`.ws-lib-name[title="${finalEdited.doc.id}"]`).click();
  const saved=await read();
- assert.equal(saved.doc.id,edited.doc.id);
+ assert.equal(saved.doc.id,finalEdited.doc.id);
  assert.deepEqual(saved.doc,finalEdited.doc);
- await awaitStoredActive(edited.doc.id);
+ await awaitStoredActive(finalEdited.doc.id);
  await page.reload();await ready();
  await reopenPanels(); // reload resets review mode and collapses the panels
  // Playback/seek is allowed; no direct document or engine edit writes.
  await page.evaluate(()=>{window.__WS__.setPlaying(false);window.__WS__.seek(0);});
  const restored=await read();
- assert.equal(restored.doc.id,edited.doc.id,
+ assert.equal(restored.doc.id,finalEdited.doc.id,
   `reloaded active doc: storage.activeId=${restored.storage.activeId} docs=[${restored.storage.docs.map(d=>d.id).join(', ')}]`);
  assertRestoredDoc(restored.doc,saved.doc);
  assert.equal(restored.storage.quarantine.length,0);
  assertRestoredDoc(restored.storage.docs.find(d=>d.id===before.id),before);
+ assertRestoredDoc(restored.storage.docs.find(d=>d.id===source.doc.id),source.doc);
  assert(restored.wrist.every((v,i)=>Math.abs(v-saved.wrist[i])<1e-9),'solved pose changed across reload');
  assert.deepEqual(await page.evaluate(async url=>{
   const {motionFileById}=await import(url);return motionFileById('forehand').document;
- },`/@fs/${path.resolve(repoRoot,'packages/motion-core/src/motion-files.ts')}`),preset.document);
- // The old initial selection was a hard-coded id absent from preset copies:
- // after reload the wrist sliders moved locally without writing any key.
+ },`/@fs/${path.resolve(repoRoot,'packages/motion-core/src/motion-files.ts')}`),source.doc);
+ // The imported action and its duplicate both retain independent history,
+ // while the source fixture stays unchanged after reload.
  // Exercise every wrist axis AFTER reload, and inspect actual solved bones.
  const readArm=()=>page.evaluate(()=>{
   const r=window.__WS__.rig,b=r.bone('upperarm01_R');
@@ -444,9 +431,6 @@ try{
  const restoredGrip=await gripState();
  assert.equal(restoredGrip.tilt,.5,'grip tilt was lost on reload');
  assert(Math.hypot(...restoredGrip.racket.map((v,i)=>v-gripAfter.racket[i]))<1e-12,'reloaded racket tilt changed');
- // Closed <details> content is not exposed to the accessibility tree, so the
- // preset select and the generator controls need their folds reopened.
- await page.locator('[data-fold="preset"] summary').click();
  await page.getByTestId('adjustment-tab-right').click();
  await page.getByTestId('joint-R-upper-swing').scrollIntoViewIfNeeded();
  await page.screenshot({path:outputFile('free-arm-authoring.png')});
@@ -455,24 +439,24 @@ try{
  const beforeGeneration=await read();
  await page.getByTestId('generator-start').click();
  await page.waitForFunction(()=>window.__WS_GENERATOR__.locked());
- assert(await select.evaluate(el=>el.closest('[inert]')!==null),'preset controls remain interactive during generation');
- await assert.rejects(startButton.click({timeout:500}),{name:'TimeoutError'});
+ assert(await page.locator('.ws-left .ws-card').first().evaluate(el=>el.inert),'the action library should lock during generation');
+ await assert.rejects(page.getByTestId('motion-import').click({timeout:500}),{name:'TimeoutError'});
  await page.getByTestId('generator-cancel').click();
  await page.waitForFunction(()=>!window.__WS_GENERATOR__.locked());
- assert.deepEqual((await read()).storage,beforeGeneration.storage,'generation lock allowed a preset write');
- await select.scrollIntoViewIfNeeded();
+ assert.deepEqual((await read()).storage,beforeGeneration.storage,'generation lock allowed an action library write');
  await page.screenshot({path:outputFile('desktop.png')});
  await page.setViewportSize({width:390,height:844});
- // Compact layout turns the library panel into a hidden bottom sheet; the
- // preset select only exists inside it, so open the sheet the way a user does.
+ // Compact layout turns the library panel into a hidden bottom sheet.
  await page.getByTestId('sheet-left').click();
  await page.waitForFunction(()=>document.querySelector('.ws-shell')?.classList.contains('ws-sheet-left'));
- assert(await select.isVisible());
+ assert(await page.locator('.ws-lib-row').first().isVisible());
+ assert.equal(await page.locator('[data-fold="preset"]').count(),0);
+ assert.equal(await page.getByTestId('adjustment-tab-semantic').count(),0);
  await page.screenshot({path:outputFile('mobile.png')});
  assert.equal(await page.locator('vite-error-overlay').count(),0);
  assert.deepEqual(errors,[]);
  const result={url:page.url(),browser:await browser.version(),identity,
-  checks:{presetList:true,copyParity:true,sourceUnchanged:true,creationUndoRedo:true,presetCopyRename:true,pointerEdit:true,editUndoRedo:true,segmentInterpolation:true,sideTabsAndScroll,limbCoordinateEdits:limbEdits,repeatedCopy:true,reloadSolvedPose:true,wristAxesAfterReload:true,upperArmBehindTorso:true,forearmPivot:true,armUndoRedo:true,freeArmReload:true,gripTilt:true,generationLock:true,consoleErrors:errors},warnings,
+  checks:{noBuiltInPresets:true,noSemanticTab:true,importCopyParity:true,sourceUnchanged:true,duplicateRename:true,pointerEdit:true,editUndoRedo:true,segmentInterpolation:true,sideTabsAndScroll,limbCoordinateEdits:limbEdits,repeatedCopy:true,reloadSolvedPose:true,wristAxesAfterReload:true,upperArmBehindTorso:true,forearmPivot:true,armUndoRedo:true,freeArmReload:true,gripTilt:true,generationLock:true,consoleErrors:errors},warnings,
   screenshots:['segment-interpolation.png','limb-controls.png','free-arm-authoring.png','grip-tilt.png','desktop.png','mobile.png']};
  atomicWriteFile(outputFile('result.json'),JSON.stringify(result,null,2));
  console.log(JSON.stringify(result,null,2));

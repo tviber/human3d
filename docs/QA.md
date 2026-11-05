@@ -30,7 +30,7 @@
 npm test -- apps/web/src/lab/pose-validity.test.ts
 npm run dev
 npm run qa:pose-validity
-sh scripts/check-process-limit.sh && node scripts/pose-visual-qa.mjs --quick 正手挥拍 "Novak Djokovic"   # 按信封阶段标记做多方位纯渲染截图
+sh scripts/check-process-limit.sh && node scripts/pose-visual-qa.mjs --quick "抬手与转身"   # 按信封阶段标记做多方位纯渲染截图
 ```
 
 浏览器验收驱动真实 Lab 页面，生成三个夹具各自的 front/side/back WebGL 截图以及 `report.json`。若需要独立端口：
@@ -76,24 +76,26 @@ HUMAN3D_WEB_PORT=5174 npm run qa:pose-validity
 
 ## 浏览器检查
 
-`scripts/browser-qa.mjs` 检查并保存 evidence/browser-results.json。默认跳过高 CPU 的 WebGL 录屏和两轮动作优化，并在结果的 `skipped` 字段记录；设置 `HUMAN3D_QA_HEAVY=1` 后运行完整重型验收。验证启动前会检查本仓库运行的 Node / ffmpeg 进程数（不含编辑器和其他项目的进程），超过 4 个即拒绝。
+`scripts/browser-qa.mjs` 检查并保存 evidence/browser-results.json。默认跳过高 CPU 的工作台生成验收，并在结果的 `skipped` 字段记录；设置 `HUMAN3D_QA_HEAVY=1` 后运行完整重型验收。验证启动前会检查本仓库运行的 Node / ffmpeg 进程数（不含编辑器和其他项目的进程），超过 4 个即拒绝。
+
+下表是四个预设移除前的旧版浏览器验收记录；本次改动只清理过时的 UI 路径，没有运行浏览器 QA。当前脚本已改为只切换和采样仍可见的基础动作。
 
 | 检查 | 结果 |
 |---|---|
 | 页面标题 / 非空页面 / 资源就绪 | 通过 |
 | Vite 错误遮罩 | 无 |
 | 控制台应用 error / warning | 0 / 0 |
-| 六个动作切换及标题 / 选中状态 | 通过 |
+| 六个动作切换及标题 / 选中状态 | 历史通过 |
 | 暂停、恢复、重播 | 通过 |
 | 进度拖动、速度调整 | 通过，修改真实动作时间与倍率 |
 | 循环关闭后停止在终点 | 通过 |
 | 真实指针 Orbit 拖动与滚轮缩放 | 通过，摄像机坐标改变 |
 | 表面、骨架、坐标轴、IK 端点 | 通过，实际 3D 对象显隐变化 |
 | 资料弹窗 | 通过，显示真实来源 / 许可 |
-| 六个动作各 80 次浏览器采样 | 通过，膝肘范围和掌柄连接符合测试条件 |
+| 六个动作各 80 次浏览器采样 | 历史通过，膝肘范围和掌柄连接符合当时测试条件 |
 | 移动端横向溢出 | 无；观察面板在画布下方可滚动访问，播放条保持可见 |
-| 生产构建 / 无外部网络资源 | 通过；阻断所有非 localhost 请求，人体、字体、动作仍加载，切换挥拍与进度可用 |
-| 实时挥拍录屏 | 通过，完整动作至停止后约 0.2 s |
+| 生产构建 / 无外部网络资源 | 历史通过；阻断所有非 localhost 请求，人体、字体、动作仍加载，切换挥拍与进度可用 |
+| 实时挥拍录屏 | 历史通过；当前 QA 已移除录屏检查 |
 
 `npm run build` 通过。Three.js 核心 chunk 约 560 kB（gzip 约 142 kB）触发 Vite 的默认 500 kB 提示，这是当前 3D 引擎体积，不是运行错误。`npm audit` 为 0 漏洞。
 
@@ -114,18 +116,18 @@ HUMAN3D_WEB_PORT=5174 npm run qa:pose-validity
 | `workshopStillExport` | 「渲染静帧」真实点击下载：PNG magic + IHDR 钉死固定出图 640×720，文件名 `<docId>.t<秒>.png`，导出后 `__WS__` 播放态与时间原样恢复；「关键帧拼图」（播放中点击）下载 `<docId>.sheet.png`，3 键文档为 3 格单行（1920×748），体积大于单帧静帧；整张拼图在同一段外层捕获会话里完成（`capturing` 从入口持有到拼图 toBlob，逐格 `endCapture` 恢复点读到的是会话内暂停态），最后一次外层恢复才把播放态交回 true——tap `endCapture` 实测 3 次逐格暂停恢复 + 1 次外层 true 恢复 |
 | `workshopGripSide` | 「握拍侧」真实下拉选「左手」→ `doc.gripSide==='L'`、约束行重标为「左手握拍」、真实勾选两键握拍；求解后球拍 `parent===wrist_L` 且原点距左腕 <0.15 m、比右腕更近；随后真实指针拖动拍头手柄：写入 `handL.target`，`handR.target` 逐字节不变 |
 | `workshopMirror` | 「镜像动作」真实点击 → 新文档入库并选中（id 带 `.mirrored`、名称带「镜像」，库计数 +1 且原文档保留）；左握 QA 文档镜像后 `gripSide` 回右手、球拍重挂 `wrist_R`；t=.5 真实求解腕位左右互换（镜像 `wrist_L` ≈ 源 `wrist_R` 的 x 反射，容差 1e-5）；「撤销」一步回到源文档 id 且求解一致 |
-| `workshopRotationSync` | 播放头停在两键之间 → 提示可见、大臂/肘/腕滑块均为 disabled；对大臂和腕滑块发 `press('PageUp')` 后输入值与文档不变；点「跳到该关键帧」后提示消失、滑块启用且播放头等于选中帧时间（`scripts/workshop-preset-qa.mjs`，CI `browser-qa / library`） |
+| `workshopRotationSync` | 播放头停在两键之间 → 提示可见、大臂/肘/腕滑块均为 disabled；对大臂和腕滑块发 `press('PageUp')` 后输入值与文档不变；点「跳到该关键帧」后提示消失、滑块启用且播放头等于选中帧时间（`scripts/workshop-authoring-qa.mjs`，CI `browser-qa / library`） |
 | `workshopMobileArmControls` | 手机 UI 在右侧编辑右腕 twist 与肘屈曲，滑块读数和求解角度变化、对应 hand frame 写入选中 key；切换左侧编辑左腕 twist，读数和 hand frame 同步变化（`scripts/workshop-mobile-qa.mjs`，CI `browser-qa / library`） |
 
 ### WP-C 追加的检查与证据（求解语义变更：切线限界 + 手部 SO(3) 三次）
 
 - **质量探针**：`packages/motion-core/src/quality-probe.ts` 是共享度量实现（vitest 与 CLI 同源），`sh scripts/check-process-limit.sh --npx && npx tsx scripts/measure-quality-probe.mts [fps=240] [motion|all]` 走真实 `frameAt → solveEffectiveFrame → analyzePose` 路径以 240fps 采样；`evidence/quality-probe-*.json` 是 WP-C 后求解器的提交基线。`quality.test.ts` 既有结构断言也有硬质量门（kick 削减、atKey 步长、accelTop 等，实测值写进注释）。
 - **forehand-study 验收夹具**：`spec/examples/forehand-study.request.json` 是 2.0 s、5 键的正手文档，**全部由工作台真实 UI 写路径制作**（制作链 `drive.mjs`/`ops.json` 与逐轮快照已随 #21/#30 消融移出仓库，归档于 tag `archive/forehand-17` 对应的仓外备份）；账本在 `spec/examples/forehand-study.md`。`contract.test.ts` 钉结构与 200 契约，`quality.test.ts` 对其实测值加 ×1.25 上限 / ÷1.25 下限硬门（腕弯曲 0 截幅、IK 残差 ~0、触球键拍头速度 >3 m/s、tip kicks ≤170 回归门等）。
-- 求解语义变更后全量浏览器复验：本记录对应一次 `QA_BROWSER_CHANNEL=chrome npm run qa` 全绿（errors/warnings 为空）与 `node scripts/dynamics-browser-qa.mjs` 29 项全过；`evidence/browser-results.json`、`dynamics-results.json` 与相关截图/录屏随运行刷新。
+- 历史求解语义验收（投掷 / 直拳预设移除前）：当时一次 `QA_BROWSER_CHANNEL=chrome npm run qa` 全绿（errors/warnings 为空），旧版 `dynamics-browser-qa.mjs` 29 项通过；旧记录与截图仍作为历史证据保留，不属于当前 QA 命令。
 
 ## 实测关键姿态
 
-下列角度来自浏览器 AnimationMixer 实际求值（每动作 80 个采样）。正手挥拍一行于 2026-10-20 随挥修复后按同一 `frameAt → solveEffectiveFrame` 路径 80 采样重测。
+下列角度来自浏览器 AnimationMixer 实际求值（每动作 80 个采样）。持拍准备与正手挥拍两行是仍留在底层注册表中的历史动作数据，不属于当前主界面预设；正手挥拍一行于 2026-10-20 随挥修复后按同一 `frameAt → solveEffectiveFrame` 路径 80 采样重测。
 
 | 动作 | 右膝屈曲范围 | 右肘屈曲范围 |
 |---|---|---|
@@ -164,9 +166,9 @@ HUMAN3D_WEB_PORT=5174 npm run qa:pose-validity
 | 信息架构 | 保留页头、左动作库、中央人体、右观察设置、底部播放条的结构；给人体更多横向空间 |
 | 色板 | 保留冷白 / 浅灰画布、深蓝文字、蓝色选中与播放状态；无额外装饰渐变 |
 | 字体与层级 | 本地 DM Sans + 中文系统字体，标题 / 动作 / 设置 / 注释有清晰层级；修正初版过小标签 |
-| 控件 | 六个动作、四种快速视角、开关与速度滑块按概念实现；增加任务要求的单次播放、阶段跳转、手部特写 |
+| 控件 | 动作库、四种快速视角、开关与速度滑块按概念实现；增加任务要求的单次播放、阶段跳转、手部特写 |
 | 人体资产 | 概念中的照片式穿衣运动员改为真正可转动、可蒙皮变形的 MakeHuman 解剖轮廓；这是任务要求的真实模型，非图片替代 |
-| 文案真实性 | 六动作名称、品牌与导航保持；删除概念凭空生成的 SMPL / 非商业限制，改为实际 CC0 / CMU 来源，并标注网球工程近似 |
+| 文案真实性 | 动作名称、品牌与导航保持；删除概念凭空生成的 SMPL / 非商业限制，改为实际 CC0 / CMU 来源，并标注网球工程近似 |
 | 播放区 | 保留播放 / 重播 / 时间轴；将虚构 3:20 时长改为各真实片段时长 |
 | 响应式 | 手机动作库变为 2×3，设置可下滚访问，保留实时画布与底部播放控制 |
 
@@ -182,9 +184,9 @@ HUMAN3D_WEB_PORT=5174 npm run qa:pose-validity
 - debug.png / skeleton.png：人体表面叠加或关闭时的绑定骨架 / 关节 / 坐标轴 / IK 端点。
 - laptop.png / mobile.png / mobile-settings.png：不同视口。
 - production.png / production-results.json：生产静态构建与外部资源阻断检查。
-- forehand.webm / forehand.mp4：重型验收（`HUMAN3D_QA_HEAVY=1`）生成的 30 fps 实时挥拍录屏，H.264 转码已完整解码验证。
+- forehand.webm / forehand.mp4：早期重型验收生成的实时挥拍录屏，留作历史证据；当前 QA 不再录制该动作。
 - video-1.3.png / video-2.55.png / video-3.35.png / video-4.6.png：录屏关键帧复查。
-- browser-results.json：浏览器检查与 480 个基础动作采样的结构化原始结果。
+- browser-results.json：旧版浏览器检查与 480 个动作采样的结构化历史结果。
 - quality-probe-{idle,reach,squat,ready,forehand,default,summary}.json：240fps 质量探针基线（WP-C 后求解器）。
 
 ## 2026-10-17 投掷与直拳修复复验

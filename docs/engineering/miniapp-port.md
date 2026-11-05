@@ -7,7 +7,7 @@
 | 层 | 位置 | 小程序里 |
 |---|---|---|
 | 域逻辑 | `packages/motion-core`（纯，无 DOM/node） | 原样复用 |
-| 应用逻辑 | `apps/web/src/workshop/{library,pose-library,basic-actions,keyframes,history,mirror}.ts`（纯 TS） | 原样复用 |
+| 应用逻辑 | `apps/web/src/workshop/{library,pose-library,keyframes,history,mirror}.ts`（纯 TS） | 原样复用 |
 | UI 状态 | `apps/web/src/{lab/store,workshop/ui-store}.ts`（zustand，无 DOM） | 原样复用（Taro 支持 React） |
 | 3D 引擎 | `apps/web/src/{lab,workshop}/engine.ts`（three + OrbitControls + 指针事件） | 复用，three 换 `three-platformize`，宿主经构造参数注入 platform |
 | 宿主 API | `apps/web/src/platform/platform.ts` | **重写** `miniPlatform`（wx.* 实现 `AppPlatform`） |

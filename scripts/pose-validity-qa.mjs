@@ -49,8 +49,7 @@ try{
  const result={date:new Date().toISOString(),browser:await browser.version(),viewport:[1536,1024],webIdentity,fixtures:[],consoleErrors:[]};
  for(const fixture of fixtures){
   if(fixture.kind==='forehand'){
-   await page.locator('.motion-row').filter({hasText:'正手挥拍'}).first().click();
-   await page.evaluate(()=>{const e=window.__LAB__;e.setPlaying(false);e.seek(3.35);});
+   await page.evaluate(()=>{const e=window.__LAB__;e.setMotion('forehand',false);e.setPlaying(false);e.seek(3.35);});
    await page.waitForFunction(()=>Math.abs(window.__LAB__.time-3.35)<1e-6);
   }else{
    await page.locator('.motion-row').filter({hasText:'自然站立'}).first().click();

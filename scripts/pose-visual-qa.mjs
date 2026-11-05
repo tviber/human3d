@@ -8,8 +8,8 @@ import {resolveOutputDir,assertTrackedWriteAllowed,atomicWriteFile,ensureOutputD
 // checker, no markers, no debug overlays — the canvas alone, so the reviewer
 // sees only the rendered body.
 //   node scripts/pose-visual-qa.mjs [--quick] [动作名…]
-// Motion names are the Lab list labels (`正手挥拍`, `Novak Djokovic`, …);
-// the default is the forehand. Instants are the motion's envelope phase
+// Motion names are the current Lab list labels (`自然站立`, `抬手与转身`, …);
+// the default is the idle motion. Instants are the motion's envelope phase
 // markers (准备/引拍/击球区/随挥/恢复), so every motion is sampled at
 // semantically comparable moments. `--quick` reduces the view grid to four
 // azimuths at one elevation for contact-sheet review.
@@ -19,7 +19,7 @@ const quick=output.args.includes('--quick');
 const unknown=output.args.filter(arg=>arg.startsWith('--')&&arg!=='--quick');
 if(unknown.length)throw new Error(`unexpected pose-visual QA arguments: ${unknown.join(' ')}`);
 const motions=output.args.filter(arg=>!arg.startsWith('--'));
-if(!motions.length)motions.push('正手挥拍');
+if(!motions.length)motions.push('自然站立');
 ensureOutputDir(output.dir,{root:repoRoot,updateEvidence:output.updateEvidence});
 const outputFile=name=>assertTrackedWriteAllowed(path.join(output.dir,name),{root:repoRoot,updateEvidence:output.updateEvidence});
 const webBase=new URL(process.env.QA_WEB_URL??`http://127.0.0.1:${process.env.HUMAN3D_WEB_PORT??5173}/`);

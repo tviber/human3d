@@ -12,10 +12,10 @@ import {checkPosePackageShape,posePackageSpec,rigMatches} from '@human3d/motion-
 import {ClipSource,DocumentSource,DynamicsSource,PoseFade,PosePackageSource,createDynamicsSession,type DynamicsSession,type MotionSource} from '../playback/motion-source';
 import {bindSceneBackground} from '../theme/scene-background';
 import {applyHeroicShape} from '../theme/shape-preset';
-import {SkinSwap,type SkinId} from '../theme/skin-swap';
 import {SAVED_MOTION_PREFIX} from '../motions/saved-motion';
 import {loadAnatomyAtlas} from '../theme/anatomy-skin';
 import {AnatomySelection} from '../theme/anatomy-selection';
+import {ChibiAvatarBridge,type AvatarMode} from '../chibi-avatar';
 import {subtleDigest} from '@human3d/motion-core';
 import type {PosePackage} from '@human3d/motion-core';
 import type {DynamicsCase,DynamicsReadout,DynamicsReplay} from './dynamics';
@@ -34,9 +34,9 @@ const sha256Hex=async(s:string):Promise<string|undefined>=>{
 };
 export class HumanEngine{
  scene=new Scene();camera=new PerspectiveCamera(35,1,.01,120);renderer:WebGLRenderer;controls:OrbitControls;
- model?:Group;rig?:HumanRig;mixer?:AnimationMixer;
+ model?:Group;avatar?:Group;avatarBridge?:ChibiAvatarBridge;avatarRacket?:Group;rig?:HumanRig;mixer?:AnimationMixer;
+ private avatarMode:AvatarMode='chibi';
  anatomy?:AnatomySelection;
- private skinSwap?:SkinSwap;
  /** The one and only playhead, in seconds of the active source. */
  time=0;activeId:MotionId='idle';playing=true;speed=1;private _loop=true;disposed=false;ready=false;
  private sources=new Map<MotionId,MotionSource>();private specs=new Map<MotionId,MotionSpec>();
@@ -44,7 +44,6 @@ export class HumanEngine{
  private pkgSeq=0;
  private _source?:MotionSource;private fade=new PoseFade();private dynSession?:DynamicsSession;
  debug:DebugOptions={surface:true,skeleton:false,axes:false,targets:false,trail:false,muscles:false};
- skin:SkinId='default';
  racket?:Group;private racketSide:'L'|'R'='R';private racketBevel:number|undefined;private racketGripTilt:number|undefined;
  /** Locally computed identities for the pose-package import gate: the rig
   * manifest hash (compared against a package's rig block — see rigMatches)
@@ -83,15 +82,21 @@ export class HumanEngine{
  async load(){
   try{
    const clipSpecs=MOTIONS.filter(m=>m.source?.kind==='clip');
-   const [gltf,rigText,atlas,...clipAssets]=await Promise.all([new GLTFLoader().loadAsync(this.platform.assetUrl('/models/human.glb')),this.platform.fetchAsset('/models/rig.json').then(r=>{if(!r.ok)throw new Error('人体骨架加载失败');return r.text()}),loadAnatomyAtlas(this.platform),...clipSpecs.map(async m=>{
+   const [gltf,chibi,rigText,atlas,...clipAssets]=await Promise.all([new GLTFLoader().loadAsync(this.platform.assetUrl('/models/human.glb')),new GLTFLoader().loadAsync(this.platform.assetUrl('/models/chibi-sports-avatar.glb')),this.platform.fetchAsset('/models/rig.json').then(r=>{if(!r.ok)throw new Error('人体骨架加载失败');return r.text()}),loadAnatomyAtlas(this.platform),...clipSpecs.map(async m=>{
     const s=m.source as {kind:'clip';clip:string;meta?:string};
     const data=await this.platform.fetchAsset(s.clip).then(r=>{if(!r.ok)throw new Error('动作片段加载失败');return r.json()});
     const meta=s.meta?await this.platform.fetchAsset(s.meta).then(r=>r.json()):undefined;
     return {id:m.id as MotionId,clip:AnimationClip.parse(data),stride:new Vector3().fromArray(meta?.stride??[0,0,0])};
    })]);
-   if(this.disposed){atlas.dispose();gltf.scene.traverse(o=>{if(o instanceof Mesh)o.geometry.dispose()});return;}
+   if(this.disposed){atlas.dispose();for(const root of [gltf.scene,chibi.scene])root.traverse(o=>{if(o instanceof Mesh)o.geometry.dispose()});return;}
    const info=JSON.parse(rigText) as RigInfo;
-   this.model=gltf.scene;this.scene.add(this.model);this.rig=new HumanRig(this.model,info);applyHeroicShape(this.model);
+   this.model=gltf.scene;this.scene.add(this.model);this.rig=new HumanRig(this.model,info);applyHeroicShape(this.model);this.model.visible=this.avatarMode==='original';
+   this.avatar=chibi.scene;
+   const head=this.avatar.getObjectByName('Head');if(head)head.name='head';
+   const leftEye=this.avatar.getObjectByName('L_Eye');if(leftEye)leftEye.name='eye_L';
+   const rightEye=this.avatar.getObjectByName('R_Eye');if(rightEye)rightEye.name='eye_R';
+   this.avatar.visible=this.avatarMode==='chibi';this.scene.add(this.avatar);this.avatarBridge=new ChibiAvatarBridge(this.rig,this.avatar);
+   this.avatar.traverse(o=>{if(o instanceof SkinnedMesh){o.castShadow=true;o.receiveShadow=true;o.frustumCulled=false;}});
    // Local identities for the pose-package import gate — the same
    // canonical(rigManifestBody)/canonical(motionDefinitionPayload) sha256 the
    // service stamps into packages (rig.manifestSHA256 / action.definitionSHA256).
@@ -104,14 +109,15 @@ export class HumanEngine{
     const h=await sha256Hex(canonical(motionDefinitionPayload(f)));
     if(h!==undefined)this.envelopeDefHash.set(f.id,h);
    }
-   this.anatomy=new AnatomySelection(this.host,this.renderer.domElement,this.camera,atlas,()=>!this.ready||!this.debug.surface);
+   this.anatomy=new AnatomySelection(this.host,this.renderer.domElement,this.camera,atlas,()=>!this.ready||!this.debug.surface||this.avatarMode==='chibi');
    this.model.traverse(o=>{if(o instanceof SkinnedMesh){o.castShadow=true;o.receiveShadow=true;o.frustumCulled=false;this.anatomy!.add(o);}});
    // Sclerae at the original MakeHuman eye pivots, keeping facial silhouette intact.
    for(const side of ['L','R']){
     const eye=this.rig.bone(`eye_${side}`);const sclera=new Mesh(new SphereGeometry(.0105,20,12),new MeshStandardMaterial({color:0xbdcbd2,roughness:.5}));sclera.name='human-eye';eye.add(sclera);
    }
-   this.skinSwap=new SkinSwap(this.model,this.platform);await this.skinSwap.set(this.skin);if(this.disposed)return;
+   if(this.disposed)return;
    this.racket=attachProp(this.rig,'racket');this.racket.visible=false;
+   this.avatarRacket=this.racket.clone(true) as Group;this.avatarRacket.visible=false;
    this.mixer=new AnimationMixer(this.model);
    this.dynSession=createDynamicsSession(this.rig,this.scene);
    const clips=new Map(clipAssets.map(c=>[c.id,c]));
@@ -219,12 +225,12 @@ export class HumanEngine{
   this.activeId=id;this._source=source;this.time=0;
   if(source instanceof DynamicsSource){
    previous?.deactivate?.();this.fade.clear();this.playing=false;
-   this.model!.visible=false;this.racket&&(this.racket.visible=false);
+   this.model!.visible=false;if(this.avatar)this.avatar.visible=false;this.racket&&(this.racket.visible=false);this.avatarRacket&&(this.avatarRacket.visible=false);
    this.jointGroup.visible=false;this.axesGroup.visible=false;this.targetGroup.visible=false;
    this.skeletonLines&&(this.skeletonLines.visible=false);this.trail&&(this.trail.visible=false);
    this.loadDynamics(source,'baseline');return;
   }
-  this.model!.visible=true;
+  this.model!.visible=this.avatarMode==='original';if(this.avatar)this.avatar.visible=this.avatarMode==='chibi';
   previous?.deactivate?.();
   // Pose fade applies only between skinned sources; switching to or from a
   // physics replay stays a hard cut, as before.
@@ -232,7 +238,8 @@ export class HumanEngine{
   source.activate?.();source.seek(this.time);
   this.model!.position.copy(source.modelOffset??ZERO);
   if(this.racket){this.syncRacketSide(source);this.racket.visible=!!spec.capabilities?.prop&&source.wantsProp();}
-  this.trailPoints=[];this.previousPosition.set(0,0,0);this.playing=true;this.skinSwap?.resetHair();
+  this.syncAvatar();
+  this.trailPoints=[];this.previousPosition.set(0,0,0);this.playing=true;
   this.controls.target.set(0,.88,0);this.setView(this.view==='hand'?'threeQuarter':this.view);
   this.setDebug(this.debug);this.notify();
  }
@@ -253,39 +260,58 @@ export class HumanEngine{
   src.seek(this.time);
   // Scrubbing resets the accumulated walk offset — same as the old walkOffset.clear on seek.
   src.modelOffset?.set(0,0,0);this.model?.position.copy(src.modelOffset??ZERO);
-  this.trailPoints=[];this.updateDebug();this.skinSwap?.resetHair();this.notify();
+  this.trailPoints=[];this.syncAvatar();this.updateDebug();this.notify();
  }
  replay(){if(this.isPhysics){this.time=0;this.physics?.seek(0);this.playing=!this.physicsLoading;this.notify();return;}this.seek(0);this.playing=true;}
- async setSkin(s:SkinId){
-  if(this.skinSwap){await this.skinSwap.set(s);this.skin=this.skinSwap.skin;}else this.skin=s;
+ setAvatarMode(mode:AvatarMode){
+  if(this.isPhysics)return;
+  this.avatarMode=mode;
+  if(this.model)this.model.visible=mode==='original';
+  if(this.avatar)this.avatar.visible=mode==='chibi';
+  this.skeletonLines&&(this.skeletonLines.visible=mode==='original'&&this.debug.skeleton);
+  this.jointGroup.visible=mode==='original'&&this.debug.skeleton;
+  this.axesGroup.visible=mode==='original'&&this.debug.axes;
+  this.targetGroup.visible=mode==='original'&&this.debug.targets;
+  this.anatomy?.setSuspended(mode==='chibi'||!this.debug.surface);
+  this.syncAvatar();
   if(this.ready&&this.view!=='free')this.setView(this.view);
  }
+ private syncAvatar(){
+  if(!this.avatarBridge||!this.racket||!this.avatarRacket||this.isPhysics)return;
+  this.avatarBridge.sync();
+  this.avatarBridge.syncProp(this.racket,this.avatarRacket,this._source?.propSide??'R');
+  this.avatarRacket.visible=this.avatarMode==='chibi'&&this.racket.visible;
+ }
  setDebug(patch:Partial<DebugOptions>){
-  Object.assign(this.debug,patch);this.skinSwap?.setSurfaceVisible(this.debug.surface);
+  Object.assign(this.debug,patch);
   if(this.isPhysics){this._source?.setDebug?.(this.debug);return;}
   this.model?.traverse(o=>{if(o instanceof SkinnedMesh)o.visible=this.debug.surface;});
-  this.skeletonLines&&(this.skeletonLines.visible=this.debug.skeleton);this.jointGroup.visible=this.debug.skeleton;this.axesGroup.visible=this.debug.axes;this.targetGroup.visible=this.debug.targets;
+  this.avatar?.traverse(o=>{if(o instanceof SkinnedMesh)o.visible=this.debug.surface;});
+  this.anatomy?.setSuspended(this.avatarMode==='chibi'||!this.debug.surface);
+  this.skeletonLines&&(this.skeletonLines.visible=this.avatarMode==='original'&&this.debug.skeleton);this.jointGroup.visible=this.avatarMode==='original'&&this.debug.skeleton;this.axesGroup.visible=this.avatarMode==='original'&&this.debug.axes;this.targetGroup.visible=this.avatarMode==='original'&&this.debug.targets;
   if(this.trail)this.trail.visible=this.debug.trail&&!!this.specOf(this.activeId).capabilities?.prop?.trail;this.updateDebug();
  }
  setView(view:ViewId){
   this.view=view;this.onView?.(view);const spec=this.specOf(this.activeId);
-  const root=(this.isPhysics&&this.physics?.ready?this._source?.point('Full Body'):this._source?.rootPoint())??new Vector3(0,.94,0),target=root.clone();
-  target.y=(spec.capabilities?.camera?.targetHeight??.87)+(this.skin==='ssj'&&!this.isPhysics?.08:0);
+  const sourceRoot=(this.isPhysics&&this.physics?.ready?this._source?.point('Full Body'):this._source?.rootPoint())??new Vector3(0,.94,0);
+  const root=this.avatarMode==='chibi'&&!this.isPhysics?this.avatarBridge?.point('root')??sourceRoot:sourceRoot,target=root.clone();
+  target.y=spec.capabilities?.camera?.targetHeight??.87;
   if(view==='free'){const shift=target.clone().sub(this.controls.target);this.camera.position.add(shift);this.controls.target.copy(target);this.previousPosition.copy(root);this.controls.update();this.render();return;}
   if(view==='hand'&&this.rig){
    // The hand view anchors to the wrist the prop is mounted on — physics keeps
    // the lunate anchor; prop-less sources read the default right wrist.
-   const wrist=(this.isPhysics&&this.physics?.ready?this._source?.point('lunate_r'):this.rig.point(`wrist_${this._source?.propSide??'R'}`))??this.rig.point('wrist_R');
+   const side=this._source?.propSide??'R';
+   const wrist=this.avatarMode==='chibi'&&!this.isPhysics?this.avatarBridge?.point(`wrist_${side}`)??this.rig.point(`wrist_${side}`):(this.isPhysics&&this.physics?.ready?this._source?.point('lunate_r'):this.rig.point(`wrist_${side}`))??this.rig.point('wrist_R');
    target.copy(wrist).add(new Vector3(0,.01,.03));this.camera.position.copy(target).add(new Vector3(-.34,.18,.42));
   }else{
-   const distance=Math.max(this.isPhysics?4.15:spec.capabilities?.camera?.distance??3.65,this.skin==='ssj'?3.8:0,2.0/Math.max(.4,this.camera.aspect));
+   const distance=Math.max(this.isPhysics?4.15:spec.capabilities?.camera?.distance??3.65,2.0/Math.max(.4,this.camera.aspect));
    const angles={front:0,side:Math.PI/2,back:Math.PI,threeQuarter:-Math.PI/4,hand:0,free:0};const a=angles[view];this.camera.position.copy(target).add(new Vector3(Math.sin(a)*distance,.14,Math.cos(a)*distance));
   }
   this.controls.target.copy(target);this.camera.lookAt(target);this.controls.update();this.previousPosition.copy(root);this.render();
  }
  private animate=()=>{
   if(this.disposed)return;this.raf=requestAnimationFrame(this.animate);const dt=Math.min(this.clock.getDelta(),.1);
-  this.tick(dt);if(!this.isPhysics)this.skinSwap?.update(dt);this.controls.update();this.anatomy?.update(dt);this.render();
+  this.tick(dt);this.controls.update();this.anatomy?.update(dt);this.render();
  };
  tick(dt:number){
   const dyn=this.dynamicsSource();
@@ -328,10 +354,11 @@ export class HumanEngine{
   // fades in/out rather than snapping, an acceptable semantics for the ramp.
   if(this.racket){this.syncRacketSide(src);this.racket.visible=!!spec.capabilities?.prop&&src.wantsProp();}
   this.model.updateMatrixWorld(true);
+  this.syncAvatar();
   const current=src.rootPoint(),delta=current.clone().sub(this.previousPosition);
   // Camera translation follows locomotion only; Orbit orientation / zoom remain independent.
   if(spec.capabilities?.locomotion==='follow'||this.fade.active){delta.y=0;this.controls.target.add(delta);this.camera.position.add(delta);}
-  if(this.view==='hand'){const target=(src.point(`wrist_${src.propSide??'R'}`)??this.rig.point('wrist_R')).add(new Vector3(0,.01,.03)),d=target.clone().sub(this.controls.target);this.controls.target.add(d);this.camera.position.add(d);}
+  if(this.view==='hand'){const side=src.propSide??'R',wrist=this.avatarMode==='chibi'?this.avatarBridge?.point(`wrist_${side}`):undefined,target=(wrist??src.point(`wrist_${side}`)??this.rig.point('wrist_R')).add(new Vector3(0,.01,.03)),d=target.clone().sub(this.controls.target);this.controls.target.add(d);this.camera.position.add(d);}
   this.previousPosition.copy(current);if(this.floor){this.floor.position.x=current.x;this.floor.position.z=current.z;}if(this.grid){this.grid.position.x=Math.round(current.x/.25)*.25;this.grid.position.z=Math.round(current.z/.25)*.25;}if(this.keyLight){this.keyLight.position.set(current.x-3,5,current.z+4);this.keyLight.target.position.set(current.x,0,current.z);this.keyLight.target.updateMatrixWorld();}this.updateDebug();
   this.lastNotify+=dt;if(this.lastNotify>.07){this.lastNotify=0;this.notify();}
  }
@@ -371,5 +398,5 @@ export class HumanEngine{
   this.onFrame?.({time,duration:src.duration,phase,playing:this.playing,knee:d?.knee??0,elbow:d?.elbow??0,gripError:d?.gripError??0});
  }
  render(){this.renderer.render(this.scene,this.camera);}
- dispose(){this.disposed=true;this.skinSwap?.dispose();this.anatomy?.dispose();this.unbindTheme?.();for(const s of this.sources.values())s.dispose?.();cancelAnimationFrame(this.raf);this.resizeObserver.disconnect();this.controls.dispose();this.mixer?.stopAllAction();this.scene.traverse(o=>{if(o instanceof Mesh||o instanceof LineSegments||o instanceof Line){o.geometry.dispose();const materials=Array.isArray(o.material)?o.material:[o.material];materials.forEach(m=>m.dispose());}});this.renderer.dispose();this.renderer.domElement.remove();}
+ dispose(){this.disposed=true;this.anatomy?.dispose();this.unbindTheme?.();for(const s of this.sources.values())s.dispose?.();cancelAnimationFrame(this.raf);this.resizeObserver.disconnect();this.controls.dispose();this.mixer?.stopAllAction();this.scene.traverse(o=>{if(o instanceof Mesh||o instanceof LineSegments||o instanceof Line){o.geometry.dispose();const materials=Array.isArray(o.material)?o.material:[o.material];materials.forEach(m=>m.dispose());}});this.renderer.dispose();this.renderer.domElement.remove();}
 }

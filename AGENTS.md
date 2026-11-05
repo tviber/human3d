@@ -40,7 +40,7 @@
 - `npm run spec:check` — 契约测试：Ajv 严格编译、OpenAPI 与服务一致、golden 样例（CI 门禁）
 - `npm run docs:check` — Markdown 相对链接存在性检查（CI 门禁）
 - `npm run build` — 生产构建（CI 门禁，已含 `tsc -b`）
-- `npm run qa` / `npm run qa:dynamics` — 浏览器 E2E（需 dev server；`QA_BROWSER_CHANNEL=chrome` 走系统 Chrome；状态单独记录）；`npm run qa` 默认跳过 WebGL 录屏和两轮动作优化，需 `HUMAN3D_QA_HEAVY=1` 显式启用。动作库备份恢复与跨页签并发两项在 CI 的 `browser-qa` workflow（`npm run qa:library`）里跑，其余浏览器 E2E 仍不进 CI
+- `npm run qa` — 浏览器 E2E（需 dev server；`QA_BROWSER_CHANNEL=chrome` 走系统 Chrome；状态单独记录）；默认跳过重型工作台生成验收，需 `HUMAN3D_QA_HEAVY=1` 显式启用。动作库备份恢复与跨页签并发两项在 CI 的 `browser-qa` workflow（`npm run qa:library`）里跑，其余浏览器 E2E 仍不进 CI
 - `npm run protocol:example` — 重生成 `spec/examples/idle.pose.json`
 - `npm run package-to-glb -- <in.pose.json> [out.glb]` — 姿态包转 GLB（与浏览器「导出 GLB」共用 `glb-export.ts`）
 - `npm run service` — 本地 Motion Protocol v1 服务（127.0.0.1:8788）

@@ -1,7 +1,8 @@
-import {SkinSwitch} from '../theme/SkinSwitch';
+import './avatar-switch.css';
 import {webPlatform} from '../platform/platform';
 import {useMediaMatches} from '../lib/use-media';
 import {useCallback,useEffect,useRef,useState} from 'react';
+import type {AvatarMode} from '../chibi-avatar';
 import {Group, Panel, Separator, type PanelImperativeHandle,type GroupImperativeHandle} from 'react-resizable-panels';
 import {motion, useReducedMotion} from 'motion/react';
 import {Activity,ArrowUpRight,ChevronRight,Expand,Info,Layers,List,Pause,Play,RotateCcw,Scan,SlidersHorizontal,Trash2,X} from 'lucide-react';
@@ -21,6 +22,8 @@ const format=(time:number)=>{const tenths=Math.round(time*10);return `${Math.flo
  * (viewport-first + bottom sheets) instead of the stacked scrolling page. */
 const COMPACT_QUERY='(max-width: 760px)';
 const useCompact=()=>useMediaMatches(COMPACT_QUERY);
+const REMOVED_PRESET_IDS=new Set(['ready','forehand','baseball-throw','punch']);
+const LAB_PRESET_MOTIONS=MOTIONS.filter(m=>!REMOVED_PRESET_IDS.has(m.id));
 function Toggle({label,checked,onChange,detail,disabled}:{label:string;checked:boolean;onChange:(v:boolean)=>void;detail?:string;disabled?:boolean}){
  return <label className="toggle-row"><span>{label}{detail?<small>{detail}</small>:null}</span><Switch aria-label={label} checked={checked} disabled={disabled} onCheckedChange={onChange}/></label>;
 }
@@ -50,7 +53,7 @@ function InfoDialog({kind,onClose}:{kind:'guide'|'sources'|'kinetics';onClose:()
   <p>活动范围参考 <a href="https://archive.cdc.gov/www_cdc_gov/ncbddd/jointrom/index.html" target="_blank" rel="noreferrer">CDC Joint Range of Motion Study<ArrowUpRight size={13}/></a>。保守限制不代表适用于每个人的医学标准。</p>
   <p>新增无球投掷 / 直拳使用 MyoSim（Apache-2.0）派生模型和 MuJoCo 正向仿真。CMU 124_01 用于核对投掷分期；直拳关键帧参考上述拳击运动学研究。动作坐标、左侧贴脸护架和手指闭拳姿态均为有边界的工程近似；不重新分发研究者的受试者动捕数据。</p>
   <p>采用 Three.js（MIT）/ React（MIT）/ Vite（MIT）。完整依据、资产转换步骤与已知限制见源码中的 docs/RESEARCH.md 和 docs/LICENSES.md。</p>
-  <div className="notice"><Info size={17}/><span>原有六个动作为运动学演示；新增实验为降阶肌骨正向仿真回放。均未进行个体标定，不用于诊断。</span></div>
+  <div className="notice"><Info size={17}/><span>内置动作以运动学演示为主；肌骨正向仿真是降阶实验。均未进行个体标定，不用于诊断。</span></div>
  </>}</motion.div></dialog>;
 }
 export function App(){
@@ -62,8 +65,9 @@ export function App(){
  const compact=useCompact();
  const [sheet,setSheet]=useState<'library'|'inspector'|null>(null);
  const {id,setId,info,setInfo,error,setError,view,setView,frame,setFrame,debug,patchDebug,speed,setSpeed,loop,setLoop,dialog,setDialog,extras,setExtras}=useLabUi();
+ const [avatarMode,setAvatarMode]=useState<AvatarMode>('chibi');
  const [savedMotions,setSavedMotions]=useState<MotionSpec[]>([]);
- const allMotions=[...savedMotions,...MOTIONS,...extras],spec=allMotions.find(m=>m.id===id)??MOTIONS[0],racket=!!spec.capabilities?.prop,physics=spec.source?.kind==='dynamics';
+ const allMotions=[...savedMotions,...LAB_PRESET_MOTIONS,...extras],spec=allMotions.find(m=>m.id===id)??LAB_PRESET_MOTIONS[0],racket=!!spec.capabilities?.prop,physics=spec.source?.kind==='dynamics';
  const refreshSaved=useCallback(async()=>{
   const e=engine.current;if(!e?.ready||!e.rig)return;
   try{
@@ -107,11 +111,12 @@ export function App(){
   refreshSaved();
   }catch(err){setError(`无法删除动作：${err instanceof Error?err.message:String(err)}`);}
  };
- const choose=(next:MotionId)=>{setId(next);setSheet(null);const nextSpec=allMotions.find(m=>m.id===next)??MOTIONS[0];if(nextSpec.oneShot){setLoop(false);if(engine.current)engine.current.loop=false;}engine.current?.setMotion(next);if(view==='hand'){setView('threeQuarter');engine.current?.setView('threeQuarter');}};
+ const choose=(next:MotionId)=>{setId(next);setSheet(null);const nextSpec=allMotions.find(m=>m.id===next)??LAB_PRESET_MOTIONS[0];if(nextSpec.oneShot){setLoop(false);if(engine.current)engine.current.loop=false;}engine.current?.setMotion(next);if(view==='hand'){setView('threeQuarter');engine.current?.setView('threeQuarter');}};
  const toggle=(key:keyof DebugOptions,value:boolean)=>{const patch={[key]:value} satisfies Partial<DebugOptions>;patchDebug(patch);engine.current?.setDebug(patch);};
  const camera=(v:ViewId)=>{setView(v);engine.current?.setView(v);};
+ const chooseAvatar=(next:AvatarMode)=>{setAvatarMode(next);engine.current?.setAvatarMode(next);};
  useEffect(()=>{
-  const key=(event:KeyboardEvent)=>{if(event.target instanceof HTMLInputElement||event.target instanceof HTMLButtonElement||dialog)return;if(event.code==='Space'){event.preventDefault();engine.current?.setPlaying(!engine.current.playing);}if(event.key.toLowerCase()==='r')engine.current?.replay();if(/^[1-8]$/.test(event.key)){const next=MOTIONS[Number(event.key)-1].id;setId(next);engine.current?.setMotion(next);}};
+  const key=(event:KeyboardEvent)=>{if(event.target instanceof HTMLInputElement||event.target instanceof HTMLButtonElement||dialog)return;if(event.code==='Space'){event.preventDefault();engine.current?.setPlaying(!engine.current.playing);}if(event.key.toLowerCase()==='r')engine.current?.replay();if(/^[1-8]$/.test(event.key)){const next=LAB_PRESET_MOTIONS[Number(event.key)-1];if(next){setId(next.id);engine.current?.setMotion(next.id);}}};
   window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);
  },[dialog]);
  return <motion.div className={`app-shell${compact?' lab-compact':''}${sheet==='library'?' lab-sheet-library':''}${sheet==='inspector'?' lab-sheet-inspector':''}`} initial={reduce?false:{opacity:0}} animate={{opacity:1}} transition={{duration:reduce?0:.18,ease:[0.2,0.8,0.2,1]}}>
@@ -128,6 +133,10 @@ export function App(){
    <Panel id="lab-stage" className="viewport" aria-label="人体三维视图" minSize={320}><div ref={mount} className="canvas-host"/>
     <div className="viewport-heading"><h2>{spec.name}</h2><p>{spec.method}</p></div>
     <div className="camera-toolbar" aria-label="快速视角">{([['front','正面'],['side','侧面'],['back','背面'],['threeQuarter','45°']] as [ViewId,string][]).map(([v,label])=><button key={v} aria-pressed={view===v} onClick={()=>camera(v)} disabled={!info}>{label}</button>)}</div>
+    <div className="avatar-toolbar" role="group" aria-label="角色模型">
+     <button type="button" data-testid="avatar-mode-chibi" aria-pressed={avatarMode==='chibi'} disabled={!info||physics} onClick={()=>chooseAvatar('chibi')}>Q 版</button>
+     <button type="button" data-testid="avatar-mode-original" aria-pressed={avatarMode==='original'} disabled={!info||physics} onClick={()=>chooseAvatar('original')}>原版</button>
+    </div>
     {spec.capabilities?.prop?.handView?<button className={`hand-view ${view==='hand'?'active':''}`} onClick={()=>camera(view==='hand'?'threeQuarter':'hand')}><Scan size={15}/>手部特写</button>:null}
     {physics&&frame.dynamics?.loading?<div className="physics-loading"><div className="loading-orbit"/><strong>读取正向仿真记录</strong><span>加载解剖骨骼、肌腱路径与力学数据</span></div>:null}
     {physics&&frame.dynamics?.error?<div className="physics-loading" role="alert"><strong>{frame.dynamics.error}</strong><button onClick={()=>choose(id)}>重新读取</button></div>:null}
@@ -140,8 +149,7 @@ export function App(){
    </Panel>
    <Separator className="pane-resize"/>
    <Panel id="lab-inspector" panelRef={insApi} collapsible collapsedSize={0} onResize={size=>setInsOpen(size.inPixels>1)} className={`inspector scroll-region${insOpen?'':' pane-closed'}`} aria-label="观察设置" defaultSize={0} minSize={220} maxSize={460}><section><div className="panel-heading"><h2>观察</h2><span className="spacer"/><SlidersHorizontal size={17}/><button className="sheet-close" aria-label="收起观察" onClick={()=>setSheet(null)}><X size={18}/></button></div><div className="toggle-list">
-    <Toggle label="人体表面" checked={debug.surface} onChange={v=>toggle('surface',v)}/><Toggle label={physics?"解剖骨骼与关节":"骨骼与关节"} checked={debug.skeleton} onChange={v=>toggle('skeleton',v)}/><Toggle label="关节坐标轴" checked={debug.axes} onChange={v=>toggle('axes',v)}/><Toggle label={physics?"固定支撑反力":"IK 端点"} checked={debug.targets} onChange={v=>toggle('targets',v)}/>
-    <SkinSwitch disabled={!info||physics} change={s=>engine.current!.setSkin(s)}/>
+    <Toggle label="人体表面" checked={debug.surface} onChange={v=>toggle('surface',v)}/><Toggle label={physics?"解剖骨骼与关节":"骨骼与关节"} checked={debug.skeleton} onChange={v=>toggle('skeleton',v)} disabled={avatarMode==='chibi'||physics}/><Toggle label="关节坐标轴" checked={debug.axes} onChange={v=>toggle('axes',v)} disabled={avatarMode==='chibi'||physics}/><Toggle label={physics?"固定支撑反力":"IK 端点"} checked={debug.targets} onChange={v=>toggle('targets',v)} disabled={avatarMode==='chibi'||physics}/>
     {physics?<Toggle label="肌腱作用路径" checked={debug.muscles} onChange={v=>toggle('muscles',v)}/>:null}
     {spec.capabilities?.prop?.trail?<Toggle label="球拍运动轨迹" checked={debug.trail} onChange={v=>toggle('trail',v)}/>:null}
    </div></section>

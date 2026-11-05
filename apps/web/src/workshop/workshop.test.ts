@@ -6,11 +6,10 @@ import {HumanRig} from '@human3d/motion-core';
 import {attachRacket,gripFrame,RACKET_HANDLE} from '@human3d/motion-core';
 import {angleAt,DEG} from '@human3d/motion-core';
 import {blankDocument,defaultDocument,ensureKey,flattenPose,frameAt,HEAD_ROTATION_LIMITS,mirrorDoc,parseDoc,retimeKeys,samplePose,serializeDoc,setKeyTime,sortedKeys,TANGENT_SECANT_CAP,toV,unflattenPose,validateDocShape,type PoseParams,type WorkshopDoc,type WorkshopKey} from '@human3d/motion-core';
-import {DRAFT_PREFIX,LIBRARY_KEY,MotionLibrary,WORKSHOP_PRESETS,type StorageLike} from './library';
+import {DRAFT_PREFIX,LIBRARY_KEY,MotionLibrary,type StorageLike} from './library';
 import {SAVED_MOTION_PREFIX,savedMotionSpec} from '../motions/saved-motion';
 import {DocHistory,HistoryBook,RecordGate} from './history';
 import {WORKSHOP_LIMITS} from '@human3d/motion-core';
-import {MOTION_FILES} from '@human3d/motion-core';
 import {analyzePose,rotateHandFrame,solveEffectiveFrame,supportPolygon} from '@human3d/motion-core';
 import {CaptureMutex,onionTimes,SHEET_MAX_TILES,sheetTimes} from './engine';
 
@@ -419,10 +418,19 @@ describe('undo and redo',()=>{
 });
 describe('motion library',()=>{
  const memStorage=():StorageLike&{map:Map<string,string>}=>{const map=new Map<string,string>();return {map,get length(){return map.size;},key:i=>[...map.keys()][i]??null,removeItem:k=>{map.delete(k);},getItem:k=>map.get(k)??null,setItem:(k,v)=>{map.set(k,v);}}};
- const lib=(s?:StorageLike)=>new MotionLibrary(rig.rest,s).load();
- it('seeds with the example forehand on first run',()=>{
-  const l=lib(memStorage());
-  expect(l.docs.length).toBe(1);expect(l.active().id).toBe('forehand-workshop');
+ const lib=(s?:StorageLike)=>{
+  // Most tests use the historical example as a representative multi-key doc.
+  // Seed it explicitly so production's first-run blank workspace stays covered separately.
+  if(s&&s.getItem(LIBRARY_KEY)===null){
+   const doc=defaultDocument(rig.rest);
+   s.setItem(LIBRARY_KEY,JSON.stringify({schemaVersion:2,activeId:doc.id,docs:[doc],quarantine:[]}));
+  }
+  return new MotionLibrary(rig.rest,s).load();
+ };
+ it('starts from a neutral blank motion rather than a bundled preset',()=>{
+  const l=new MotionLibrary(rig.rest,memStorage()).load();
+  expect(l.docs).toHaveLength(1);expect(l.active().id).not.toBe('forehand-workshop');
+  expect(l.active().name).toBe('新动作');expect(l.active().keys).toHaveLength(2);
  });
  it('checkpoints before waiting for the lock, recovers a closed page into quarantine, and cleans only committed drafts',async()=>{
   const store=memStorage();lib(store);
@@ -630,48 +638,6 @@ describe('motion library',()=>{
   copy.keys[0].pose.lean=44;copy.keys[0].constraints.grip=false;
   expect(src.keys[0].pose.lean).not.toBe(44);
  });
- it('creates independent editable copies of every bundled trajectory and preserves solved poses',()=>{
-  const store=memStorage(),l=lib(store),previous=serializeDoc(l.active());
-  expect(WORKSHOP_PRESETS.map(p=>p.id)).toEqual(MOTION_FILES.filter(p=>p.kind==='workshop-motion').map(p=>p.id));
-  expect(WORKSHOP_PRESETS.some(p=>p.id==='forehand')).toBe(true);
-  for(const preset of WORKSHOP_PRESETS){
-   const original=JSON.stringify(preset),source=preset.document!;
-   const copy=l.createFromPreset(preset.id),again=l.createFromPreset(preset.id,'  我的动作  ');
-   expect(copy.id).not.toBe(source.id);expect(again.id).not.toBe(copy.id);
-   expect(copy.name).toBe(`${preset.name} 副本`);expect(again.name).toBe('我的动作');
-   expect(l.active().id).toBe(again.id);
-   expect({...copy,id:source.id,name:source.name,keys:copy.keys.map((k,i)=>({...k,id:source.keys[i].id}))}).toEqual(source);
-   expect(copy.keys.every(k=>!source.keys.some(s=>s.id===k.id)&&!again.keys.some(a=>a.id===k.id))).toBe(true);
-   for(const time of [0,source.duration/2,source.duration]){
-    solveEffectiveFrame(rig,frameAt(source,time,origin()));
-    const expected=[...rig.bones.keys()].map(n=>rig.point(n).clone());
-    solveEffectiveFrame(rig,frameAt(copy,time,origin()));
-    [...rig.bones.keys()].forEach((n,i)=>expect(rig.point(n).distanceTo(expected[i])).toBeLessThan(1e-10));
-   }
-   copy.keys[0].pose.handR.target.x+=.05;copy.keys[0].constraints.grip=!copy.keys[0].constraints.grip;
-   expect(JSON.stringify(preset)).toBe(original);
-   expect(again.keys[0].pose).toEqual(source.keys[0].pose);
-  }
-  l.save();const restored=new MotionLibrary(rig.rest,store).load();
-  expect(restored.quarantine).toEqual([]);expect(restored.docs.length).toBe(l.docs.length);
-  restored.docs.forEach((doc,i)=>{
-   const saved=l.docs[i];
-   expect({...doc,keys:[]}).toEqual({...saved,keys:[]});
-   doc.keys.forEach((k,j)=>{
-    expect({...k,pose:undefined}).toEqual({...saved.keys[j],pose:undefined});
-    const expected=flattenPose(saved.keys[j].pose);
-    flattenPose(k.pose).forEach((v,n)=>expect(v).toBeCloseTo(expected[n],12));
-   });
-  });
-  expect(restored.activeId).toBe(l.activeId);expect(serializeDoc(l.docs[0])).toBe(previous);
- });
- it('rejects unsupported or unknown presets without changing the library or storage',()=>{
-  const store=memStorage(),l=lib(store),before=store.map.get(LIBRARY_KEY);
-  for(const id of [...MOTION_FILES.filter(p=>p.kind!=='workshop-motion').map(p=>p.id),'missing']){
-   expect(()=>l.createFromPreset(id)).toThrow('没有可编辑的工作台轨迹');
-   expect(store.map.get(LIBRARY_KEY)).toBe(before);expect(l.docs.length).toBe(1);
-  }
- });
  it('selects, removes and always keeps at least one motion',()=>{
   const l=lib(memStorage());
   const a=l.create('A'),b=l.create('B');
@@ -708,7 +674,7 @@ describe('motion library',()=>{
   const store=memStorage();store.map.set(LIBRARY_KEY,'{corrupted');
   expect(lib(store).docs.length).toBe(1);
   store.map.set(LIBRARY_KEY,JSON.stringify({schemaVersion:1,activeId:'x',docs:[{bogus:true},defaultDocument(rig.rest)]}));
-  const l=lib(store);expect(l.docs.length).toBe(1);expect(l.active().id).toBe('forehand-workshop');
+  const l=lib(store);expect(l.docs.length).toBe(1);expect(l.active().id).not.toBe('forehand-workshop');
  });
  it('regenerates clashing ids on import',()=>{
   const l=lib(memStorage()),doc=parseDoc(serializeDoc(l.active()));

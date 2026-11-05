@@ -13,12 +13,12 @@ import type {PelvisSchedule} from '@human3d/motion-core';
 import {ankleYForLift,footGeometry,type FootGeometry,type Side} from '@human3d/motion-core';
 import {bindSceneBackground} from '../theme/scene-background';
 import {applyHeroicShape} from '../theme/shape-preset';
-import {SkinSwap,type SkinId} from '../theme/skin-swap';
-import {loadAnatomyAtlas} from '../theme/anatomy-skin';
 import {AnatomySelection} from '../theme/anatomy-selection';
 import {bevelBadgeState,BEVEL_BADGE_SCALE} from './bevel-badges';
+import {ChibiAvatarBridge,type AvatarMode} from '../chibi-avatar';
 
 export interface WorkshopFrame{time:number;duration:number;playing:boolean;label:string;analysis?:Analysis}
+export type {AvatarMode} from '../chibi-avatar';
 export interface WorkshopOptions{handles:boolean;trajectories:boolean;balance:boolean;onion:boolean;onionCount:number;onionMode:'keys'|'step';onionStep:number;
  /** Draw the handle's eight bevel numbers (1–8) as labels around the grip.
   * Display-only: authored bevel and tilt (doc.gripBevel/gripTilt) turn the racket,
@@ -138,9 +138,9 @@ interface Handle{kind:DragKind;side?:'L'|'R';mesh:Mesh;keyId?:string;passive?:bo
  * effector is a draggable task-space handle resolved by the kinematic solver. */
 export class WorkshopEngine{
   scene=new Scene();camera=new PerspectiveCamera(35,1,.01,120);renderer:WebGLRenderer;controls:OrbitControls;
-  model?:Group;rig?:HumanRig;racket?:Group;ready=false;disposed=false;
+  model?:Group;avatar?:Group;avatarBridge?:ChibiAvatarBridge;rig?:HumanRig;racket?:Group;avatarRacket?:Group;ready=false;disposed=false;
   anatomy?:AnatomySelection;
-  private skinSwap?:SkinSwap;
+  private avatarMode:AvatarMode='chibi';
   playing=true;speed=1;time=0;view:ViewId='threeQuarter';
   /** Review mode (false) hides handles and refuses every pointer pick, so a
    * camera gesture can never write the document (issue #23 PR-A). */
@@ -236,14 +236,21 @@ export class WorkshopEngine{
   }
   async load(){
     try{
-      const [gltf,info,atlas]=await Promise.all([new GLTFLoader().loadAsync(this.platform.assetUrl('/models/human.glb')),this.platform.fetchAsset('/models/rig.json').then(r=>{if(!r.ok)throw new Error('人体骨架加载失败');return r.json() as Promise<RigInfo>}),loadAnatomyAtlas(this.platform)]);
-      if(this.disposed){atlas.dispose();gltf.scene.traverse(o=>{if(o instanceof Mesh)o.geometry.dispose()});return;}
+      const [gltf,chibi,info]=await Promise.all([new GLTFLoader().loadAsync(this.platform.assetUrl('/models/human.glb')),new GLTFLoader().loadAsync(this.platform.assetUrl('/models/chibi-sports-avatar.glb')),this.platform.fetchAsset('/models/rig.json').then(r=>{if(!r.ok)throw new Error('人体骨架加载失败');return r.json() as Promise<RigInfo>})]);
+      if(this.disposed){for(const asset of [gltf.scene,chibi.scene])asset.traverse(o=>{if(o instanceof Mesh)o.geometry.dispose()});return;}
       this.model=gltf.scene;this.scene.add(this.model);this.rig=new HumanRig(this.model,info);applyHeroicShape(this.model);
-      this.anatomy=new AnatomySelection(this.host,this.renderer.domElement,this.camera,atlas,event=>this.capturing||!this.ready||!!this.drag||!!this.pick(event));
-      this.model.traverse(o=>{if(o instanceof SkinnedMesh){o.castShadow=true;o.receiveShadow=true;o.frustumCulled=false;this.anatomy!.add(o);}});
-      this.skinSwap=new SkinSwap(this.model,this.platform);await this.skinSwap.set(this.skin);if(this.disposed)return;
+      // Keep the old solver rig authoritative for documents and gestures; the
+      // Tripo GLB is the visible, world-rotation-retargeted character.
+      this.model.visible=this.avatarMode==='original';
+      this.avatar=chibi.scene;
+      const head=this.avatar.getObjectByName('Head');if(head)head.name='head';
+      const leftEye=this.avatar.getObjectByName('L_Eye');if(leftEye)leftEye.name='eye_L';
+      const rightEye=this.avatar.getObjectByName('R_Eye');if(rightEye)rightEye.name='eye_R';
+      this.avatar.visible=this.avatarMode==='chibi';this.scene.add(this.avatar);this.avatarBridge=new ChibiAvatarBridge(this.rig,this.avatar);
+      this.avatar.traverse(o=>{if(o instanceof SkinnedMesh){o.castShadow=true;o.receiveShadow=true;o.frustumCulled=false;}});
       this.racket=attachProp(this.rig,'racket',this.getDoc().gripSide==='L'?'L':'R',this.getDoc().gripBevel,this.getDoc().gripTilt);
       this.racketSide=this.getDoc().gripSide==='L'?'L':'R';this.racketBevel=this.getDoc().gripBevel;this.racketGripTilt=this.getDoc().gripTilt;this.racket.visible=false;
+      this.avatarRacket=this.racket.clone(true) as Group;this.avatarRacket.visible=false;
       this.makeBevelLabels(this.racketSide);
       this.footGeo={L:footGeometry(this.rig.rest,'L'),R:footGeometry(this.rig.rest,'R')};
       this.makeHandles();this.makeMarkers();this.makeOnion();
@@ -298,13 +305,13 @@ export class WorkshopEngine{
   private makeBevelLabels(side:'L'|'R'){
     for(const s of this.bevelLabels){s.parent?.remove(s);(s.material.map as CanvasTexture|null)?.dispose();s.material.dispose();}
     this.bevelLabels=[];this.bevelSide=side;
-    if(!this.racket)return;
+    const racket=this.avatarRacket??this.racket;if(!racket)return;
     for(let bevel=1;bevel<=RACKET_BEVELS;bevel++){
       const sprite=new Sprite(new SpriteMaterial({map:bevelTexture(bevel),depthTest:false,transparent:true}));
       sprite.position.copy(bevelAnchor(side,bevel));
       sprite.scale.setScalar(BEVEL_BADGE_SCALE);sprite.renderOrder=19; // below handles (20), above the prop
       sprite.visible=false;sprite.userData.bevel=bevel;
-      this.racket.add(sprite);this.bevelLabels.push(sprite);
+      racket.add(sprite);this.bevelLabels.push(sprite);
     }
   }
   /** Show only the facets whose badge faces the camera. All eight at once
@@ -313,11 +320,11 @@ export class WorkshopEngine{
    * them. The selected bevel keeps its badge regardless — it is the one the
    * author is picking — and is emphasised by scale so it reads at a glance. */
   private updateBevelLabels(){
-    if(!this.bevelLabels.length||!this.racket)return;
+    const racket=this.avatarRacket??this.racket;if(!this.bevelLabels.length||!racket)return;
     const cam=this.camera.getWorldPosition(new Vector3());
-    const grip=this.racket.getWorldPosition(new Vector3());
+    const grip=racket.getWorldPosition(new Vector3());
     const toCam=cam.sub(grip).normalize();
-    const rq=this.racket.getWorldQuaternion(new Quaternion());
+    const rq=racket.getWorldQuaternion(new Quaternion());
     const selected=this.racketBevel??RACKET_BEVEL_DEFAULT;
     for(const s of this.bevelLabels){
       const bevel=s.userData.bevel as number;
@@ -415,14 +422,15 @@ export class WorkshopEngine{
     // run when a captured pointer leaves the viewport and its camera ray no
     // longer intersects the original drag plane.
     const pos=hit?hit.add(this.drag.offset):this.drag.offset.clone(),k=this.drag.key.pose;
+    const editPos=this.dragPointToRig(this.drag.h,pos);
     switch(this.drag.h.kind){
-      case 'root':{const rest=this.rig.rest.get('root')!;k.root={x:pos.x-rest.x,y:pos.y-rest.y,z:pos.z-rest.z};break;}
-      case 'hand':{(this.drag.h.side==='L'?k.handL:k.handR).target={x:pos.x,y:pos.y,z:pos.z};break;}
+      case 'root':{const rest=this.rig.rest.get('root')!;k.root={x:editPos.x-rest.x,y:editPos.y-rest.y,z:editPos.z-rest.z};break;}
+      case 'hand':{(this.drag.h.side==='L'?k.handL:k.handR).target={x:editPos.x,y:editPos.y,z:editPos.z};break;}
       case 'foot':{const side=this.drag.h.side!;const f=side==='L'?k.footL:k.footR;
         const lock=this.drag.key.constraints[side==='L'?'plantL':'plantR'];
-        f.target={x:pos.x,y:lock?f.target.y:this.minAnkleY(side,f,pos.y),z:pos.z};break;}
-      case 'swing':{const side=this.drag.h.side!;const f=side==='L'?k.footL:k.footR;f.target={x:pos.x,y:this.minAnkleY(side,f,pos.y),z:pos.z};break;}
-      case 'poleArm':{(this.drag.h.side==='L'?k.handL:k.handR).pole={x:pos.x,y:pos.y,z:pos.z};break;}
+        f.target={x:editPos.x,y:lock?f.target.y:this.minAnkleY(side,f,editPos.y),z:editPos.z};break;}
+      case 'swing':{const side=this.drag.h.side!;const f=side==='L'?k.footL:k.footR;f.target={x:editPos.x,y:this.minAnkleY(side,f,editPos.y),z:editPos.z};break;}
+      case 'poleArm':{(this.drag.h.side==='L'?k.handL:k.handR).pole={x:editPos.x,y:editPos.y,z:editPos.z};break;}
       case 'knee':{
         const drag=this.drag,side=drag.h.side!;
         if(!drag.baseDoc||drag.startClientY===undefined||drag.kneeFlexStart===undefined)break;
@@ -465,7 +473,7 @@ export class WorkshopEngine{
       case 'head':{
         const parent=this.rig.bone('head').parent;
         if(!parent)break;
-        const direction=pos.sub(this.rig.point('head')).applyQuaternion(parent.getWorldQuaternion(new Quaternion()).invert());
+        const direction=editPos.sub(this.rig.point('head')).applyQuaternion(parent.getWorldQuaternion(new Quaternion()).invert());
         if(direction.lengthSq()<1e-10)break;
         const yaw=Math.atan2(direction.x,direction.z)*180/Math.PI;
         const pitch=Math.atan2(-direction.y,Math.hypot(direction.x,direction.z))*180/Math.PI;
@@ -481,7 +489,7 @@ export class WorkshopEngine{
       case 'tip':case 'contact':{
         if(!this.racket)break;this.solveCurrent();
         const tip=this.racket.localToWorld(RACKET_TIP_LOCAL.clone());
-        const d=pos.clone().sub(tip),h=this.getDoc().gripSide==='L'?k.handL:k.handR;
+        const d=editPos.clone().sub(tip),h=this.getDoc().gripSide==='L'?k.handL:k.handR;
         const t=h.target;h.target={x:t.x+d.x,y:t.y+d.y,z:t.z+d.z};break;}
     }
     if(!docChanged)return;
@@ -503,6 +511,21 @@ export class WorkshopEngine{
       this.docDirty=true;this.onDocChanged?.();this.onEditEnd?.();
     }
   };
+  private dragPointToRig(handle:Handle,point:Vector3){
+    const bridge=this.avatarMode==='chibi'?this.avatarBridge:undefined,side=handle.side;
+    if(!bridge)return point;
+    switch(handle.kind){
+      case 'root':return bridge.toSourcePoint('root','root',point);
+      case 'hand':case 'poleArm':return bridge.toSourcePoint(`wrist_${side}`,`wrist_${side}`,point);
+      case 'foot':case 'swing':return bridge.toSourcePoint(`foot_${side}`,`foot_${side}`,point);
+      case 'head':return bridge.toSourcePoint('head','head',point);
+      case 'tip':case 'contact':{
+        if(!this.racket||!this.avatarRacket)return point;
+        return this.racket.localToWorld(RACKET_TIP_LOCAL.clone()).add(point.sub(this.avatarRacket.localToWorld(RACKET_TIP_LOCAL.clone())));
+      }
+      default:return point;
+    }
+  }
   /* ---------- pose evaluation ---------- */
   /** Pelvis hand-frame origin: the rest root, the same origin the solver uses.
    * Public so callers sampling poses (e.g. auto-key) use the identical frame. */
@@ -552,6 +575,8 @@ export class WorkshopEngine{
       this.racketBevel=f.gripBevel;
       this.racketGripTilt=f.gripTilt;
     }
+    this.avatarBridge?.sync();
+    if(this.racket&&this.avatarRacket)this.avatarBridge?.syncProp(this.racket,this.avatarRacket,side);
   }
   /** The pelvis shift the viewport solves time `t` with (undefined = argmin). */
   pelvisShiftAt(t:number){
@@ -570,7 +595,8 @@ export class WorkshopEngine{
     const f=this.frameAtTime(doc,t);
     this.solveFrame(f,t);
     this.latestFrame=f;
-    if(this.racket)this.racket.visible=f.gripAmount>0;
+    if(this.racket)this.racket.visible=this.avatarMode==='original'&&f.gripAmount>0;
+    if(this.avatarRacket)this.avatarRacket.visible=this.avatarMode==='chibi'&&f.gripAmount>0;
     // A number floating over the grip where no racket is mounted would name a
     // facet the user cannot see, so the labels follow the prop, not the option.
     const showBevels=this.options.bevels&&f.gripAmount>0&&!this.capturing;
@@ -580,17 +606,20 @@ export class WorkshopEngine{
   }
   private updateHandles(f:EffectiveFrame){
     if(!this.rig)return;
-    const p=f.pose,doc=this.getDoc();
+    const p=f.pose,doc=this.getDoc(),bridge=this.avatarMode==='chibi'?this.avatarBridge:undefined;
     const put=(kind:DragKind,side:'L'|'R'|undefined,where:Vector3,visible=true)=>{
       const h=this.handles.find(x=>x.kind===kind&&x.side===side);if(!h)return;h.mesh.visible=visible&&this.options.handles&&this.editable;h.mesh.position.copy(where);
     };
-    put('root',undefined,this.rig.point('root'));
-    put('hand','L',this.rig.point('wrist_L'));put('hand','R',this.rig.point('wrist_R'));
-    put('foot','L',this.rig.point('foot_L'));put('foot','R',this.rig.point('foot_R'));
-    put('poleArm','L',toV(p.handL.pole));put('poleArm','R',toV(p.handR.pole));
-    put('knee','L',this.rig.point('lowerleg01_L'));put('knee','R',this.rig.point('lowerleg01_R'));
-    put('head',undefined,this.rig.bone('head').localToWorld(new Vector3(0,0,.22)),this.options.headHandle);
-    put('tip',undefined,this.racket?this.racket.localToWorld(RACKET_TIP_LOCAL.clone()):new Vector3(),f.gripAmount>0);
+    put('root',undefined,bridge?.point('root')??this.rig.point('root'));
+    put('hand','L',bridge?.point('wrist_L')??this.rig.point('wrist_L'));put('hand','R',bridge?.point('wrist_R')??this.rig.point('wrist_R'));
+    put('foot','L',bridge?.point('foot_L')??this.rig.point('foot_L'));put('foot','R',bridge?.point('foot_R')??this.rig.point('foot_R'));
+    const translated=(sourceName:string,targetName:string,value:Vector3)=>{const visual=bridge?.point(targetName);return visual?visual.add(value.clone().sub(this.rig!.point(sourceName))):value;};
+    const pole=(side:'L'|'R',value:Vector3)=>translated(`wrist_${side}`,`wrist_${side}`,value);
+    put('poleArm','L',pole('L',toV(p.handL.pole)));put('poleArm','R',pole('R',toV(p.handR.pole)));
+    put('knee','L',bridge?.point('lowerleg01_L')??this.rig.point('lowerleg01_L'));put('knee','R',bridge?.point('lowerleg01_R')??this.rig.point('lowerleg01_R'));
+    put('head',undefined,bridge?.headHandle()??this.rig.bone('head').localToWorld(new Vector3(0,0,.22)),this.options.headHandle);
+    const shownRacket=this.avatarMode==='chibi'?this.avatarRacket:this.racket;
+    put('tip',undefined,shownRacket?shownRacket.localToWorld(RACKET_TIP_LOCAL.clone()):new Vector3(),f.gripAmount>0);
     // Swing waypoint split: during a release interval the visible foot sits ON
     // the path contact→waypoint→landing, so the bone handle becomes display
     // only and the editable control is a separate handle bound to the release
@@ -602,7 +631,7 @@ export class WorkshopEngine{
       const release=isReleaseKey(doc,i,side);
       const bone=this.handles.find(x=>x.kind==='foot'&&x.side===side),sw=this.handles.find(x=>x.kind==='swing'&&x.side===side);
       if(bone)bone.passive=release;
-      if(sw){sw.mesh.visible=release&&this.options.handles&&this.editable;if(release){sw.keyId=keys[i].id;sw.mesh.position.copy(toV(keys[i].pose[foot].target));}}
+      if(sw){sw.mesh.visible=release&&this.options.handles&&this.editable;if(release){sw.keyId=keys[i].id;sw.mesh.position.copy(translated(`foot_${side}`,`foot_${side}`,toV(keys[i].pose[foot].target)));}}
     }
   }
   private rebuildAux(){
@@ -693,16 +722,16 @@ export class WorkshopEngine{
     if(a.support.length>=3){this.supportLoop.geometry.dispose();this.supportLoop.geometry=new BufferGeometry().setFromPoints(a.support.map(p=>new Vector3(p.x,.002,p.z)));}
   }
   /* ---------- transport / camera ---------- */
-  seek(t:number){const d=this.getDoc().duration;this.time=Math.max(0,Math.min(d,t));this.solveCurrent();this.skinSwap?.resetHair();this.notify(true);}
+  seek(t:number){const d=this.getDoc().duration;this.time=Math.max(0,Math.min(d,t));this.solveCurrent();this.notify(true);}
   beginInteractiveEdit(){this.deferPelvisSchedule=true;}
   endInteractiveEdit(){if(!this.deferPelvisSchedule)return;this.deferPelvisSchedule=false;this.solveCurrent();}
   setPlaying(v:boolean){this.playing=v;this.notify(true);}
   setSpeed(v:number){this.speed=v;}
-  /* Display flags only — NOT doc content, so deliberately no docVer bump:
-   * the compiled snapshot stays valid (aux overlays rebuild on docDirty). */
-  skin:SkinId='default';
-  async setSkin(s:SkinId){
-    if(this.skinSwap){await this.skinSwap.set(s);this.skin=this.skinSwap.skin;}else this.skin=s;
+  setAvatarMode(mode:AvatarMode){
+    this.avatarMode=mode;
+    if(this.model)this.model.visible=mode==='original';
+    if(this.avatar)this.avatar.visible=mode==='chibi';
+    this.solveCurrent();
     if(this.ready&&this.view!=='free')this.setView(this.view);
   }
   setOptions(patch:Partial<WorkshopOptions>){Object.assign(this.options,patch);this.docDirty=true;}
@@ -712,9 +741,9 @@ export class WorkshopEngine{
    * docVer for the compiled snapshot. */
   markDirty(){this.docDirty=true;this.docVer++;}
   setView(view:ViewId){
-    this.view=view;const root=this.rig?.point('root')??new Vector3(0,.94,0),target=root.clone();target.y=target.y*.92+(this.skin==='ssj'?.08:0);
+    this.view=view;const root=(this.avatarMode==='chibi'?this.avatarBridge?.point('root'):undefined)??this.rig?.point('root')??new Vector3(0,.94,0),target=root.clone();target.y*=.92;
     if(view==='free'){const shift=target.clone().sub(this.controls.target);this.camera.position.add(shift);this.controls.target.copy(target);this.controls.update();return;}
-    const distance=Math.max(this.skin==='ssj'?3.8:3.4,2.0/Math.max(.4,this.camera.aspect));
+    const distance=Math.max(3.4,2.0/Math.max(.4,this.camera.aspect));
     const a={front:0,side:Math.PI/2,back:Math.PI,threeQuarter:-Math.PI/4,hand:0,free:0}[view];
     this.camera.position.copy(target).add(new Vector3(Math.sin(a)*distance,.18,Math.cos(a)*distance));
     this.controls.target.copy(target);this.camera.lookAt(target);this.controls.update();
@@ -750,7 +779,7 @@ export class WorkshopEngine{
   private async renderStill(t:number,opts:CaptureOptions):Promise<Blob>{
     const saved=this.beginCapture(opts);
     try{
-      this.seek(t);this.solveCurrent();this.skinSwap?.settleHair();
+      this.seek(t);this.solveCurrent();
       this.setView(opts.view??CAPTURE_VIEW);
       this.renderer.render(this.scene,this.camera);
       const blob=await new Promise<Blob|null>(res=>this.renderer.domElement.toBlob(res,'image/png'));
@@ -860,7 +889,7 @@ export class WorkshopEngine{
     this.camera.position.copy(saved.cam);this.controls.target.copy(saved.target);this.controls.update();
     this.time=Math.max(0,Math.min(this.getDoc().duration,saved.time));
     this.playing=saved.playing;
-    this.solveCurrent();this.skinSwap?.resetHair();this.notify(true);
+    this.solveCurrent();this.notify(true);
   }
   private animate=()=>{
     if(this.disposed)return;this.raf=requestAnimationFrame(this.animate);
@@ -882,7 +911,6 @@ export class WorkshopEngine{
       if(a)this.updateBalance(a);
       this.lastNotify+=dt;if(this.lastNotify>.07){this.lastNotify=0;this.notify(false,a);}
     }
-    if(!this.capturing)this.skinSwap?.update(dt);
     this.controls.update();this.anatomy?.update(dt);this.renderer.render(this.scene,this.camera);
   };
   private notify(force:boolean,a?:Analysis){
@@ -891,7 +919,7 @@ export class WorkshopEngine{
     if(force||a)this.onFrame?.({time:this.time,duration:doc.duration,playing:this.playing,label,analysis:a});
   }
   dispose(){
-    this.disposed=true;this.skinSwap?.dispose();this.anatomy?.dispose();this.unbindTheme?.();cancelAnimationFrame(this.raf);this.resizeObserver.disconnect();
+    this.disposed=true;this.anatomy?.dispose();this.unbindTheme?.();cancelAnimationFrame(this.raf);this.resizeObserver.disconnect();
     // Bevel badges own CanvasTextures; material.dispose() below does NOT free
     // a material's map, so these eight would leak GPU memory every remount.
     for(const s of this.bevelLabels){(s.material.map as CanvasTexture|null)?.dispose();s.material.dispose();}

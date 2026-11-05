@@ -8,7 +8,7 @@ import {verifyWebIdentity} from './lib/worktree-check.mjs';
 // Knee-angle handle drags, double-support balance drags, the per-key racket
 // toggle, and removal of raw knee-pole editing through the REAL workshop UI.
 // Everything is driven by visible controls and real pointer events — 新建,
-// preset selection, the constraint checkboxes, quick-action buttons, undo —
+// importing the forehand fixture, constraint checkboxes, quick-action buttons, undo —
 // never by calling engine setters, so the shipped write path is what gets
 // tested. Reads of window.__WS__ only observe scene/rig state after a control
 // drove it.
@@ -116,49 +116,7 @@ try{
  check('膝极点手柄和膝部 XYZ 输入已移除',!(await page.evaluate(()=>window.__WS__.handles.some(h=>h.kind==='poleLeg')))&&
   await page.getByTestId('limb-L-leg-pole-x').count()===0&&await page.getByTestId('limb-L-leg-pole-y').count()===0&&await page.getByTestId('limb-L-leg-pole-z').count()===0);
 
- // ---- 2. a planted knee uses the angle slider and the same one-axis drag path
- const sliderBase=await keyState();
- await page.getByTestId('adjustment-tab-semantic').click();
- await page.getByTestId('semantic-part-knee').click();
- await page.getByTestId('semantic-side-L').click();
- const kneeSlider=page.getByTestId('semantic-knee-angle');
- await page.waitForTimeout(100);
- const startingSliderAngle=Math.round(Number(await kneeSlider.inputValue()));
- const requestedBendTarget=Math.min(120,Math.max(100,startingSliderAngle+50));
- const sliderBox=await kneeSlider.boundingBox();
- const thumbWidth=await kneeSlider.evaluate(el=>{const value=Number.parseFloat(getComputedStyle(el,'::-webkit-slider-thumb').width);return Number.isFinite(value)?value:16;});
- if(!sliderBox)throw new Error('knee angle slider is not visible');
- await page.mouse.click(sliderBox.x+thumbWidth/2+(sliderBox.width-thumbWidth)*requestedBendTarget/135,sliderBox.y+sliderBox.height/2);
- await page.waitForTimeout(150);
- const bendTarget=Math.round(Number(await kneeSlider.inputValue()));
- const bent0=await keyState();
- check('支撑脚锁定时语义滑块可增加膝屈曲',bent0.kneeFlex>=bendTarget-1&&bent0.kneeFlex>startingSliderAngle+10,
-  `${startingSliderAngle}°→${bent0.kneeFlex.toFixed(1)}°（目标 ${bendTarget}°）`);
- const scheduleFitEvidence=await page.evaluate(async({documentUrl,solverUrl})=>{
-  const e=window.__WS__,d=e.getDoc(),key=[...d.keys].sort((a,b)=>a.time-b.time)[1];
-  const scheduled=e.pelvisShiftAt(key.time),{compileMotion,frameAtCompiled}=await import(documentUrl),{solveEffectiveFrame}=await import(solverUrl);
-  const natural=solveEffectiveFrame(e.rig,frameAtCompiled(compileMotion(d,e.restRoot()),key.time)).pelvisShift;
-  e.setPlaying(false);e.seek(key.time);e.solveCurrent();
-  return {time:key.time,scheduled,natural,delta:scheduled===undefined?0:Math.abs(scheduled-natural)};
- },{documentUrl:coreModule('document.ts'),solverUrl:coreModule('solver.ts')});
- check('支撑膝角验收使用非透传骨盆排程',scheduleFitEvidence.scheduled!==undefined,JSON.stringify(scheduleFitEvidence));
- check('该中间帧排程修正与自然修正相差超过 1mm',scheduleFitEvidence.delta>.001,JSON.stringify(scheduleFitEvidence));
- check('语义调膝保持脚目标与朝向',JSON.stringify(bent0.keys[1].target)===JSON.stringify(sliderBase.keys[1].target)&&
-   bent0.keys[1].yaw===sliderBase.keys[1].yaw&&bent0.keys[1].pitch===sliderBase.keys[1].pitch);
- check('语义调膝保持脚踝世界位置',Math.hypot(bent0.ankle[0]-sliderBase.ankle[0],bent0.ankle[1]-sliderBase.ankle[1],bent0.ankle[2]-sliderBase.ankle[2])<.001);
- await page.getByTestId('semantic-commit').click();
- await page.waitForTimeout(150);
- const keyCount=await page.locator('.ws-key').count();
- // Keep one leg planted so this deliberately exercises the angle-only knee
- // gesture. The fresh document starts in bilateral support, which correctly
- // routes knee drags to the separate balance gesture instead.
- for(let i=0;i<keyCount;i++){
-  await page.locator('.ws-key').nth(i).click();
-  await page.getByTestId('adjustment-tab-right').click();
-  const rightBox=page.locator('.ws-check').filter({hasText:'右脚支撑锁定'}).locator('input');
-  if(await rightBox.isChecked())await rightBox.uncheck();
- }
- await page.evaluate(()=>{const e=window.__WS__;e.setPlaying(false);e.seek(.1);e.solveCurrent();});
+ // ---- 2. a planted knee uses the canvas handle's one-axis drag path
  const planted0=await keyState();
  check('支撑角度拖动场景只有左脚锁定',planted0.plants.every(p=>p.L&&!p.R),JSON.stringify(planted0.plants));
  const bentSpot=await kneeSpot();
@@ -226,18 +184,14 @@ try{
  check('撤销不吞并此前的膝盖拖拽写入',JSON.stringify(st.keys[0].target)===JSON.stringify(free1.keys[0].target));
 
  // ---- 5. finish-frame bilateral knee drags lower the body and rebalance
- // from the bundled forehand through the visible preset-copy flow. The test
+ // from an imported forehand file. The test
  // uses the same solved rig to identify which knee is forward/back, then
  // drags those visible knee handles with actual pointer events.
- await openFold('[data-fold="preset"]');
- await page.getByLabel('初始动作预设').selectOption('forehand');
- await page.getByLabel('新动作名称').fill('QA 收拍膝盖联动');
- await page.locator('.ws-preset-start').click();
- await page.waitForFunction(()=>window.__WS__?.getDoc().name==='QA 收拍膝盖联动',null,{timeout:10000});
+ await page.locator('.ws-left input[type="file"]').first().setInputFiles(path.resolve(repoRoot,'assets/motions/forehand.json'));
+ await page.waitForFunction(()=>window.__WS__?.getDoc().keys.some(k=>Math.abs(k.time-5.2)<.001),null,{timeout:10000});
  const finishIndex=await page.evaluate(()=>[...window.__WS__.getDoc().keys].sort((a,b)=>a.time-b.time).findIndex(k=>Math.abs(k.time-5.2)<.001));
- if(finishIndex<0)throw new Error('forehand preset copy is missing its 5.2s finish frame');
+ if(finishIndex<0)throw new Error('imported forehand fixture is missing its 5.2s finish frame');
  await page.locator('.ws-key').nth(finishIndex).click();
- await page.getByTestId('adjustment-tab-semantic').click();
  const balanceState=()=>page.evaluate(async({semanticUrl,documentUrl,solverUrl})=>{
   const [{kneeBalanceSides,measureSemantic},{compileMotion,frameAtCompiled},{analyzePose}]=await Promise.all([
    import(semanticUrl),import(documentUrl),import(solverUrl)]);

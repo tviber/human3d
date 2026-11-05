@@ -5,13 +5,11 @@ import path from 'node:path';
 import {resolveOutputDir,assertTrackedWriteAllowed,atomicWriteFile,ensureOutputDir} from './lib/qa-output.mjs';
 import {verifyWebIdentity} from './lib/worktree-check.mjs';
 
-// Issue #23 acceptance through the real UI: phone review gestures never write
-// the document, key stepping / timeline / camera presets work by touch, the
-// semantic panel delivers measured changes with one undo step and survives
-// reload, arm/wrist range controls write through on both sides, clamps are
-// reported and cancelled, review feedback exports, and the landscape / tablet /
-// desktop layouts keep working. UI edits use real controls; engine debug access
-// is read-only. Playwright mobile emulation is NOT a real-device result (see docs/QA.md).
+// Phone acceptance through the real UI: review gestures never write the
+// document, camera and timeline controls work by touch, joint rotation sliders
+// write through both sides, the adjustment drawer survives reload, and compact
+// layouts fit the viewport. Engine debug access is read-only. Playwright mobile
+// emulation is NOT a real-device result (see docs/QA.md).
 //   node scripts/workshop-mobile-qa.mjs [--out-dir <dir>]
 const repoRoot=process.cwd();
 const output=resolveOutputDir('workshop-mobile',process.argv.slice(2),repoRoot,process.env);
@@ -36,7 +34,7 @@ const elbowAngle=(page,side)=>page.evaluate(s=>{
  const r=window.__WS__.rig,a=r.point(`upperarm01_${s}`),b=r.point(`lowerarm01_${s}`),c=r.point(`wrist_${s}`);
  return 180-a.clone().sub(b).angleTo(c.clone().sub(b))*180/Math.PI;
 },side);
-// Same comparison as workshop-preset-qa: history/rehydrate re-normalise hand
+// Same comparison as workshop-authoring-qa: history/rehydrate re-normalise hand
 // frames, which can move a direction by one ULP; every other field is exact.
 function sameDoc(actual,expected,label){
  const a=structuredClone(actual);
@@ -93,7 +91,7 @@ try{
  assert.equal((await read(page)).playing,true);
  await page.getByRole('button',{name:'暂停',exact:true}).tap();
  assert.equal((await read(page)).playing,false);
- const keyBox=await page.locator('.ws-key').nth(2).boundingBox();
+ const keyBox=await page.locator('.ws-key').nth(1).boundingBox();
  const kc=[keyBox.x+keyBox.width/2,keyBox.y+keyBox.height/2];
  await touch('touchStart',[kc]);for(let i=1;i<=6;i++)await touch('touchMove',[[kc[0]+i*6,kc[1]]]);await touch('touchEnd',[]);
  assert.equal((await read(page)).storage,before.storage,'review timeline drag retimed a key');
@@ -110,90 +108,34 @@ try{
  checks.quickToggles=true;
  await page.screenshot({path:outputFile('phone-review.png')});
 
- // Semantic edit on the selected key through the real buttons.
+ // Joint rotation controls through the mobile adjustment drawer.
+ await page.locator('.ws-key').first().tap();
  await page.getByTestId('sheet-right').tap();
  await page.getByTestId('unlock-edit').tap();
  assert.equal(await page.locator('.ws-shell').getAttribute('data-mode'),'edit');
  const base=await read(page),keyIndex=base.doc.keys.findIndex(k=>Math.abs(k.time-base.time)<1e-9);
  assert(keyIndex>=0,'playhead is not on the selected key');
+ assert.equal(await page.getByTestId('adjustment-tab-semantic').count(),0,'semantic adjustment tab should be absent');
+ assert.equal(await page.getByTestId('semantic-panel').count(),0,'semantic adjustment panel should be absent');
+ checks.semanticPanelRemoved=true;
  const rotationValues=prefix=>page.locator(`[data-testid^="${prefix}"]`).evaluateAll(inputs=>inputs.map(input=>Number(input.value)));
  await page.getByTestId('adjustment-tab-right').tap();
- const forearmBefore=await rotationValues('joint-R-forearm-');
- await page.getByTestId('adjustment-tab-semantic').tap();
  const angle0=await elbowAngle(page,'R');
- await page.getByTestId('semantic-part-elbow').tap();await page.getByTestId('semantic-side-R').tap();
- await page.getByTestId('semantic-plus').tap();await page.getByTestId('semantic-plus').tap();
- await page.getByTestId('semantic-minus').tap();await page.getByTestId('semantic-plus').tap(); // previews never stack
- assert.match(await page.getByTestId('semantic-report').innerText(),/请求 10\.0° · 实际 10\.0°/);
- await page.getByTestId('semantic-commit').tap();
+ const elbowSlider=page.getByTestId('joint-R-forearm-flexion');
+ const elbowStart=Number(await elbowSlider.inputValue());
+ await elbowSlider.press('ArrowRight');
  const edited=await read(page),angle1=await elbowAngle(page,'R');
- assert(Math.abs(angle1-angle0-10)<.5,`elbow changed ${angle1-angle0}°`);
+ assert(Number(await elbowSlider.inputValue())>elbowStart,'elbow slider did not change');
+ assert(angle1>angle0+.05,`elbow angle did not follow its slider: ${angle0} → ${angle1}`);
  edited.doc.keys.forEach((k,i)=>{if(i!==keyIndex)assert.deepEqual(k,base.doc.keys[i],`key ${i} changed`);});
- await page.getByTestId('adjustment-tab-right').tap();
- const forearmAfter=await rotationValues('joint-R-forearm-'),wristAfterElbow=await rotationValues('wrist-R-');
- // The forearm panel is the elbow hinge only, so its single readout must
- // equal the solved elbow angle — not merely "differ from before".
- assert(Math.abs(forearmAfter[0]-angle1)<.3,`forearm slider read ${forearmAfter[0]}° but the solved elbow is ${angle1}°`);
- assert.notDeepEqual(forearmAfter,forearmBefore,'semantic elbow edit was not reflected in the forearm slider');
- await page.getByTestId('adjustment-tab-semantic').tap();
- await page.getByTestId('semantic-part-wrist').tap();await page.getByTestId('semantic-side-R').tap();
- await page.getByTestId('semantic-motion-flexion').tap();await page.getByTestId('semantic-plus').tap();
- assert.match(await page.getByTestId('semantic-report').innerText(),/掌屈：请求 5\.0°/);
- await page.getByTestId('semantic-commit').tap();
+ const wristBefore=edited.doc.keys[keyIndex].pose.handR.forward;
+ const wristSlider=page.getByTestId('wrist-R-flex');
+ await wristSlider.press('ArrowRight');
  const wristDoc=await read(page);
- assert.notDeepEqual(wristDoc.doc.keys[keyIndex].pose.handR.forward,edited.doc.keys[keyIndex].pose.handR.forward);
- await page.getByTestId('adjustment-tab-right').tap();
- const wristAfter=await rotationValues('wrist-R-');
- assert.notDeepEqual(wristAfter,wristAfterElbow,'semantic wrist edit was not reflected in parent-relative wrist sliders');
- // The upper-arm round-trip and the wrist/elbow slider writes below run AFTER
- // every sameDoc(wristDoc) baseline: they are real doc edits, so placing them
- // earlier would break the step-by-step undo comparisons.
- await page.getByTestId('adjustment-tab-semantic').tap();
- checks.semanticArmAndWrist=true;
- // Thigh forward on a planted key: only the hip moves — knee and ankle angles hold.
- const legAngles=()=>page.evaluate(()=>{const r=window.__WS__.rig,ang=(a,b,c)=>{const p=r.point(a),q=r.point(b),w=r.point(c);return 180-p.clone().sub(q).angleTo(w.clone().sub(q))*180/Math.PI;};
-  return {knee:ang('upperleg01_R','lowerleg01_R','foot_R'),thigh:r.point('lowerleg01_R').sub(r.point('root')).toArray()};});
- const leg0=await legAngles();
- await page.getByTestId('semantic-part-hip').tap();await page.getByTestId('semantic-side-R').tap();
- await page.getByTestId('semantic-motion-flexion').tap();
- await page.getByRole('button',{name:'15°',exact:true}).tap();await page.getByTestId('semantic-plus').tap();
- assert.match(await page.getByTestId('semantic-report').innerText(),/向前（屈髋）：请求 15\.0° · 实际 15\.0°/);
- const leg1=await legAngles();
- assert(Math.abs(leg1.knee-leg0.knee)<.6,`thigh forward bent the knee by ${leg1.knee-leg0.knee}°`);
- assert(leg1.thigh[2]-leg0.thigh[2]>.08,'the thigh itself did not swing forward');
- await page.getByTestId('semantic-cancel').tap();
- sameDoc((await read(page)).doc,wristDoc.doc,'cancelled thigh edit changed the document');
- checks.thighForwardKeepsKnee=true;
- // 落地: lift with a small thigh move, confirm, then ground it — one undo step each.
- await page.getByRole('button',{name:'5°',exact:true}).tap();
- await page.getByTestId('semantic-part-hip').tap();await page.getByTestId('semantic-side-R').tap();
- await page.getByTestId('semantic-motion-flexion').tap();await page.getByTestId('semantic-plus').tap();
- await page.getByTestId('semantic-commit').tap();
- const soleR=()=>page.evaluate(()=>{const e=window.__WS__,r=e.rig,g=e.footGeometry('R'),ankle=r.point('foot_R');let low=Infinity;for(const n of g.names)low=Math.min(low,r.point(n).y);
-  const foot=r.bone('foot_R'),Quaternion=foot.quaternion.constructor,q=foot.getWorldQuaternion(new Quaternion());
-  return (Math.min(low,ankle.y+g.heelOffset.clone().applyQuaternion(q).y)-g.groundY)*1000;});
- const liftedDoc=(await read(page)).doc;
- assert(Math.abs(await soleR())>3,'the thigh edit did not move the foot off the floor');
- await page.getByTestId('semantic-ground').tap();
- const groundText=await page.getByTestId('semantic-ground-result').innerText();
- assert.match(groundText,/右脚落到地面/,groundText);
- assert(Math.abs(await soleR())<2,`sole still ${await soleR()} mm from the floor`);
- await page.getByRole('button',{name:'关闭面板',exact:true}).last().tap();
- await page.getByRole('button',{name:'撤销',exact:true}).tap();
- sameDoc((await read(page)).doc,liftedDoc,'undo of 落地 is not one step');
- await page.getByRole('button',{name:'撤销',exact:true}).tap();
- sameDoc((await read(page)).doc,wristDoc.doc,'undo of the thigh edit');
- await page.getByTestId('sheet-right').tap();
- checks.groundButton=true;
- // Both thighs apart: angle readback, no side selector.
- await page.getByRole('button',{name:'5°',exact:true}).tap();
- await page.getByTestId('semantic-part-legs').tap();
- assert.equal(await page.getByTestId('semantic-side-R').count(),0,'双腿 must not show a side selector');
- await page.getByTestId('semantic-plus').tap();
- assert.match(await page.getByTestId('semantic-report').innerText(),/分开：请求 5\.0° · 实际 5\.0°/);
- await page.getByTestId('semantic-cancel').tap();
- sameDoc((await read(page)).doc,wristDoc.doc,'cancelled spread changed the document');
- checks.legsSpread=true;
+ assert.notDeepEqual(wristDoc.doc.keys[keyIndex].pose.handR.forward,wristBefore,'wrist rotation did not update the selected key');
+ const forearmAfter=await rotationValues('joint-R-forearm-');
+ assert(Math.abs(forearmAfter[0]-angle1)<.3,`elbow slider read ${forearmAfter[0]}° but the solved elbow is ${angle1}°`);
+ checks.mobileJointRotation=true;
  const undo=page.getByRole('button',{name:'撤销',exact:true}),redo=page.getByRole('button',{name:'重做',exact:true});
  await page.getByRole('button',{name:'关闭面板',exact:true}).last().tap();
  await undo.tap();sameDoc((await read(page)).doc,edited.doc,'first undo is not the wrist step');
@@ -207,17 +149,7 @@ try{
  await page.locator('.ws-track-labels button').filter({hasText:keyLabel}).first().tap();
  assert(Math.abs(await elbowAngle(page,'R')-angle1)<.05,'reload changed the solved elbow');
  checks.undoRedoReload=true;
- // Clamp honesty: request +90° flexion, beyond the 145° limit.
- await page.getByTestId('mode-edit').tap();
- await page.getByTestId('semantic-part-elbow').tap();await page.getByTestId('semantic-side-R').tap();
- await page.getByRole('button',{name:'15°',exact:true}).tap();
- // +15° steps until the 145° flexion cap: the panel must report the clamp, not success.
- for(let i=0;i<12&&!(await page.getByTestId('semantic-reason').count());i++)await page.getByTestId('semantic-plus').tap();
- assert.match(await page.getByTestId('semantic-report').innerText(),/未完全执行：肘屈曲上限 145°/);
- await page.getByTestId('semantic-cancel').tap();
- sameDoc((await read(page)).doc,wristDoc.doc,'cancel did not restore the base');
- checks.clampReported=true;
- await page.screenshot({path:outputFile('phone-semantic.png')});
+ await page.screenshot({path:outputFile('phone-joint-controls.png')});
  await page.locator('[data-fold=inspect] summary').tap();
  await page.getByTestId('note-issue').selectOption('手臂穿身');
  await page.getByTestId('note-text').fill('右肘贴进躯干');
@@ -314,13 +246,14 @@ try{
  const deskCtx=await browser.newContext({viewport:{width:1536,height:1024},deviceScaleFactor:1});const desk=await deskCtx.newPage();watch(desk);
  await desk.goto(url);await ready(desk);
  assert.equal(await desk.locator('.ws-shell').getAttribute('data-mode'),'review');
- await desk.getByTestId('sheet-left').click();await desk.locator('[data-fold=preset] summary').click();
- assert(await desk.getByRole('combobox',{name:'初始动作预设'}).isVisible());
+ await desk.getByTestId('sheet-left').click();
+ assert.equal(await desk.locator('[data-fold="preset"]').count(),0,'built-in preset entry should be absent');
  await desk.getByTestId('mode-edit').click();
- await desk.getByTestId('adjustment-tab-semantic').click();
- assert(await desk.getByTestId('semantic-panel').isVisible());
+ assert.equal(await desk.getByTestId('adjustment-tab-semantic').count(),0,'semantic adjustment tab should be absent');
  await desk.getByTestId('adjustment-tab-left').click();
  assert(await desk.getByTestId('wrist-L-flex').isVisible());
+ await desk.getByTestId('adjustment-tab-right').click();
+ assert(await desk.getByTestId('joint-R-upper-lift').isVisible());
  checks.desktopPanels=true;
  await desk.screenshot({path:outputFile('desktop.png')});await deskCtx.close();
  assert.deepEqual(errors,[]);

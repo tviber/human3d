@@ -5,11 +5,9 @@ import {
  HumanRig,blankDocument,canonicalizeHands,normalizeDoc,type RigInfo,type WorkshopDoc,type WorkshopKey,type PoseParams,
 } from '@human3d/motion-core';
 
-/* Basic actions: the workshop's built-in library. Each action is a short
- * body/leg movement with AT MOST three keyframes. Keys are authored as
- * offsets from the standing stance, and the hands stay at the neutral stance
- * (the insertion tool keeps the user's own hands and copies only these body
- * and leg offsets — see apps/web/src/workshop/basic-actions.ts).
+/* Static motion-registry examples. Each action is a short body/leg movement
+ * with AT MOST three keyframes. Keys are authored as offsets from the standing
+ * stance; hands stay at the neutral stance.
  *
  * Constraints: feet plant by default (a planted run holds its first key's
  * contact). Only the lunge releases the lead foot, so it can step out. */

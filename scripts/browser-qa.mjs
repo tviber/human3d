@@ -53,7 +53,7 @@ assert.match(await page.title(),/h3d/);const bundledMotionCount=await page.locat
 await page.getByRole('button',{name:'展开动作库面板'}).click();
 await page.getByRole('button',{name:'展开观察面板'}).click();
 await page.getByRole('switch',{name:'人体表面'}).waitFor({state:'visible',timeout:5000});
-const names={idle:'自然站立',walk:'行走',reach:'抬手与转身',squat:'下蹲',ready:'持拍准备',forehand:'正手挥拍'};
+const names={idle:'自然站立',walk:'行走',reach:'抬手与转身',squat:'下蹲'};
 // Issue #30 PR-B: secondary workshop panels are collapsed <details> folds;
 // open them all (idempotent) after every workshop navigation or reload.
 const openWsFolds=async()=>{
@@ -72,9 +72,8 @@ async function choose(id,t=0,view='front'){
  if(view==='hand')await page.getByRole('button',{name:views[view],exact:true}).click();else await page.locator('.camera-toolbar').getByRole('button',{name:views[view],exact:true}).click();
  await page.waitForTimeout(250);assert.equal(await page.locator('.viewport-heading h2').textContent(),names[id]);
 }
-const poses=[['idle',0,'front','front'],['idle',0,'side','side'],['idle',0,'back','back'],['walk',.34,'threeQuarter','walk'],['reach',2.7,'front','reach'],['squat',2.7,'side','squat-side'],['squat',2.7,'front','squat'],['ready',0,'threeQuarter','ready'],['ready',0,'hand','grip'],['forehand',1.3,'threeQuarter','backswing'],['forehand',2.55,'front','contact'],['forehand',3.35,'threeQuarter','follow-through']];
+const poses=[['idle',0,'front','front'],['idle',0,'side','side'],['idle',0,'back','back'],['walk',.34,'threeQuarter','walk'],['reach',2.7,'front','reach'],['squat',2.7,'side','squat-side'],['squat',2.7,'front','squat']];
 const result={date:new Date().toISOString().slice(0,10),browser:await browser.version(),viewport:[1536,1024],poses:[],checks:{}};
-const runHeavyQa=process.env.HUMAN3D_QA_HEAVY==='1';
 result.skipped=[];
 for(const [id,t,view,name]of poses){await choose(id,t,view);await page.screenshot({path:outputFile(`${name}.png`)});result.poses.push({id,t,view,file:`${name}.png`,metrics:await page.evaluate(()=>window.__LAB__.diagnostics())});}
 await choose('squat',2.7,'threeQuarter');
@@ -98,15 +97,15 @@ await choose('idle',0,'front');const canvas=page.locator('canvas'),bounds=await 
 await page.mouse.move(bounds.x+bounds.width*.5,bounds.y+bounds.height*.5);await page.mouse.down();await page.mouse.move(bounds.x+bounds.width*.6,bounds.y+bounds.height*.53,{steps:12});await page.mouse.up();await page.mouse.wheel(0,-170);await page.waitForTimeout(300);assert.notDeepEqual(await page.evaluate(()=>window.__LAB__.camera.position.toArray()),oldCam);result.checks.orbitZoom=true;
 await page.getByRole('button',{name:'资料与许可'}).click();assert(await page.locator('dialog').isVisible());assert.match(await page.locator('dialog').innerText(),/CC0/);await page.getByRole('button',{name:'关闭',exact:true}).click();result.checks.sources=true;
 // Sample the real per-source state (including interpolation) for numerical review.
-result.samples=await page.evaluate(()=>{const e=window.__LAB__,out={};for(const id of ['idle','walk','reach','squat','ready','forehand']){e.setMotion(id,false);e.setPlaying(false);const d=e.source.duration,frames=[];for(let i=0;i<80;i++){e.seek(i/80*d);frames.push({time:i/80*d,...e.diagnostics()});}out[id]=frames;}return out;});
-for(const [id,samples]of Object.entries(result.samples)){assert(samples.every(s=>s.knee<=135.1&&s.elbow<=145.1));if(id==='forehand')assert(samples.every(s=>s.gripError<1e-8));}
+result.samples=await page.evaluate(()=>{const e=window.__LAB__,out={};for(const id of ['idle','walk','reach','squat']){e.setMotion(id,false);e.setPlaying(false);const d=e.source.duration,frames=[];for(let i=0;i<80;i++){e.seek(i/80*d);frames.push({time:i/80*d,...e.diagnostics()});}out[id]=frames;}return out;});
+for(const samples of Object.values(result.samples))assert(samples.every(s=>s.knee<=135.1&&s.elbow<=145.1));
 result.checks.motionSamples=true;
 // Responsive surface, including controls that move below the main canvas.
 await page.setViewportSize({width:390,height:844});
 // Phone drawer layout (#23/#28): the library and inspector are bottom sheets —
 // raise each before touching its controls (the pre-drawer scrolling page is gone).
 await page.getByTestId('sheet-library').click();
-await choose('ready',0,'front'); // picking a motion closes the sheet again
+await choose('squat',2.7,'front'); // picking a motion closes the sheet again
 await page.screenshot({path:outputFile('mobile.png')});
 await page.getByTestId('sheet-inspector').click();
 await page.getByRole('switch',{name:'人体表面'}).waitFor({state:'visible',timeout:5000});
@@ -114,14 +113,7 @@ await page.screenshot({path:outputFile('mobile-settings.png')});
 await page.locator('.lab-scrim').click({position:{x:20,y:20}}); // the raised sheet covers the footer triggers and the scrim center
 assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);result.checks.mobileOverflow=false;
 await page.setViewportSize({width:1366,height:900});await choose('idle',0,'front');await page.screenshot({path:outputFile('laptop.png')});
-await page.setViewportSize({width:1536,height:1024});await choose('forehand',0,'threeQuarter');
-await page.getByRole('switch',{name:'球拍运动轨迹',exact:true}).click();await page.evaluate(()=>{window.__LAB__.loop=false;window.__LAB__.speed=1;});
-// Live VP9 capture is CPU intensive; reserve it for an explicit heavy QA run.
-let videoBytes=0;
-if(runHeavyQa){
- const recorded=await page.evaluate(async()=>{const e=window.__LAB__,stream=e.renderer.domElement.captureStream(30);const type=MediaRecorder.isTypeSupported('video/webm;codecs=vp9')?'video/webm;codecs=vp9':'video/webm';const recorder=new MediaRecorder(stream,{mimeType:type,videoBitsPerSecond:4500000}),chunks=[];recorder.ondataavailable=ev=>chunks.push(ev.data);const done=new Promise(resolve=>recorder.onstop=async()=>{const data=await new Blob(chunks,{type:'video/webm'}).arrayBuffer();stream.getTracks().forEach(t=>t.stop());resolve(Array.from(new Uint8Array(data)));});recorder.start();e.replay();const poll=setInterval(()=>{if(!e.playing){clearInterval(poll);setTimeout(()=>recorder.stop(),200);}},50);setTimeout(()=>{if(recorder.state==='recording'){clearInterval(poll);recorder.stop();}},15000);return done;});
- atomicWriteFile(outputFile('forehand.webm'),Buffer.from(recorded));videoBytes=recorded.length;result.checks.liveVideo=true;
-}else result.skipped.push('liveVideo');
+await page.setViewportSize({width:1536,height:1024});await choose('idle',0,'threeQuarter');
 // --- Pose-package E2E: the real service solves a real package, delivered
 // through the real file input, decoded by the lab's PosePackageSource.
 // Service ownership is EXCLUSIVE by default: the port must be free so the QA
@@ -733,6 +725,6 @@ result.checks.workshopGenerationKeepExportUndo=true;
 }else result.skipped.push('workshopGenerationCancel','workshopGenerationAB','workshopGenerationKeepExportUndo');
 
 result.errors=errors;result.warnings=warnings;assert.deepEqual(errors,[]);
-atomicWriteFile(outputFile('browser-results.json'),JSON.stringify(result,null,2));console.log(JSON.stringify({checks:result.checks,skipped:result.skipped,errors,warnings,poses:result.poses.length,videoBytes},null,2));
+atomicWriteFile(outputFile('browser-results.json'),JSON.stringify(result,null,2));console.log(JSON.stringify({checks:result.checks,skipped:result.skipped,errors,warnings,poses:result.poses.length},null,2));
 
 } finally {await cleanup();}

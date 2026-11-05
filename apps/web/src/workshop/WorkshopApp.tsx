@@ -1,4 +1,3 @@
-import {SkinSwitch} from '../theme/SkinSwitch';
 import {webPlatform} from '../platform/platform';
 import {useMediaMatches} from '../lib/use-media';
 import {useEffect,useRef,useState} from 'react';
@@ -9,18 +8,16 @@ import {Activity,ArrowDown,ArrowLeft,ArrowUp,Camera,Check,ChevronLeft,ChevronRig
 import {LibraryList} from './chrome';
 import {useWorkshopUi} from './ui-store';
 import {WorkshopEngine} from './engine';
-import type {WorkshopFrame} from './engine';
-import type {HandFrame,KeyInterpolation,SemanticPart,WorkshopDoc,WorkshopKey,V3} from '@human3d/motion-core';
-import {blankDocument,contactStartKey,defaultDocument,ensureKey,isReleaseKey,keyAt,loopBlockers,mirrorDoc,mirrorKey,nearestKey,newDocId,normalizeDoc,parseDoc,retimeKeys,serializeDoc,sortedKeys} from '@human3d/motion-core';
-import {BASIC_PRESETS,LIBRARY_KEY,MotionLibrary,OTHER_PRESETS,RACKET_PRESETS,WORKSHOP_PRESETS,type QuarantineEntry} from './library';
-import {clearLabHandoff,handoffConsumedByCreate,handoffHasCard,resolveLabHandoff} from './lab-handoff';
+import type {AvatarMode,WorkshopFrame} from './engine';
+import type {HandFrame,KeyInterpolation,WorkshopDoc,WorkshopKey,V3} from '@human3d/motion-core';
+import {blankDocument,contactStartKey,ensureKey,isReleaseKey,keyAt,loopBlockers,mirrorDoc,mirrorKey,nearestKey,newDocId,normalizeDoc,parseDoc,retimeKeys,serializeDoc,sortedKeys} from '@human3d/motion-core';
+import {LIBRARY_KEY,MotionLibrary,type QuarantineEntry} from './library';
+import {clearLabHandoff,handoffHasCard,resolveLabHandoff} from './lab-handoff';
 import type {LabHandoff} from './lab-handoff';
 import {combineMotions} from './combine-motions';
-import {basicInsertRefusal,insertBasicAction,type BasicInsertion} from './basic-actions';
 import {applyPoseAt,isPoseShape,PoseLibrary,POSE_LIBRARY_KEY,stampPoseIntoKey,type PoseApplyReport,type PoseStampReport,type UserPosePreset} from './pose-library';
 import {MAX_BACKUP_BYTES,RESTORE_POINT_KEY,backupText,mergeBackup,parseBackup,replaceLibrary,type ParsedBackup} from './library-backup';
 import {HistoryBook,RecordGate} from './history';
-import {SemanticPanel,type SemanticHost} from './semantic-panel';
 import {copyKeyframe,keyframeInsertSlot,keyframeTimeProblem,moveKeyframe,removeKeyframe} from './keyframes';
 import {clampDuration,HEAD_ROTATION_LIMITS,RACKET_BEVEL_DEFAULT,RACKET_BEVELS,RELAXED_SPREAD,WORKSHOP_LIMITS} from '@human3d/motion-core';
 import {ankleYForLift,footLift,type Side} from '@human3d/motion-core';
@@ -248,17 +245,13 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
  const [leaving,setLeaving]=useState(false);
  const selected=useWorkshopUi(s=>s.selected),setSelected=useWorkshopUi(s=>s.setSelected);
  const newName=useWorkshopUi(s=>s.newName),setNewName=useWorkshopUi(s=>s.setNewName);
- // Lab handoff: the lab navigates here with ?from=<motion id> when the motion
- // it was playing has workshop keys. The offer stays until handled so a
- // refresh doesn't lose it; the URL param is dropped on handling so a later
- // visit doesn't re-offer. Creation is always explicit — never auto-copied.
+ // The lab can pass a known non-editable motion here to explain why it cannot
+ // be edited. Bundled workshop motions no longer offer preset copies.
  const [handoff,setHandoff]=useState<LabHandoff|null>(()=>resolveLabHandoff(globalThis.location?.search??''));
- const [presetId,setPresetId]=useState(()=>handoff?.kind==='preset'?handoff.file.id:BASIC_PRESETS[0]?.id??'');
- const [combineTarget,setCombineTarget]=useState('preset:idle');
+ const [combineTarget,setCombineTarget]=useState('');
  const [combineKind,setCombineKind]=useState<'append'|'blend'>('append');
  const [combineTransition,setCombineTransition]=useState(.3),[combineWeight,setCombineWeight]=useState(50),[combineName,setCombineName]=useState('');
- const [basicId,setBasicId]=useState(()=>BASIC_PRESETS[0]?.id??'');
- const [adjustmentTab,setAdjustmentTab]=useState<'left'|'right'|'common'|'semantic'>('semantic');
+ const [adjustmentTab,setAdjustmentTab]=useState<'left'|'right'|'common'>('left');
  const [info,setInfo]=useState<RigInfo|null>(null),[error,setError]=useState('');
  const [frame,setFrame]=useState<WorkshopFrame>({time:0,duration:.8,playing:true,label:''});
  const [view,setView]=useState<ViewId>('threeQuarter');
@@ -301,6 +294,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
  // viewport write. Same query as the CSS breakpoint in workshop.css.
  const compact=useMediaMatches(COMPACT_QUERY);
  const [mode,setMode]=useState<'review'|'edit'>('review');
+ const [avatarMode,setAvatarMode]=useState<AvatarMode>('chibi');
  const panelGroup=useRef<GroupImperativeHandle|null>(null);
  const libraryPanel=useRef<PanelImperativeHandle|null>(null),inspectorPanel=useRef<PanelImperativeHandle|null>(null);
  const [libraryOpen,setLibraryOpen]=useState(false),[inspectorOpen,setInspectorOpen]=useState(false);
@@ -435,6 +429,13 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
   if(k)editAtKey(k,()=>fn(k));
  };
  const d=L.active();
+ const otherDocs=L.docs.filter(doc=>doc.id!==d.id);
+ const libraryIds=L.docs.map(doc=>doc.id).join('|');
+ useEffect(()=>{
+  const targetId=combineTarget.startsWith('local:')?combineTarget.slice(6):'';
+  if(otherDocs.some(doc=>doc.id===targetId))return;
+  setCombineTarget(otherDocs[0]?`local:${otherDocs[0].id}`:'');
+ },[combineTarget,d.id,libraryIds]);
  const orderedKeys=sortedKeys(d);
  const [locksByDoc,setLocksByDoc]=useState<Record<string,{extra:string[];unlockedDefaults:string[]}>>({});
  const defaultLockedIds=orderedKeys.filter((_,i)=>i===0||i===orderedKeys.length-1).map(k=>k.id);
@@ -461,6 +462,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
  const transitionIsLoop=d.loop&&selectedKeyIndex===orderedKeys.length-1;
  const transitionEndTime=nextTransitionKey?nextTransitionKey.time+(transitionIsLoop?d.duration:0):undefined;
  const review=mode==='review';
+ const chooseAvatar=(next:AvatarMode)=>{setAvatarMode(next);engine.current?.setAvatarMode(next);};
  const adjustmentSide=adjustmentTab==='left'?'L':'R',adjustmentSideName=adjustmentSide==='L'?'左':'右';
  /** The arm/wrist panels read the rig solved at the playhead and write the
   * selected key, so they are usable only when the two coincide (see
@@ -491,7 +493,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
  const saveCombined=async()=>{
   if(generationLocked.current||restoreBusy.current)return;
   const e=engine.current;if(!e?.ready){setHint('请等待模型加载完成。');return;}
-  const target=combineTarget.startsWith('local:')?L.docs.find(doc=>doc.id===combineTarget.slice(6)):WORKSHOP_PRESETS.find(p=>`preset:${p.id}`===combineTarget)?.document;
+  const target=combineTarget.startsWith('local:')?L.docs.find(doc=>doc.id===combineTarget.slice(6)&&doc.id!==L.activeId):undefined;
   if(!target){setHint('请选择要组合的动作。');return;}
   if(!webPlatform.storage){setError('浏览器存储不可用，请先导出源动作 JSON 备份。');return;}
   try{
@@ -633,34 +635,8 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
  };
  const restoreMerge=()=>void restoreBackup('merge');
  const restoreReplace=()=>void restoreBackup('replace');
- // Handoff actions: dismissing only clears the offer and the URL parameter.
- // Creation — from the card button OR the regular 从预设开始 — goes through
- // the flow below, which reconciles the offer when it creates the offered
- // preset, so the two entry points can never leave a stale card behind.
+ // Dismissing an unsupported lab motion clears its context and URL parameter.
  const dismissHandoff=()=>{setHandoff(null);clearLabHandoff();};
- const createFromPreset=(id=presetId)=>{
-  if(generationLocked.current||restoreBusy.current)return undefined;
-  switchMode('edit');
-  const source=L.active();
-  const doc=L.createFromPreset(id,newName);
-  books.current.of(doc.id).record(source);
-  gate.current.reset();setNewName('');selectDoc(doc.id);
-  const consumed=handoffConsumedByCreate(handoff,id);
-  if(consumed)dismissHandoff();
-  setHint(consumed&&compact
-   ?`已创建可编辑副本「${doc.name}」；当前是审阅模式，点上方「编辑」即可拖动手柄修改。`
-   :`已从预设创建「${doc.name}」，可拖动手柄或调整关键帧。`);
-  // Phone: the auto-raised 动作 sheet covers the 3D view — once the offered
-  // preset has been created, collapse it so the copy is actually visible.
-  // Review-first stays the default; the hint points at the 编辑 switch.
-  if(consumed&&compact)setSheet(null);
-  return doc;
- };
- const acceptHandoff=()=>{
-  if(!handoff||handoff.kind!=='preset'||generationLocked.current||restoreBusy.current)return;
-  const doc=createFromPreset(handoff.file.id);
-  if(doc)setPresetId(handoff.file.id);
- };
  // Phone layout: the offer lives in the 动作 sheet — raise it on entry for
  // every handoff that renders a card, so a handed-over external motion
  // (walk, baseball throw…) explains itself instead of hiding the card in a
@@ -708,21 +684,6 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
  };
  const addKey=()=>insertAt(engine.current?.time??frame.time);
  const insertAfterKey=()=>{if(insertTime!==undefined)insertAt(insertTime,insertDuration);};
- /** One-click basic action: the button IS the preset. One ripple edit, one
-  * undo step; carry-hands templates move the hand targets on top of the
-  * playhead state (wrist orientation untouched). */
- const insertBasicPreset=(p:(typeof BASIC_PRESETS)[number])=>{
-  const e=engine.current,basicDoc=p.document;
-  if(generationLocked.current||!info||!basicDoc||!e)return;
-  const time=e.time,refusal=basicInsertRefusal(d,basicDoc,time);
-  if(refusal){setHint(refusal);return;}
-  const box:{value?:BasicInsertion}={};
-  editKeyStructure(doc=>{box.value=insertBasicAction(doc,basicDoc,time,e.restRoot(),{carryHands:p.carryHands===true});});
-  const inserted=box.value;
-  if(!inserted){setHint('插入失败：请调整时刻后重试。');return;}
-  selectKey(inserted.keyIds[0]);
-  setHint(`已在 ${inserted.time.toFixed(2)}s 插入「${p.name}」，后续关键帧后移 ${inserted.span.toFixed(2)}s。`);
- };
  /** Quick racket: one click turns grip on for every key (the racket follows
   * the gripping hand) or takes it off; one structural undo step. */
  const setGrip=(side:'L'|'R'|null)=>{
@@ -1047,29 +1008,6 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
   if(k)selectKey(k.id);
  };
  const setOpt=(patch:Partial<typeof opts>)=>{setOpts(o=>({...o,...patch}));engine.current?.setOptions(patch);};
- /** Semantic edits preview by swapping the active document for a candidate
-  * computed from one fixed base; history records the base once per transaction. */
- const semanticRecorded=useRef(false);
- const semanticHost:SemanticHost={
-  context:()=>{
-   const e=engine.current,k=sel;
-   if(!e?.rig||!k||generationLocked.current||restoreBusy.current)return null;
-   return {rig:e.rig,doc:L.active(),keyId:k.id,origin:e.restRoot(),pelvisShift:()=>e.pelvisShiftAt(k.time)};
-  },
-  begin:base=>{semanticRecorded.current=books.current.of(base.id).record(base);gate.current.reset();engine.current?.setPlaying(false);},
-  highlightPart:(part:SemanticPart,side)=>engine.current?.anatomy?.setSemanticHighlight(part,side),
-  clearMuscleHighlight:()=>engine.current?.anatomy?.clearSemanticHighlight(),
-  write:next=>{
-   const i=L.docs.findIndex(x=>x.id===next.id);if(i<0||generationLocked.current||restoreBusy.current)return;
-   // Slider previews are transient: keep them in memory and persist once the
-   // semantic transaction is committed, rather than serializing on every input event.
-   L.docs[i]=JSON.parse(JSON.stringify(next)) as WorkshopDoc;
-   const e=engine.current,k=keyAt(L.docs[i],selected);
-   e?.setPlaying(false);e?.markDirty();if(k)e?.seek(k.time);bump(v=>v+1);
-  },
-  cancel:base=>{if(restoreBusy.current)return;semanticHost.write(base);if(semanticRecorded.current)books.current.of(base.id).dropLast();semanticRecorded.current=false;bump(v=>v+1);},
-  commit:()=>{if(restoreBusy.current)return;semanticRecorded.current=false;gate.current.reset();L.save();bump(v=>v+1);},
- };
  const addNote=()=>{
   if(!sel)return;
   setNotes(n=>[...n,{id:`n${Date.now().toString(36)}${n.length}`,docId:d.id,keyId:sel.id,keyLabel:sel.label||`关键帧 ${selectedKeyIndex+1}`,time:Number(sel.time.toFixed(3)),view:engine.current?.view??view,...noteDraft,text:noteDraft.text.trim()}]);
@@ -1086,6 +1024,10 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
  return <div inert={restoring} aria-busy={restoring} className={`ws-shell ${generationLockedUi?'ws-generation-locked':''} ${compact?'ws-compact':''} ${sheet?`ws-sheet-${sheet}`:''} ws-mode-${mode}`} data-mode={mode}>
   <header className="ws-header">
    <a className="brand brand-home" href="/" aria-label="返回人体运动实验室首页" onClick={e=>{e.preventDefault();void returnToLab();}}><Activity size={25} strokeWidth={2}/><span>h3d</span><i/><h1>动作工作台</h1><small>关键帧动作编辑器</small></a>
+   <div className="ws-avatar-switch" role="group" aria-label="角色模型">
+    <button type="button" data-testid="avatar-mode-chibi" aria-pressed={avatarMode==='chibi'} disabled={!info} onClick={()=>chooseAvatar('chibi')}>Q 版</button>
+    <button type="button" data-testid="avatar-mode-original" aria-pressed={avatarMode==='original'} disabled={!info} onClick={()=>chooseAvatar('original')}>原版人体</button>
+   </div>
    <nav><a href="/" className="ws-back" aria-disabled={leaving} onClick={e=>{e.preventDefault();void returnToLab();}}><ArrowLeft size={14}/>返回实验室</a></nav>
    <div className="ws-save-state" data-testid="save-state" data-state={L.saveState} role="status" aria-live="polite"><span>{L.saveState==='error'?`保存失败：${L.lastError}`:L.saveState==='saving'?leaving?'保存中 · 完成后返回实验室…':'保存中…':'已保存到本机'}</span><button type="button" disabled={L.saveState==='saved'} aria-hidden={L.saveState==='saved'} onClick={()=>exportDoc()}><Download size={12}/>导出当前动作 JSON</button></div>
   </header>
@@ -1093,20 +1035,10 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
    <Panel id="ws-library" panelRef={libraryPanel} collapsible collapsedSize={0} onResize={size=>setLibraryOpen(size.inPixels>1)} className="ws-library-panel" defaultSize={0} minSize={280} maxSize={420}><aside className="ws-left scroll-region" aria-label="动作与关键帧">
     {sheetHead('动作 · 关键帧 · 参考')}
     {handoffHasCard(handoff)?<section className="ws-card ws-handoff" data-testid="lab-handoff" inert={generationLockedUi}>
-     {handoff.kind==='preset'?<>
-      <h2>来自实验室 <small>{handoff.file.english}</small></h2>
-      <p className="ws-handoff-name">{handoff.file.name}</p>
-      <p className="ws-note">创建一份新的可编辑副本开始调整；动作库预设与已有动作都不会被改动。</p>
-      <div className="ws-row">
-       <button type="button" data-testid="lab-handoff-create" onClick={acceptHandoff}><Plus size={13}/>创建可编辑副本</button>
-       <button type="button" data-testid="lab-handoff-dismiss" onClick={dismissHandoff}><X size={13}/>暂不需要</button>
-      </div>
-     </>:handoff.kind==='external'?<>
       <h2>来自实验室 <small>{handoff.file.english}</small></h2>
       <p className="ws-handoff-name">{handoff.file.name}</p>
       <p className="ws-note">{handoff.file.kind==='dynamics-motion'?'此动作是肌骨正向仿真回放，没有工作台关键帧，暂不支持编辑；可在实验室继续观察。':'此动作是外部剪辑动画，没有工作台关键帧，暂不支持编辑。'}</p>
       <div className="ws-row"><button type="button" data-testid="lab-handoff-dismiss" onClick={dismissHandoff}>知道了</button></div>
-     </>:null}
     </section>:null}
     <section className="ws-card" inert={generationLockedUi}><h2>动作库 <small>{L.docs.length} 个动作</small></h2>
      <LibraryList docs={L.docs} activeId={d.id} onSelect={selectDoc} onDuplicate={duplicateDoc} onRemove={removeDoc} onReorder={(active,over)=>{if(restoreBusy.current||generationLocked.current)return;L.reorder(active,over);bump(v=>v+1);}}/>
@@ -1160,16 +1092,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
       {L.quarantine.map((q,i)=><div key={`${q.id}-${i}`} className="ws-row"><small>{q.name||q.id||'未命名'}：{q.reason}</small><button onClick={()=>recoverQuarantine(i)}>恢复为副本</button><button onClick={()=>exportQuarantine(i)}><Download size={12}/>导出</button><button aria-label={`丢弃 ${q.name||q.id}`} onClick={()=>{if(restoreBusy.current||generationLocked.current)return;if(confirm('丢弃这个隔离动作？此操作不可撤销。'))L.discardQuarantine(i);bump(v=>v+1);}}><Trash2 size={12}/></button></div>)}
      </div>:null}
     </section>
-    <section className="ws-card" inert={generationLockedUi||review} aria-label="快速插入"><h2>快速插入 <small>播放头一键</small></h2>
-     <div className="ws-quick-poses" role="group" aria-label="快速姿态（一键插入）">
-      <span className="ws-quick-label">姿态</span>
-      {BASIC_PRESETS.map(p=>{
-       const refusal=info&&p.document?basicInsertRefusal(d,p.document,frame.time):undefined;
-       return <button key={p.id} type="button" data-testid={`basic-insert-${p.id}`} disabled={!info||!p.document||!!refusal}
-        title={refusal??`在当前帧一键插入「${p.name}」：从播放头姿态开始变化，后续关键帧整体后移，可撤销`}
-        onClick={()=>insertBasicPreset(p)}>{p.name}</button>;
-      })}
-     </div>
+    <section className="ws-card" inert={generationLockedUi||review} aria-label="快捷操作"><h2>快捷操作 <small>球拍 · 自建姿态</small></h2>
      <div className="ws-quick-poses" role="group" aria-label="球拍（一键持拍）">
       <span className="ws-quick-label">球拍</span>
       <button type="button" data-testid="racket-right" disabled={!info} title="所有关键帧改为右手握拍并显示球拍，可撤销" onClick={()=>setGrip('R')}>右手持拍</button>
@@ -1186,29 +1109,14 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
       </span>)}
      </div>
     </section>
-    <details className="ws-fold" data-fold="preset" inert={generationLockedUi}>
-     <summary>从预设开始 <small>内置动作副本</small></summary>
-     <div className="ws-fold-body">
-      <div className="ws-preset-entry">
-       <label className="ws-field"><span>动作预设</span><select aria-label="初始动作预设" value={presetId} onChange={e=>setPresetId(e.target.value)}>
-        <optgroup label="基础动作">{BASIC_PRESETS.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</optgroup>
-        <optgroup label="持拍动作（球拍插件）">{RACKET_PRESETS.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</optgroup>
-        <optgroup label="其他预设">{OTHER_PRESETS.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</optgroup>
-       </select></label>
-       <button className="ws-preset-start" onClick={()=>createFromPreset()}><Plus size={14}/>从预设开始</button>
-      </div>
-      <p className="ws-note">复制完整预设为可编辑副本开始调整；预设本身不会被改动。外部动画与动力学动作暂不支持。</p>
-     </div>
-    </details>
     <details className="ws-fold" data-fold="combine" inert={generationLockedUi}>
      <summary>组合动作 <small>拼接 / 混合</small></summary>
      <div className="ws-fold-body">
      <section className="ws-card" inert={generationLockedUi}><h2>组合动作 <small>保存为新动作</small></h2>
      <p className="ws-note">当前「{d.name}」作为第一段，选择另一段动作进行拼接或混合。</p>
-     <label className="ws-field"><span>另一段</span><select aria-label="组合目标动作" value={combineTarget} onChange={e=>setCombineTarget(e.target.value)}>
-      <optgroup label="我的动作">{L.docs.map(doc=><option key={doc.id} value={`local:${doc.id}`}>{doc.name}</option>)}</optgroup>
-      <optgroup label="内置动作">{WORKSHOP_PRESETS.map(p=><option key={p.id} value={`preset:${p.id}`}>{p.name}</option>)}</optgroup>
-     </select></label>
+     {otherDocs.length?<label className="ws-field"><span>另一段</span><select aria-label="组合目标动作" value={combineTarget} onChange={e=>setCombineTarget(e.target.value)}>
+      {otherDocs.map(doc=><option key={doc.id} value={`local:${doc.id}`}>{doc.name}</option>)}
+     </select></label>:<p className="ws-note">再新建或导入一段动作后，就可以在这里拼接或混合。</p>}
      <label className="ws-field"><span>组合方式</span><select aria-label="组合方式" value={combineKind} onChange={e=>setCombineKind(e.target.value as 'append'|'blend')}>
       <option value="append">前后拼接</option><option value="blend">按比例混合</option>
      </select></label>
@@ -1216,7 +1124,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
       :<Slider label="另一段动作占比" value={combineWeight} min={0} max={100} step={1} unit="%" testId="combine-weight" onChange={setCombineWeight}/>}
      <p className="ws-note">{combineKind==='append'?'当前动作 → 过渡 → 另一段动作，总时长不超过 10 秒。':'按开始 / 结束对齐进度，时长取较长动作；双足支撑取交集，持拍和触球取占比高的动作（50% 时取另一段）。'}</p>
      <label className="ws-field"><span>新名称</span><input aria-label="组合动作名称" placeholder="留空自动命名" value={combineName} onChange={e=>setCombineName(e.target.value)}/></label>
-     <div className="ws-row"><button type="button" data-testid="save-combined-motion" disabled={!info} onClick={saveCombined}><Save size={13}/>{combineKind==='append'?'拼接并保存':'混合并保存'}</button></div>
+     <div className="ws-row"><button type="button" data-testid="save-combined-motion" disabled={!info||!otherDocs.length} onClick={saveCombined}><Save size={13}/>{combineKind==='append'?'拼接并保存':'混合并保存'}</button></div>
      </section>
      </div>
     </details>
@@ -1422,7 +1330,6 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
         <label className="ws-field"><span>模式</span><select value={opts.onionMode} onChange={e=>{const v=e.target.value as 'keys'|'step';setOpts(o=>({...o,onionMode:v}));engine.current?.setOptions({onionMode:v});}}><option value="keys">相邻关键帧</option><option value="step">固定步长</option></select></label>
         {opts.onionMode==='step'?<label className="ws-field"><span>步长 s</span><input type="number" min={.02} max={1} step={.02} value={opts.onionStep} onChange={e=>{const v=Math.max(.02,Math.min(1,Number(e.target.value)||.1));setOpts(o=>({...o,onionStep:v}));engine.current?.setOptions({onionStep:v});}}/></label>:null}
        </>:null}
-       <SkinSwitch disabled={!info} change={s=>engine.current!.setSkin(s)}/>
        {videoUrl?<Row label="放大参考视频" checked={refLarge} onChange={v=>setRefLarge(v)}/>:null}
       </div></>:null}
     </div>
@@ -1435,7 +1342,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
     {review?<p className="ws-review-lock">审阅模式：姿态控件已锁定。<button type="button" data-testid="unlock-edit" onClick={()=>switchMode('edit')}><Hand size={13}/>切换到编辑</button></p>:null}
     <section className="ws-card ws-key-card" inert={review}><h2>选中关键帧 {sel?<small>@{sel.time.toFixed(2)}s</small>:null}</h2>
      {sel?<div className="ws-adjustment-tabs" role="group" aria-label="关键帧调整分类">
-      {([['semantic','语义'],['left','左侧'],['right','右侧'],['common','通用']] as const).map(([tab,label])=><button key={tab} type="button" data-testid={`adjustment-tab-${tab}`} aria-pressed={adjustmentTab===tab} onClick={()=>{if(tab==='left'||tab==='right'){engine.current?.setPlaying(false);if(sel)engine.current?.seek(sel.time);}engine.current?.setOptions({headHandle:tab==='common'});setAdjustmentTab(tab);}}>{label}</button>)}
+      {([['left','左侧'],['right','右侧'],['common','通用']] as const).map(([tab,label])=><button key={tab} type="button" data-testid={`adjustment-tab-${tab}`} aria-pressed={adjustmentTab===tab} onClick={()=>{if(tab==='left'||tab==='right'){engine.current?.setPlaying(false);if(sel)engine.current?.seek(sel.time);}engine.current?.setOptions({headHandle:tab==='common'});setAdjustmentTab(tab);}}>{label}</button>)}
      </div>:null}
      <div className="ws-key-panel scroll-region" data-testid={`adjustment-panel-${adjustmentTab}`}>
      {sel?<>
@@ -1454,7 +1361,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
       </div>
       </div>
       {Math.abs(frame.time-sel.time)>.001?<p className="ws-note">正在预览 {frame.time.toFixed(2)}s；修改时定位到选中帧 {sel.time.toFixed(2)}s。调整当前时刻请先添加关键帧。</p>:null}
-      {adjustmentTab==='semantic'?<SemanticPanel key={`${d.id}:${sel.id}:${wristEpoch.current}`} host={semanticHost} defaultSide={d.gripSide??'R'} keyLabel={sel.label||`关键帧 ${selectedKeyIndex+1}`}/>:<>
+      <>
       {adjustmentTab==='common'?<>
       <label className="ws-field"><span>动作名称</span><input data-testid="active-motion-name" aria-label="动作名称" value={d.name} onChange={e=>edit(doc=>{doc.name=e.target.value;})}/></label>
       <Row label="自由手臂（全方向）" detail="允许肩、肘、腕超出人体参考范围；肘屈曲超过 145° 的姿态无法导出姿态包" testId="free-arms" checked={d.freeArms===true} onChange={v=>edit(doc=>{if(v)doc.freeArms=true;else delete doc.freeArms;})}/>
@@ -1520,7 +1427,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
         return <div className="ws-limb-side" data-testid={`limb-controls-${side}`} key={side}>
          <div className="ws-sub ws-limb-controls"><h3>{cn}侧四肢姿态精调 <small>IK 目标与弯曲方向</small></h3>
          <p className="ws-note">以下为 IK 末端与方向提示；肘部引导点不直接指定大臂角度。大臂向后摆动请使用上方关节旋转，手部末端会随之移动。</p>
-         <p className="ws-note">双脚稳定支撑且前后分腿时，下拖后侧膝会降低骨盆并让躯干后倾；再下拖前侧膝会继续降低重心并带躯干回直立。其他姿势下，向上拖会弯膝、向下拖会伸膝。膝位置由髋、踝和屈伸角共同求解；精确角度可在「语义」页调整，不直接编辑膝盖 XYZ 或极点。</p>
+         <p className="ws-note">双脚稳定支撑且前后分腿时，下拖后侧膝会降低骨盆并让躯干后倾；再下拖前侧膝会继续降低重心并带躯干回直立。其他姿势下，向上拖会弯膝、向下拖会伸膝。膝位置由髋、踝和屈伸角共同求解；关节角度可通过画布拖拽和旋转控件调整。</p>
          <VectorSliders title={`${cn}前臂（小臂）末端目标`} value={hand.target} testPrefix={`limb-${side}-arm-target`}
           onChange={(axis,value)=>write(hand.target,axis,value)}/>
          <VectorSliders title={`${cn}肘部弯曲引导点`} value={hand.pole} testPrefix={`limb-${side}-arm-pole`}
@@ -1569,7 +1476,7 @@ export function WorkshopApp({info:rigInfo,initialLibrary,initialPoses,initialRes
         </div>;
        })}
       </div>:null}
-      </>}
+      </>
       <button className="ws-mini danger" onClick={()=>delKey(sel.id)} disabled={d.keys.length<=2} title={d.keys.length<=2?'至少保留两个关键帧':'可通过撤销恢复'}><Trash2 size={12}/>删除此关键帧</button>
      </>:<p className="ws-note">时间轴上选择或新建关键帧。</p>}
      </div>

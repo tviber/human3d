@@ -3,10 +3,9 @@ import {SAVED_MOTION_PREFIX} from '../motions/saved-motion';
 
 /** Lab → workshop handoff resolution for the CURRENT motion.
  *
- * A bundled motion is workshop-editable exactly when its source is an inline
- * workshop document — those ids are the same registry the workshop's
- * WORKSHOP_PRESETS reads, so the workshop can offer a duplicate-to-edit copy
- * of precisely this motion via `?from=<id>`.
+ * Only a motion saved in the local library opens as an editable workshop doc.
+ * Bundled examples remain playable in the lab but the workshop starts from a
+ * neutral editable document rather than copying a preset.
  *
  * Non-editable BUNDLED motions (dynamics replays, external clips) still carry
  * their id: the workshop explains there why editing is unavailable, so the
@@ -27,7 +26,7 @@ export const workshopEditability=(spec:MotionSpec):WorkshopEditability=>{
  if(source?.kind==='document'&&spec.id.startsWith(SAVED_MOTION_PREFIX))
   return {editable:true,url:`/workshop.html?doc=${encodeURIComponent(source.document.id)}`,reason:''};
  if(kind==='document')
-  return {editable:true,url:`/workshop.html?from=${encodeURIComponent(spec.id)}`,reason:''};
+  return {editable:false,url:'/workshop.html',reason:'内置动作仅供实验室预览；工作台从空白动作开始创作。'};
  const reason=(kind&&WHY[kind])||'此动作暂不支持在动作工作台编辑。';
  const bundled=(kind==='dynamics'||kind==='clip');
  return {editable:false,url:bundled?`/workshop.html?from=${encodeURIComponent(spec.id)}`:'/workshop.html',reason};

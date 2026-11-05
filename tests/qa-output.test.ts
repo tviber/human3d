@@ -506,7 +506,6 @@ describe('output preparation source order',()=>{
  it('asserts every production output-directory helper call and its root option',()=>{
   const callSites=[
    {file:'scripts/bench-workshop.mts',count:5,rootOption:'root'},
-   {file:'scripts/dynamics-browser-qa.mjs',count:1,rootOption:'root\\s*:\\s*repoRoot'},
    {file:'scripts/extract-dynamics-reference.mjs',count:1,rootOption:'root'},
    {file:'scripts/export-pose-package.mts',count:1,rootOption:'root'},
    {file:'scripts/measure-quality-probe.mts',count:1,rootOption:'root'},
@@ -515,7 +514,7 @@ describe('output preparation source order',()=>{
    {file:'scripts/generate-motion.mts',count:1,rootOption:'root'},
    {file:'scripts/recapture-solver-baseline.mts',count:1,rootOption:'root'},
   ];
-  expect(callSites.reduce((total,{count})=>total+count,0)).toBe(13);
+  expect(callSites.reduce((total,{count})=>total+count,0)).toBe(12);
   for(const {file,count,rootOption} of callSites){
    const source=readRepoFile(file);
    expect(sourceCallPositions(source,'ensureOutputDir')).toHaveLength(count);

@@ -23,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       suites:
-        description: 'Comma-separated suites, or "all": preset, mobile, backup, concurrency, bevel, knee, review-bundle'
+        description: 'Comma-separated suites, or "all": authoring, mobile, backup, concurrency, bevel, knee, review-bundle'
         required: false
         default: all
         type: string
@@ -44,7 +44,7 @@ jobs:
         env:
           SUITES: ${{ inputs.suites || 'all' }}
         run: |
-          ALL="preset mobile backup concurrency bevel knee review-bundle"
+          ALL="authoring mobile backup concurrency bevel knee review-bundle"
           list=","
           for s in $(printf '%s' "$SUITES" | tr ',' ' '); do
             if [ "$s" = all ]; then
@@ -80,9 +80,9 @@ jobs:
           exit 1
       # Each suite runs when selected and the dev server is up, regardless of
       # earlier suite failures; any failed suite still fails the job.
-      - name: Preset editing, rotation binding, and contact warnings (real UI)
-        if: ${{ !cancelled() && steps.server.outcome == 'success' && contains(steps.select.outputs.list, ',preset,') }}
-        run: node scripts/workshop-preset-qa.mjs --out-dir "$RUNNER_TEMP/qa/workshop-preset"
+      - name: Imported action editing, rotation binding, and contact warnings (real UI)
+        if: ${{ !cancelled() && steps.server.outcome == 'success' && contains(steps.select.outputs.list, ',authoring,') }}
+        run: node scripts/workshop-authoring-qa.mjs --out-dir "$RUNNER_TEMP/qa/workshop-authoring"
       - name: Mobile workshop and rotation controls (real UI)
         if: ${{ !cancelled() && steps.server.outcome == 'success' && contains(steps.select.outputs.list, ',mobile,') }}
         run: node scripts/workshop-mobile-qa.mjs --out-dir "$RUNNER_TEMP/qa/workshop-mobile"

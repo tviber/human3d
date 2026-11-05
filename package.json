@@ -1,71 +1,22 @@
 {
   "name": "human3d",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
-  "workspaces": [
-    "apps/*",
-    "packages/*"
-  ],
+  "workspaces": ["apps/web"],
   "scripts": {
     "predev": "sh scripts/check-process-limit.sh",
     "prebuild": "sh scripts/check-process-limit.sh",
     "prepreview": "sh scripts/check-process-limit.sh",
-    "pretest": "sh scripts/check-process-limit.sh",
-    "predocs:check": "sh scripts/check-process-limit.sh",
-    "prespec:check": "sh scripts/check-process-limit.sh",
-    "preservice": "sh scripts/check-process-limit.sh",
-    "preprotocol:example": "sh scripts/check-process-limit.sh",
-    "prepackage-to-glb": "sh scripts/check-process-limit.sh",
-    "prehair:ssj:build": "sh scripts/check-process-limit.sh",
-    "prebench": "sh scripts/check-process-limit.sh",
-    "prebench:pelvis": "sh scripts/check-process-limit.sh",
-    "preqa": "sh scripts/check-process-limit.sh",
-    "preqa:pose-validity": "sh scripts/check-process-limit.sh",
-    "preassets": "sh scripts/check-process-limit.sh",
-    "preqa:dynamics": "sh scripts/check-process-limit.sh",
-    "predynamics:extract-reference": "sh scripts/check-process-limit.sh",
-    "preworktree:check": "sh scripts/check-process-limit.sh",
-    "precheck:affected": "sh scripts/check-process-limit.sh",
-    "dev": "cd apps/web && vite --host 127.0.0.1 --config vite.config.ts",
-    "build": "tsc -b && cd apps/web && vite build --config vite.config.ts",
-    "preview": "cd apps/web && vite preview --host 127.0.0.1 --config vite.config.ts",
-    "test": "vitest run",
-    "docs:check": "node scripts/check-docs-links.mjs",
-    "spec:check": "vitest run apps/server/src/contract.test.ts",
-    "service": "node --import tsx apps/server/src/serve.ts",
-    "protocol:example": "tsx scripts/export-pose-package.mts",
-    "package-to-glb": "tsx scripts/package-to-glb.mts",
-    "hair:ssj:build": "tsx apps/web/scripts/generate-ssj-hair.mts",
-    "bench": "tsx scripts/bench-workshop.mts",
-    "bench:pelvis": "tsx scripts/bench-pelvis-schedule.mts",
-    "qa": "node scripts/browser-qa.mjs",
-    "qa:library": "node scripts/library-backup-qa.mjs && node scripts/library-concurrency-browser-qa.mjs",
-    "qa:pose-validity": "node scripts/pose-validity-qa.mjs",
-    "assets": "python3 scripts/build-human.py && tsx scripts/retarget-walk.mjs",
-    "dynamics:validate": "python3 scripts/validate-action-spec.py",
-    "dynamics:test": "python3 scripts/test-dynamics-records.py",
-    "dynamics:new": "python3 scripts/new-muscle-action.py",
-    "dynamics:build": "python3 scripts/build-muscle-action.py",
-    "qa:dynamics": "node scripts/dynamics-browser-qa.mjs",
-    "dynamics:extract-reference": "node scripts/extract-dynamics-reference.mjs",
-    "worktree:check": "node scripts/check-worktree.mjs",
-    "check:affected": "f(){ case \"${npm_node_execpath-}\" in /*) test -f \"$npm_node_execpath\" && test -x \"$npm_node_execpath\" && exec \"$npm_node_execpath\" scripts/check-affected.mjs \"$@\";; esac; printf '%s\\n' 'check:affected: required tool unavailable' >&2; exit 3; }; f"
+    "dev": "cd apps/web && vite --config vite.config.ts",
+    "build": "tsc --noEmit && cd apps/web && vite build --config vite.config.ts",
+    "preview": "cd apps/web && vite preview --config vite.config.ts"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
-    "js-yaml": "^5.5.0",
-    "playwright": "^1.55.0",
-    "three": "^0.180.0",
-    "tsx": "^4.20.6",
     "typescript": "~5.9.3",
-    "vite": "^7.1.9",
-    "vitest": "^4.1.12"
+    "vite": "^7.1.9"
   },
-  "engines": {
-    "node": ">=22.12.0"
-  },
-  "allowScripts": {
-    "esbuild@0.28.2": true
-  }
+  "engines": {"node": ">=22.12.0"},
+  "allowScripts": {"esbuild@0.28.2": true}
 }

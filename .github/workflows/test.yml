@@ -1,87 +1,24 @@
 name: test
 
-# Event/status contract: drafts run bounded fast checks and leave the stable
-# required check red; successful fast checks report draft_deferred, while any
-# fast failure reports its status reason. Ready PRs and main pushes run full and
-# dynamics; required is green only when both finish successfully. Configure
-# branch protection for the single stable check `test / required`.
 on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  fast:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - name: Bounded draft checks
-        run: npm test -- tests/ci-gate.test.ts tests/qa-output.test.ts tests/worktree-helper.test.ts
-
-  full:
-    needs: fast
-    if: ${{ always() && (github.event_name == 'push' || github.event.pull_request.draft == false) }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - name: Docs link check
-        run: npm run docs:check
-      - run: npx tsc -b
-      - name: Published contract (schemas, OpenAPI, golden package)
-        run: npm run spec:check
-      - run: npm test
-      - run: npm run build
-
-  dynamics:
-    needs: fast
-    if: ${{ always() && (github.event_name == 'push' || github.event.pull_request.draft == false) }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-          cache: pip
-          cache-dependency-path: scripts/requirements-dynamics.txt
-      - run: pip install -r scripts/requirements-dynamics.txt
-      - name: Action specs and MyoSim archive
-        run: npm run dynamics:validate
-      - name: Exported physics records
-        run: npm run dynamics:test
-
   required:
-    needs: [fast, full, dynamics]
-    if: ${{ always() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-      - name: Enforce stable required result
-        env:
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
-          DRAFT: ${{ github.event.pull_request.draft || false }}
-          FAST_RESULT: ${{ needs.fast.result }}
-          FULL_CHECKS_RESULT: ${{ needs.full.result }}
-          FULL_DYNAMICS_RESULT: ${{ needs.dynamics.result }}
-        run: node scripts/ci-gate.mjs
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build

@@ -1,24 +1,7 @@
-# AGENTS — @human3d/web
+# Web 编辑器
 
-浏览器端：实验室（`src/lab/`）、统一播放源（`src/playback/`）、动作工作台（`src/workshop/`）、共享已保存动作投影（`src/motions/`）、共享布局样式（`src/layout/`）与两个入口页。
-
-## 边界（自动强制）
-
-- 可 import `@human3d/motion-core`；生产代码**不得** import `@human3d/server`（测试可用其 devDependency）。
-- Vite `publicDir`/`outDir` 指向仓库根 `public/`/`dist/`；相对路径不得越出本包。
-
-## 定向测试
-
-- `npm test -- apps/web/src/workshop/workshop.test.ts`（或 `mirror.test.ts`）、`apps/web/src/playback/motion-source.test.ts`
-- 移动端 / 语义控件验收：`node scripts/workshop-mobile-qa.mjs`（需 dev server；Playwright 模拟，不等于真机）
-- 真实交互验收：`npm run qa`（需 dev server；`QA_BROWSER_CHANNEL=chrome` 走系统 Chrome；未进 CI）；动作库备份恢复与跨页签并发由 `npm run qa:library` 覆盖，CI 的 `browser-qa` workflow 跑同一入口
-
-## 界面
-
-实验室与工作台遵循 [`DESIGN.md`](DESIGN.md)，共享中性浅色表面、石墨文字、蓝色交互强调（`src/theme/tokens.css` + `src/redesign.css`）。控件走 Nova 形态（`@base-ui/react`，`src/components/ui/`）；布局样式位于 `src/layout/`，图标 Lucide，进场与对话框用 `motion/react`，桌面三栏用 `react-resizable-panels`（实验室窄于 760px 仍堆叠；工作台在 `COMPACT_QUERY` 下用同一 DOM 改为三维视图 + 底部抽屉，见 `WorkshopApp.tsx`/`workshop.css` 的 `.ws-compact`），工作台动作库排序与时间轴拖键用 `@dnd-kit`，实验室与工作台的界面状态用 Zustand（`src/lab/store.ts`、`src/workshop/ui-store.ts`）。三维画布、求解与播放源不走这套控件。
-
-## 检索指针
-
-- 工作台不变量（真实写路径、显示/编辑分离、撤销/隔离）：[`docs/domain/workshop.md`](../../docs/domain/workshop.md)
-- 姿态包导入/信封派生：[`docs/domain/pose-package.md`](../../docs/domain/pose-package.md)
-- 功能与验收：[`docs/WORKSHOP.md`](../../docs/WORKSHOP.md)、[`docs/QA.md`](../../docs/QA.md)
+- 唯一产品路径是 `src/manual/ManualEditor.tsx` 与 `src/manual/editor-engine.ts`。
+- 姿势以模型自身的局部关节旋转记录；变换必须直接进入 `Bone.quaternion`，不得引入人体逆运动学、动力链推算或预生成动作。
+- `src/manual/document.ts` 是动作 JSON 的唯一格式和采样实现；导入处必须调用 `parseMotion`。
+- 视觉交互应保留时间轴、逐关节旋转、本机动作库和 JSON 导入/导出。
+- 静态资源位于仓库根 `public/`；Vite 从 `apps/web` 读取入口。

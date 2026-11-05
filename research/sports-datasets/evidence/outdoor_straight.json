@@ -1,0 +1,20 @@
+{
+  "file": "outdoor_straight.csv",
+  "n": 18,
+  "columns": [
+    "Index",
+    "To-Closest-Doubles-Sideline-Distance (m)",
+    "To-Baseline-Distance (m)"
+  ],
+  "sideline_m": {
+    "min": 1.72,
+    "max": 3.71
+  },
+  "baseline_m": {
+    "min": 0.34,
+    "max": 5.35
+  },
+  "negative_baseline_count": 0,
+  "negative_sideline_count": 0,
+  "pose_keypoints": false
+}

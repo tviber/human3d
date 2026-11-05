@@ -1,0 +1,20 @@
+{
+  "file": "outdoor_cross.csv",
+  "n": 20,
+  "columns": [
+    "Index",
+    "To-Closest-Doubles-Sideline-Distance (m)",
+    "To-Baseline-Distance (m)"
+  ],
+  "sideline_m": {
+    "min": 1.37,
+    "max": 5.07
+  },
+  "baseline_m": {
+    "min": 1.0,
+    "max": 5.3
+  },
+  "negative_baseline_count": 0,
+  "negative_sideline_count": 0,
+  "pose_keypoints": false
+}

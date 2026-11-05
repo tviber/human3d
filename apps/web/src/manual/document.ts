@@ -102,5 +102,5 @@ export function readLibrary():{activeId:string;docs:ManualMotion[]}{
    }
   }
  }catch{/* A damaged or old library should not prevent a fresh manual session. */}
- const doc=createMotion();return{docs:[doc],activeId:doc.id};
+ return{docs:[],activeId:''};
 }

@@ -1,7 +1,0 @@
-.avatar-toolbar{position:absolute;left:32px;top:100px;display:inline-flex;gap:2px;padding:3px;background:var(--seg-track);border:1px solid var(--line);border-radius:8px}
-.avatar-toolbar button{min-height:36px;padding:0 11px;border-radius:6px;background:var(--card);color:var(--fg-2);font-size:12px;white-space:nowrap}
-.avatar-toolbar button[aria-pressed=true]{background:var(--blue);color:var(--accent-fg);box-shadow:var(--seg-edge)}
-.avatar-toolbar button[aria-pressed=true]:hover{color:var(--accent-fg)}
-.avatar-toolbar button:disabled{cursor:wait}
-@media(max-width:1180px){.avatar-toolbar{left:22px;top:124px}}
-@media(max-width:760px){.avatar-toolbar{left:14px;top:88px}.avatar-toolbar button{min-height:44px;padding:0 12px;font-size:12px}}

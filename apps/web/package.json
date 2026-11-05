@@ -1,37 +1,19 @@
 {
   "name": "@human3d/web",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "h3d web app: the motion lab and the motion workshop, one Vite build with two entry pages.",
-  "scripts": {
-    "predev": "sh ../../scripts/check-process-limit.sh",
-    "prebuild": "sh ../../scripts/check-process-limit.sh",
-    "prepreview": "sh ../../scripts/check-process-limit.sh",
-    "dev": "vite --host 127.0.0.1",
-    "build": "vite build",
-    "preview": "vite preview --host 127.0.0.1"
-  },
+  "description": "Manual 3D pose authoring with direct keyframed joint rotations.",
   "dependencies": {
-    "@base-ui/react": "^1.9.0",
-    "@dnd-kit/core": "^6.3.1",
-    "@dnd-kit/sortable": "^10.0.0",
-    "@dnd-kit/utilities": "^3.2.2",
-    "@human3d/motion-core": "*",
     "lucide-react": "^0.468.0",
-    "motion": "^14.5.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
-    "react-resizable-panels": "^4.14.8",
-    "three": "^0.180.0",
-    "zustand": "^5.0.15"
+    "three": "^0.180.0"
   },
   "devDependencies": {
-    "@human3d/server": "*",
     "@types/react": "^19.1.1",
     "@types/react-dom": "^19.1.1",
     "@types/three": "^0.180.0",
-    "@vitejs/plugin-react": "^5.0.4",
-    "vite": "^7.1.9"
+    "@vitejs/plugin-react": "^5.0.4"
   }
 }
